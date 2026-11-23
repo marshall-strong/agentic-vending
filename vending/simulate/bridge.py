@@ -148,9 +148,12 @@ class SimBridge:
             return {"id": request_id, "status": "pending"}
         raise BridgeAnswered(404, f"no route {path}")
 
-    def post_answer(self, path: str, body: dict) -> PostAnswer:
+    def post_answer(self, path: str, body: dict, *, ready=None) -> PostAnswer:
         """A purchase POST's whole answer, as the real bridge's `post_answer` gives it: the documented `201`, or
-        the bridge's documented refusal (`422`, `429`), which `submit_desired_state` leaves `unknown`."""
+        the bridge's documented refusal (`422`, `429`), which `submit_desired_state` leaves `unknown`. `ready` runs
+        first, as the real one runs it once connected: whatever it raises goes up, and nothing is filed."""
+        if ready is not None:
+            ready()
         if path != "/api/v1/purchase-requests":
             return PostAnswer(200, self.post(path, body), "", "")
         self.calls.append(("POST", path))

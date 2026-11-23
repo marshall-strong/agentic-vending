@@ -330,8 +330,8 @@ def test_unreachable_bridge_is_not_filed(db, fake, monkeypatch):  # noqa: F811
     real = fake.client()
 
     class HalfDead(Bridge):
-        def post_answer(self, path, body):
-            return Bridge("http://127.0.0.1:9", "test-key").post_answer(path, body)
+        def post_answer(self, path, body, **kw):
+            return Bridge("http://127.0.0.1:9", "test-key").post_answer(path, body, **kw)
 
     monkeypatch.setattr(server, "bridge", lambda: HalfDead(real.base_url, "test-key"))
     reply = submit()
@@ -736,6 +736,38 @@ def test_a_clock_that_crosses_the_thursday_cutoff_between_plan_and_send_sends_no
         clock["now"] = datetime(2026, 11, 13, 0, 0, 1, tzinfo=et)
         return row
     monkeypatch.setattr(submissions, "save_sending", save_then_midnight)
+    reply = submit()
+    assert reply["success"] is False and codes(reply) == ["past_cutoff"]
+    assert fake.posts == []
+    [(status, detail)] = db.execute("select status, detail from purchase_submissions").fetchall()
+    assert status == "not_filed" and "past_cutoff" in detail
+
+
+def test_a_slow_connect_that_carries_the_send_past_the_cutoff_sends_nothing(db, fake, monkeypatch):  # noqa: F811
+    """Round 2 of the #238 review, blocker 2: the final clock is read once the bridge connection is open, right
+    before the request is written. Connecting can take up to 20 s; here it carries the clock past Thursday
+    midnight, so nothing is sent."""
+    from zoneinfo import ZoneInfo
+
+    from vending import bridge as bridge_module
+
+    et = ZoneInfo("America/New_York")
+    clock = {"now": datetime(2026, 11, 12, 23, 59, 30, tzinfo=et)}
+    monkeypatch.setattr(ledger, "db_now", lambda conn: clock["now"])
+    prepared(db)
+    posting = []
+    real_post, real_connect = bridge_module.Bridge.post_answer, http.client.HTTPConnection.connect
+
+    def post(self, *args, **kw):
+        posting.append(True)
+        return real_post(self, *args, **kw)
+
+    def slow_connect(self):
+        if posting:
+            clock["now"] = datetime(2026, 11, 13, 0, 0, 5, tzinfo=et)
+        return real_connect(self)
+    monkeypatch.setattr(bridge_module.Bridge, "post_answer", post)
+    monkeypatch.setattr(http.client.HTTPConnection, "connect", slow_connect)
     reply = submit()
     assert reply["success"] is False and codes(reply) == ["past_cutoff"]
     assert fake.posts == []

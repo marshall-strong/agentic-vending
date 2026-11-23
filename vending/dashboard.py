@@ -894,11 +894,13 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
 # request ID and the submission that carried it (the newest, if a person resolved an older attempt onto it), or,
 # from the submissions saved for its time (`purchase_submissions.schedule_due`), an accepted request or any still
 # `sending` or `unknown`: so a run whose ending was lost still says what it sent, or may have sent.
-# A run meant to be live that didn't run live (a check made it a dry run, or stopped it at the lease) carries why
-# (`cause`: the scheduler's own sentence, never an error), and stays until a later live run has run.
+# A run meant to be live that didn't run live (a check made it a dry run, or it never started: stopped at the
+# lease, or the lease busy) carries why (`cause`: the scheduler's own sentence, never an error), and stays until a
+# later live run has started. So does a live time that waited all its window and was missed (`LIVE_MISSED`).
 # And the database's `agent_schedule_mode`, to say when it isn't a mode, or says `live`.
 MEANT_LIVE_SKIP = ("s.outcome = 'skipped' and (s.detail like 'Run as a dry run, not live:%%'"
-                   " or (s.mode = 'live' and s.run_id is null))")
+                   " or (s.mode = 'live' and s.started_at is null))")
+LIVE_MISSED_ROW = "s.outcome = 'missed' and s.detail like 'LIVE RUN MISSED:%%'"
 SCHEDULED_COLUMNS = ("s.due_at, s.mode, s.claimed_at, s.outcome, s.run_id, r.status as agent_status,"
                      " coalesce(r.request_id, (select p.request_id from purchase_submissions p"
                      "  where p.schedule_due = s.due_at and p.status = 'accepted' order by p.id desc limit 1))"
@@ -909,7 +911,7 @@ SCHEDULED_COLUMNS = ("s.due_at, s.mode, s.claimed_at, s.outcome, s.run_id, r.sta
                      " array(select p.id::text || ' (' || p.status || ')' from purchase_submissions p"
                      "  where p.schedule_due = s.due_at and p.status in ('sending', 'unknown') order by p.id)"
                      " as unsettled,"
-                     f" case when {MEANT_LIVE_SKIP} then left(s.detail, 400) end as cause"
+                     f" case when ({MEANT_LIVE_SKIP}) or ({LIVE_MISSED_ROW}) then left(s.detail, 400) end as cause"
                      " from agent_schedule s left join agent_runs r on r.id = s.run_id")
 SCHEDULED_LATEST_SQL = f"select {SCHEDULED_COLUMNS} order by s.due_at desc limit 1"
 SCHEDULED_INCIDENTS_SQL = (f"select {SCHEDULED_COLUMNS}"
@@ -918,7 +920,7 @@ SCHEDULED_INCIDENTS_SQL = (f"select {SCHEDULED_COLUMNS}"
                            " or exists (select from purchase_submissions p where p.schedule_due = s.due_at"
                            "  and p.status in ('sending', 'unknown'))"
                            f" or ({MEANT_LIVE_SKIP} and not exists (select from agent_schedule later"
-                           "  where later.due_at > s.due_at and later.mode = 'live' and later.run_id is not null"
+                           "  where later.due_at > s.due_at and later.mode = 'live' and later.started_at is not null"
                            "  and later.outcome in ('submitted', 'skipped')))"
                            " order by s.due_at desc limit 50")
 SCHEDULED_SETTING_SQL = "select value from config where key = %s"
@@ -1415,6 +1417,8 @@ def _scheduled_line(row: dict, now: datetime) -> tuple[str, str] | None:
     cause = row.get("cause")
     if outcome == "skipped" and isinstance(cause, str) and cause:
         level, what = "warn", f"didn't run live: {cause.rstrip('.')}"
+    if outcome == "missed" and isinstance(cause, str) and cause:
+        what = f"was missed: {cause.rstrip('.')}"
     if outcome != "running" and row.get("agent_status") == "running":
         level, what = "bad", (f"ended {outcome}, but its agent run still says running in agent_runs: its ending "
                               "couldn't be recorded there. Record it by hand once you know how it ended")
@@ -1467,6 +1471,8 @@ def _scheduled_runs(panel: dict | None, syncs: dict | None, now: datetime) -> li
         out.append(("bad", agent_schedule.NO_KEY_LINE))
     if isinstance(schedule, dict) and isinstance(schedule.get("problem"), str) and schedule["problem"]:
         out.append(("bad", schedule["problem"]))
+    if isinstance(schedule, dict) and isinstance(schedule.get("waiting"), str) and schedule["waiting"]:
+        out.append(("warn", schedule["waiting"]))
     if panel is None:
         return out
     if not isinstance(data, dict):

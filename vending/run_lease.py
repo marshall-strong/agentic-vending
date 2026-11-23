@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Callable
 
 import psycopg
@@ -49,6 +49,10 @@ NEAR_END = "this run's lease ends before a model request could finish (the run i
 class Lease:
     token: uuid.UUID
     took_over: int | None = None    # the agent run whose expired lease this one took, if it had one
+    # The scheduled time this lease was taken for (`authorize` set it), or None for a run by hand. The agent hands
+    # it, with `token`, to the MCP server it starts, so a submit is checked against this run's own lease and time,
+    # never against whichever lease is current when it sends (`vending.tools.submit`).
+    schedule_due: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -77,9 +81,10 @@ def take(conn: psycopg.Connection, *, deadline: float,
         if authorize is not None and (why := authorize(conn)) is not None:
             return Refused(why)
         mine = uuid.uuid4()
-        conn.execute("update agent_run_lease set token = %s, run_id = null, taken_at = now(), renewed_at = now(),"
-                     " hard_until = now() + %s, expires_at = least(now() + %s, now() + %s) where one",
-                     (mine, timedelta(seconds=deadline) + GRACE, TTL, timedelta(seconds=deadline) + GRACE))
+        due = conn.execute(
+            "update agent_run_lease set token = %s, run_id = null, taken_at = now(), renewed_at = now(),"
+            " hard_until = now() + %s, expires_at = least(now() + %s, now() + %s) where one returning schedule_due",
+            (mine, timedelta(seconds=deadline) + GRACE, TTL, timedelta(seconds=deadline) + GRACE)).fetchone()[0]
         took_over = None
         if token is not None and holder is not None:
             at = f"{expires.astimezone(EASTERN):%a %d %b %H:%M} ET"
@@ -92,7 +97,7 @@ def take(conn: psycopg.Connection, *, deadline: float,
                 (agent_runs.SUBMITTED, agent_runs.AFTERWARDS, EXPIRED.format(at=at), EXPIRED.format(at=at),
                  holder)).fetchone()
             took_over = holder if found else None
-    return Lease(mine, took_over)
+    return Lease(mine, took_over, due)
 
 
 def attach(conn: psycopg.Connection, token: uuid.UUID, run_id: int) -> bool:

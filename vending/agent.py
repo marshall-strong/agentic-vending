@@ -552,10 +552,26 @@ def _nothing_left(reply: dict) -> bool:
     return reply.get("status") == NOT_CONNECTED and isinstance(reply.get("submission"), int)
 
 
-def server_env() -> dict[str, str]:
-    """The server's environment: ours without any model key, which it never needs."""
-    env = {k: v for k, v in os.environ.items() if k.upper() not in MODEL_KEY_VARS}
-    return {**env, "VENDING_TOOLS": "built"}
+def server_env(context: dict[str, str] | None = None) -> dict[str, str]:
+    """The server's environment: ours without any model key, which it never needs, and with this run's own
+    context (`run_context`) in place of anything inherited: a run lease or scheduled time left in our environment
+    must never reach the server as if it were this run's."""
+    from vending.tools.submit import RUN_ENV
+
+    env = {k: v for k, v in os.environ.items() if k.upper() not in MODEL_KEY_VARS and k.upper() not in RUN_ENV}
+    return {**env, "VENDING_TOOLS": "built", **(context or {})}
+
+
+def run_context(token: Any, schedule_due: datetime | None) -> dict[str, str]:
+    """What the server must know about this run (`vending.tools.submit.RunContext`): its run lease's token, and for
+    a scheduled run its time, as the transaction that took the lease recorded it. The submit checks that exact
+    lease and time at the send, never whichever lease is current then."""
+    from vending.tools.submit import RUN_LEASE_ENV, SCHEDULE_DUE_ENV
+
+    context = {RUN_LEASE_ENV: str(token)}
+    if schedule_due is not None:
+        context[SCHEDULE_DUE_ENV] = schedule_due.isoformat()
+    return context
 
 
 def check_submissions(connect: Callable[[], psycopg.Connection], bridge: Callable[[], Any] | None,
@@ -658,7 +674,7 @@ async def run(*, live: bool, model: str = DEFAULT_MODEL, effort: str = DEFAULT_E
                 return await _run_owned(live=live, model=model, effort=effort, connect=connect, client=client,
                                         now=now, open_tools=open_tools, max_turns=max_turns, rules_card=rules_card,
                                         deadline=deadline, token=taken.token, harnesses=harnesses,
-                                        bridge=bridge)
+                                        bridge=bridge, schedule_due=taken.schedule_due)
             finally:
                 beats.cancel_scope.cancel()
     finally:
@@ -684,7 +700,8 @@ async def _run_owned(*, live: bool, model: str, effort: str, connect: Callable[[
                      client: Any, now: Callable[[], datetime] | None, open_tools: Callable | None,
                      max_turns: int, rules_card: Path | None, deadline: float,
                      token: Any, harnesses: list,
-                     bridge: Callable[[], Any] | None = None) -> tuple[int | None, Outcome]:
+                     bridge: Callable[[], Any] | None = None,
+                     schedule_due: datetime | None = None) -> tuple[int | None, Outcome]:
     import time
 
     stop_at = time.monotonic() + deadline     # the harness sends nothing past it
@@ -738,7 +755,8 @@ async def _run_owned(*, live: bool, model: str, effort: str, connect: Callable[[
                 harnesses.append(harness)
                 if live:    # inside the lease, so no other run's submit overlaps the check
                     await anyio.to_thread.run_sync(lambda: check_submissions(connect, bridge, record_step))
-                async with (open_tools or _open_server)() as (listed, call_tool):
+                # The server is told which run it works for: this lease, and this scheduled time if any.
+                async with (open_tools or _open_server)(run_context(token, schedule_due)) as (listed, call_tool):
                     if live and SUBMIT not in {t.name for t in listed}:
                         out.detail = ("submit_desired_state isn't built on this server, so a live run can't "
                                       "submit. Use a dry run.")
@@ -798,8 +816,9 @@ def _record_ending(connect: Callable[[], psycopg.Connection], run_id: int, out: 
                   f"{1 + len(FINISH_RETRIES)} tries); agent_runs may still say running.").strip()
 
 
-def _open_server():
-    """Start `python -m vending.server` over stdio; yields (tools, call_tool)."""
+def _open_server(context: dict[str, str] | None = None):
+    """Start `python -m vending.server` over stdio, with this run's `context` in its environment; yields (tools,
+    call_tool)."""
     from contextlib import asynccontextmanager
 
     from mcp import ClientSession, StdioServerParameters
@@ -807,7 +826,8 @@ def _open_server():
 
     @asynccontextmanager
     async def opened():
-        params = StdioServerParameters(command=sys.executable, args=["-m", "vending.server"], env=server_env())
+        params = StdioServerParameters(command=sys.executable, args=["-m", "vending.server"],
+                                       env=server_env(context))
         async with stdio_client(params) as (read, write), \
                 ClientSession(read, write, read_timeout_seconds=TOOL_TIMEOUT) as session:
             await session.initialize()

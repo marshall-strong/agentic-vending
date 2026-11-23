@@ -79,11 +79,14 @@ def test_with_nothing_set_the_real_worker_never_starts_the_agent(monkeypatch):
     assert made == [] and ran == []
 
 
-def test_the_defaults_are_one_wednesday_afternoon_run_from_2_dec(monkeypatch):
+def test_the_defaults_are_a_wednesday_and_a_thursday_run_from_2_dec(monkeypatch):
+    """Kevin, 23 Nov: Wednesday 14:00-22:00 and Thursday 12:00-20:00 Eastern, from Wed 2 Dec. (Most tests here use
+    `DRY` and `LIVE`, the Wednesday time alone.)"""
+    both = DRY.entries + (Entry(3, time(12), time(20)),)
     monkeypatch.setenv(agent_schedule.MODE_SETTING, "Dry-Run")
-    assert agent_schedule.schedule() == DRY
+    assert agent_schedule.schedule() == Schedule("dry-run", both, DRY.first_day)
     monkeypatch.setenv(agent_schedule.MODE_SETTING, "live")
-    assert agent_schedule.schedule() == LIVE
+    assert agent_schedule.schedule() == Schedule("live", both, DRY.first_day)
 
 
 def test_the_times_and_first_day_are_settings(monkeypatch):
@@ -934,7 +937,7 @@ def test_off_committed_while_the_run_is_being_authorized_waits_for_the_start(sch
 
     def read_then_turn_off(c, **kw):
         mode = real(c, **kw)
-        if "thread" not in setter:
+        if kw.get("lock") and "thread" not in setter:     # the read under the row lock, in the lease's transaction
             def turn_off():
                 with open_in(*schema_url) as other:
                     db_mode(other, "off")

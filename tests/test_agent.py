@@ -80,7 +80,8 @@ class Tools:
 
     def opener(self):
         @asynccontextmanager
-        async def opened():
+        async def opened(context=None):
+            self.context = context
             yield self.listed, self.call
         return opened
 

@@ -175,12 +175,22 @@ not started yet.
 
 **Live scheduled runs need the team's agreement first.** A live run spends the competition's money and
 sends a purchase request nobody looks at before it goes. Agree as a team, on GitHub, before anyone sets
-`live`. Migrations 029 and 030 must be on the team database first (`python -m vending.db migrate`): the
-worker refuses to schedule on a database that is behind, and the dashboard says so. Apply 030 while no
-submit runs, as 025 below: it waits at most 2 seconds for its lock. Then turn it on in two places:
-`az containerapp update --name ai-group-2-vend --resource-group data_systems_resource_group --set-env-vars AGENT_SCHEDULE_MODE=live`
-(the worker reads it when it starts, so this makes a new revision), and
-`python -m vending.config set agent_schedule_mode live --by <name>`. Turn it off with one command,
+`live`. Do it before the team stops on Sun 29 Nov: from Thu 3 Dec nobody watches the runs. In this order:
+
+1. Migrations 029 and 030 on the team database: `python -m vending.db migrate`, then again: it must say nothing
+   is pending. The worker refuses to schedule on a database that is behind, and the dashboard says so. Apply
+   030 while no submit runs, as 025 below: it waits at most 2 seconds for its lock.
+2. The container, with the mode, the times and the first day together, so nothing left from a test week stays
+   (`AGENT_SCHEDULE_FROM` on or before 2026-12-02):
+   `az containerapp update --name ai-group-2-vend --resource-group data_systems_resource_group --set-env-vars AGENT_SCHEDULE_MODE=live "AGENT_SCHEDULE=wed 14:00-22:00,thu 12:00-20:00" AGENT_SCHEDULE_FROM=2026-12-02`
+   (the worker reads these when it starts, so this makes a new revision).
+3. The database: `python -m vending.config set agent_schedule_mode live --by <name>`.
+4. Check the effective schedule on the active revision: `az containerapp show --name ai-group-2-vend --resource-group data_systems_resource_group --query "properties.template.containers[0].env" -o table` lists the settings, then
+   `az containerapp exec --name ai-group-2-vend --resource-group data_systems_resource_group --command sh` and, in it, `python -m vending.agent_schedule`. It must say `live, from Wed 02 Dec 2026`, the
+   times `wed 14:00-22:00, thu 12:00-20:00`, the database's setting `live`, and no missing migrations
+   ([`docs/agent.md`](agent.md#live-scheduled-runs)). The first live order is the Thu 3 Dec 12:00 ET run.
+
+Turn it off with one command,
 `python -m vending.config set agent_schedule_mode off --by <name>`: it applies from the next scheduled
 time. `python -m vending.config set agent_schedule_mode dry-run --by <name>` keeps the runs, as dry runs.
 The halt switch (`python -m vending.halt on --by <name>`) stops a run that has already started.
@@ -198,8 +208,8 @@ a migration, a person runs it against Azure, from a laptop with `DATABASE_URL` p
 python -m vending.db migrate
 ```
 
-Apply migrations 025 and 030 (`purchase_submissions.schedule_due`, #238) (`purchase_submissions.purpose`, for `python -m vending.fill`) while no submit
-runs: the agent paused (`python -m vending.halt on --by NAME`) and no fill being sent. It waits at
+Apply migrations 025 (`purchase_submissions.purpose`, for `python -m vending.fill`) and 030
+(`purchase_submissions.schedule_due`, #238) while no submit runs: the agent paused (`python -m vending.halt on --by NAME`) and no fill being sent. It waits at
 most 2 seconds for its lock. If a submit holds the table, it fails with "lock timeout" and changes
 nothing; run it again once the submit is over.
 

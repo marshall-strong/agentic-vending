@@ -5,6 +5,7 @@ scheduler; the one-submit test goes through the real agent, the MCP server and t
 
 import html
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -179,14 +180,20 @@ def test_the_halt_switch_stops_a_live_scheduled_run_before_any_model_request(sch
     assert conn.execute("select count(*) from model_calls").fetchone()[0] == 0
 
 
-def test_an_unresolved_submission_makes_it_a_dry_run(schema_url, conn, ready):
+def test_an_unresolved_submission_makes_the_live_run_wait(schema_url, conn, ready):
+    """Round 2, finding 4: an open submission nobody can settle from the bridge is a passing blocker. The time waits
+    (no row, no dry run) and says why on /health and the dashboard; once a person settles it, the run goes live."""
     row = open_submission(conn)
     agent = FakeAgent(schema_url)
-    tick(scheduler(schema_url, agent, LIVE9, clock=Clock(at(WED2, 13))), at(WED2, 14))
-    assert [live for _, live in agent.calls] == [False]
-    [(_, mode, _, _, detail)] = rows(conn)
-    assert mode == "dry-run" and "ORDERS BLOCKED" in detail and f"submission {row}" in detail
-    assert "Nothing sent." in run_lines(conn, at(WED2, 15))[0][1]
+    s = scheduler(schema_url, agent, LIVE9, clock=Clock(at(WED2, 13)))
+    tick(s, at(WED2, 14))
+    assert agent.calls == [] and rows(conn) == []
+    waiting = s.public()["waiting"]
+    assert "ORDERS BLOCKED" in waiting and f"submission {row}" in waiting
+    assert ("warn", waiting) in attention(conn, at(WED2, 14), syncs={"agent_schedule": s.public()})
+    conn.execute("update purchase_submissions set status = 'not_filed'")
+    tick(s, at(WED2, 14, 10))
+    assert [live for _, live in agent.calls] == [True] and s.public()["waiting"] is None
 
 
 def test_a_submission_left_open_after_the_claim_stops_the_live_run(schema_url, conn, ready, monkeypatch):
@@ -209,13 +216,13 @@ def test_a_submission_left_open_after_the_claim_stops_the_live_run(schema_url, c
     pytest.param(lambda: at(WED2, 14) - timedelta(days=1), id="a day old"),
     pytest.param(lambda: at(WED, 12), id="not confirmed since the start"),
 ])
-def test_a_stale_slot_check_makes_it_a_dry_run(schema_url, conn, ready, checked):
+def test_a_stale_slot_check_makes_the_live_run_wait(schema_url, conn, ready, checked):
     conn.execute("update slot_assignment set last_checked_at = %s where id = 1", (checked(),))
     agent = FakeAgent(schema_url)
-    tick(scheduler(schema_url, agent, LIVE9, clock=Clock(at(WED2, 13))), at(WED2, 14))
-    assert [live for _, live in agent.calls] == [False]
-    [(_, mode, _, _, detail)] = rows(conn)
-    assert mode == "dry-run" and "slot" in detail and "vending.slots" in detail
+    s = scheduler(schema_url, agent, LIVE9, clock=Clock(at(WED2, 13)))
+    tick(s, at(WED2, 14))
+    assert agent.calls == [] and rows(conn) == []
+    assert "slot" in s.public()["waiting"] and "vending.slots" in s.public()["waiting"]
 
 
 def test_the_database_setting_lowered_after_a_live_claim_stops_the_run(schema_url, conn, ready, monkeypatch):
@@ -304,8 +311,8 @@ def hooked(before_submit=None, calls=None, after=None):
     from contextlib import asynccontextmanager
 
     @asynccontextmanager
-    async def opened():
-        async with mcp_tools()() as (listed, call_tool):
+    async def opened(context=None):
+        async with mcp_tools()(context) as (listed, call_tool):
             async def call(name, arguments):
                 if calls is not None:
                     calls.append(name)
@@ -527,18 +534,18 @@ def test_an_unsettled_submission_says_it_may_have_been_sent(schema_url, conn, st
 # --- Silent failures ------------------------------------------------------------------------------------
 
 def test_a_live_run_that_ended_skipped_shows_why_until_a_later_live_run_succeeds(schema_url, conn, ready):
-    """Finding 5: meant to be live, run as a dry run (a check failed): Check, with the cause, and it stays there
-    under newer runs until a later live run runs."""
+    """Finding 5: meant to be live, run as a dry run (a lasting check failed: this week's visit already has a
+    scheduled submission): Check, with the cause, and it stays there under newer runs until a later live run runs."""
     agent = FakeAgent(schema_url)
     sched = scheduler(schema_url, agent, LIVE9, clock=Clock(at(WED2, 13)))
-    open_submission(conn)
-    tick(sched, at(WED2, 14))        # a dry run, not live: ORDERS BLOCKED
-    conn.execute("update purchase_submissions set status = 'not_filed'")
+    sent = _scheduled_submission(conn, at(WED2, 9))
+    tick(sched, at(WED2, 14))        # a dry run, not live: already sent for this visit
+    conn.execute("update purchase_submissions set schedule_due = null where id = %s", (sent,))
     # A newer run, a dry one, doesn't hide it.
     conn.execute("insert into agent_schedule (due_at, latest_at, mode, outcome, finished_at)"
                  " values (%s, %s, 'dry-run', 'skipped', now())", (at(WED2, 15), at(WED2, 22)))
     lines = [line for line in run_lines(conn, at(WED2, 16)) if "Wed 09 Dec, 2:00 PM" in line[1]]
-    assert lines and lines[0][0] == "warn" and "ORDERS BLOCKED" in lines[0][1]
+    assert lines and lines[0][0] == "warn" and "already sent" in lines[0][1]
     # A later live run that ran clears it.
     fresh_slots(conn, at(WED2 + timedelta(days=7), 14))
     tick(sched, at(WED2 + timedelta(days=7), 14))
@@ -599,3 +606,252 @@ def test_a_garbled_database_mode_runs_dry_and_is_a_problem(schema_url, conn, rea
     assert rows(conn)[0][1] == "dry-run"
     assert agent_schedule.database_mode(conn) == "dry-run"
     assert ("bad", agent_schedule.INVALID_IN_DB) in attention(conn, at(WED2, 15))
+
+
+# --- Sol review of 38adb62 (second round) -----------------------------------------------------------------
+
+def _other(schema_url, sql, params=()):
+    with open_in(*schema_url) as other:
+        other.execute(sql, params)
+
+
+BUSY_LEASE = ("update agent_run_lease set token = gen_random_uuid(), run_id = null, schedule_due = null,"
+              " expires_at = clock_timestamp() + interval '1 hour' where one")
+EXPIRE_LEASE = "update agent_run_lease set expires_at = clock_timestamp() - interval '1 second' where one"
+
+
+@pytest.mark.parametrize("lose", [pytest.param(EXPIRE_LEASE, id="expired"),
+                                  pytest.param(BUSY_LEASE, id="taken over")])
+def test_a_lease_lost_after_the_hand_off_never_turns_a_scheduled_submit_into_a_manual_one(
+        db, fake, schema_url, conn, send_clock, live_env, lose):  # noqa: F811
+    """Round 2, blocker 1: the run's lease expires (or another run takes it) after the agent handed the submit to the
+    server, and the database switch goes off. The server knows the run's own lease and time (not a lookup of
+    whichever lease is current), so it refuses: nothing is sent, and the attempt keeps its scheduled time."""
+    prepared(db)
+    db_mode(conn, "live")
+    fresh_slots(conn, at(WED2, 14))
+
+    def lose_it():
+        _other(schema_url, lose)
+        _set_mode(schema_url, "off")
+    scheduled_live_run(schema_url, fake, LIVE9, at(WED2, 14), before_submit=lose_it)
+    assert fake.posts == []
+    [(status, detail, due)] = conn.execute("select status, detail, schedule_due from purchase_submissions").fetchall()
+    assert status == "not_filed" and "lease" in detail and due == at(WED2, 14)
+
+
+def test_the_server_gets_the_runs_own_lease_and_time_and_never_an_inherited_one(monkeypatch):
+    from vending import agent
+    from vending.tools import submit
+
+    monkeypatch.setenv(submit.SCHEDULE_DUE_ENV, "2026-12-09T19:00:00+00:00")
+    monkeypatch.setenv(submit.RUN_LEASE_ENV, "inherited")
+    env = agent.server_env({submit.RUN_LEASE_ENV: "mine"})
+    assert env[submit.RUN_LEASE_ENV] == "mine" and submit.SCHEDULE_DUE_ENV not in env
+    env = agent.server_env({submit.RUN_LEASE_ENV: "mine", submit.SCHEDULE_DUE_ENV: "2026-12-10T17:00:00+00:00"})
+    assert env[submit.SCHEDULE_DUE_ENV] == "2026-12-10T17:00:00+00:00"
+
+
+def test_a_scheduled_time_without_a_lease_is_refused(db, fake, monkeypatch):  # noqa: F811
+    """Fail closed: a server told it is a scheduled run's but given no usable lease sends nothing."""
+    from tests.test_submit import submit as call_submit
+    from vending.tools import submit
+
+    prepared(db)
+    monkeypatch.setenv(submit.SCHEDULE_DUE_ENV, at(WED2, 14).isoformat())
+    monkeypatch.delenv(submit.RUN_LEASE_ENV, raising=False)
+    reply = call_submit()
+    assert reply["success"] is False and fake.posts == []
+    assert [r["code"] for r in reply["refusals"]] == ["run_context"]
+
+
+def test_a_lock_wait_that_carries_a_scheduled_send_past_the_cutoff_sends_nothing(db, fake, schema_url, conn,
+                                                                                send_clock, live_env):  # noqa: F811
+    """Round 2, blocker 2: the clock for the final checks is read after the locks are taken. Here the submit waits
+    on the database switch's row while the clock passes Thursday midnight: the POST must not go."""
+    import threading
+    import time as clock_time
+
+    late = Schedule("live", (agent_schedule._entry("thu 23:50-23:58"),), WED2.date())
+    prepared(db)
+    db_mode(conn, "live")
+    fresh_slots(conn, at(THU2, 23, 50))
+    send_clock.now = at(THU2, 23, 59) + timedelta(seconds=30)
+
+    def hold_the_switch():
+        holder = open_in(*schema_url)
+        holder.autocommit = False
+        holder.execute("select from config where key = %s for update", (agent_schedule.DB_MODE_KEY,))
+
+        def release():
+            clock_time.sleep(1.5)
+            send_clock.now = at(THU2 + timedelta(days=1), 0) + timedelta(seconds=30)
+            holder.commit()
+            holder.close()
+        threading.Thread(target=release, daemon=True).start()
+    scheduled_live_run(schema_url, fake, late, at(THU2, 23, 50), before_submit=hold_the_switch)
+    assert fake.posts == []
+    [(status, detail)] = conn.execute("select status, detail from purchase_submissions").fetchall()
+    assert status == "not_filed" and "past_cutoff" in detail
+
+
+OFF_CYCLE = {**BODY, "off_cycle": True}
+
+
+def test_a_scheduled_run_never_buys_an_off_cycle_visit(db, fake, schema_url, conn, send_clock, live_env):  # noqa: F811
+    """Round 2, blocker 3: the weekly run orders for Friday; it never pays the $25 for a midweek visit instead."""
+    prepared(db)
+    db_mode(conn, "live")
+    fresh_slots(conn, at(WED2, 14))
+    calls = []
+    scheduled_live_run(schema_url, fake, LIVE9, at(WED2, 14),
+                       tool_turn(use("preview_desired_state", {"desired": OFF_CYCLE}, id="p1")),
+                       tool_turn(use("submit_desired_state", {"desired": OFF_CYCLE}, id="s1")),
+                       answer("submit"), calls=calls)
+    assert calls.count("submit_desired_state") == 1
+    assert fake.posts == []
+    assert conn.execute("select count(*) from purchase_submissions").fetchone()[0] == 0
+    refused = [c for (c,) in conn.execute("select content from agent_steps where kind = 'tool_result'"
+                                          " and tool = 'submit_desired_state'")]
+    assert refused and "scheduled_off_cycle" in refused[0]
+
+
+def test_a_person_may_still_send_an_off_cycle_visit_by_hand(db, fake, schema_url, conn, send_clock):  # noqa: F811
+    import anyio
+
+    from vending import agent
+
+    prepared(db)
+    client = Script(tool_turn(use("preview_desired_state", {"desired": OFF_CYCLE}, id="p1")),
+                    tool_turn(use("submit_desired_state", {"desired": OFF_CYCLE}, id="s1")), answer("submit"))
+    _, out = anyio.run(lambda: agent.run(live=True, connect=lambda: open_in(*schema_url), client=client,
+                                         now=lambda: NOW, open_tools=mcp_tools(), bridge=fake.client))
+    assert out.status == "submitted" and len(fake.posts) == 1
+
+
+def test_a_stale_slot_check_waits_and_the_run_goes_live_once_it_recovers(schema_url, conn, ready):
+    """Round 2, finding 4: a passing blocker doesn't spend the window. The worker tries again until the latest
+    start, and the run goes live once the slot check is fresh."""
+    fresh_slots(conn, at(WED2, 9))          # confirmed 5 h 30 min before 14:00: stale
+    agent = FakeAgent(schema_url)
+    s = scheduler(schema_url, agent, LIVE9, clock=Clock(at(WED2, 13)))
+    tick(s, at(WED2, 14))
+    assert agent.calls == [] and rows(conn) == []
+    assert "slot" in s.public()["waiting"]
+    assert s.next_due(at(WED2, 14)) <= at(WED2, 14) + agent_schedule.LIVE_RETRY
+    fresh_slots(conn, at(WED2, 15))
+    tick(s, at(WED2, 15))
+    assert [live for _, live in agent.calls] == [True]
+    assert rows(conn)[0][1] == "live"
+
+
+def test_a_blocker_still_there_at_the_latest_start_is_a_missed_live_run_and_a_problem(schema_url, conn, ready):
+    fresh_slots(conn, at(WED2, 9))
+    agent = FakeAgent(schema_url)
+    s = scheduler(schema_url, agent, LIVE9, clock=Clock(at(WED2, 13)))
+    tick(s, at(WED2, 14))
+    tick(s, at(WED2, 22))
+    assert agent.calls == []
+    [(_, mode, outcome, _, detail)] = rows(conn)
+    assert (mode, outcome) == ("live", "missed") and "slot" in detail
+    [(level, text)] = run_lines(conn, at(WED2, 22, 5))
+    assert level == "bad" and "slot" in text
+
+
+def test_a_busy_lease_that_expires_inside_the_window_still_lets_the_run_go_live(schema_url, conn, ready):
+    _other(schema_url, BUSY_LEASE)
+    agent = FakeAgent(schema_url)
+    s = scheduler(schema_url, agent, LIVE9, clock=Clock(at(WED2, 13)))
+    tick(s, at(WED2, 14))
+    assert agent.calls == [] and rows(conn) == []
+    _other(schema_url, EXPIRE_LEASE)
+    tick(s, at(WED2, 14, 30))
+    assert [live for _, live in agent.calls] == [True]
+
+
+def test_a_lease_taken_between_the_claim_and_the_start_puts_the_time_back(schema_url, conn, ready):
+    """The race the check before the claim can't see: the real entry point finds the lease busy. The time goes back
+    to waiting, not to an informational skip."""
+    real, fake_agent, first = _real_entry_point(schema_url), FakeAgent(schema_url), []
+
+    def entry(live, authorize=None):
+        if not first:
+            first.append(live)
+            _other(schema_url, BUSY_LEASE)
+            return real(live, authorize)
+        return fake_agent(live, authorize)
+    s = scheduler(schema_url, entry, LIVE9, clock=Clock(at(WED2, 13)))
+    tick(s, at(WED2, 14))
+    assert first == [True] and rows(conn) == []
+    assert "another agent run" in s.public()["waiting"]
+    _other(schema_url, EXPIRE_LEASE)
+    tick(s, at(WED2, 14, 30))
+    assert [live for _, live in fake_agent.calls] == [True]
+
+
+def test_a_live_run_skipped_for_a_busy_lease_is_a_check_and_clears_nothing(schema_url, conn):
+    """A live row that never started (skipped, the lease busy) is meant-live-not-run: Check, and it doesn't count as
+    the later live run that clears an older one."""
+    from vending import agent_runs
+
+    conn.execute("insert into agent_schedule (due_at, latest_at, mode, outcome, detail, finished_at, started_at)"
+                 " values (%s, %s, 'dry-run', 'skipped', %s, now(), now())",
+                 (at(WED2, 14), at(WED2, 22), agent_schedule.DOWNGRADED.format(why="ORDERS BLOCKED: x.")))
+    run_id = agent_runs.start(conn, mode="live", model="fake")
+    agent_runs.finish(conn, run_id, "skipped", detail="Not started: another agent run was still going.",
+                      cost_usd=Decimal(0))
+    conn.execute("insert into agent_schedule (due_at, latest_at, mode, outcome, detail, finished_at, run_id)"
+                 " values (%s, %s, 'live', 'skipped', 'Not started: another agent run was still going.', now(), %s)",
+                 (at(WED2 + timedelta(days=7), 14), at(WED2 + timedelta(days=7), 22), run_id))
+    lines = run_lines(conn, at(WED2 + timedelta(days=7), 15))
+    assert [level for level, text in lines if "16 Dec" in text] == ["warn"]
+    assert [level for level, text in lines if "09 Dec" in text] == ["warn"]
+
+
+def test_a_validated_201_left_open_is_settled_by_the_scheduler_and_the_run_goes_live(db, fake, schema_url, conn,
+                                                                                     ready):  # noqa: F811
+    """Round 2, finding 4: an unattended run settles what `submissions check` can settle before calling it
+    something only a person can."""
+    conn.execute("insert into purchase_submissions (plan_hash, body, status, created_id)"
+                 " values ('h', %s, 'sending', 'pr-7')", ('{"lines": []}',))
+    fake.lookups["pr-7"] = {"id": "pr-7", "status": "pending", "created_at": "2026-12-09T12:00:00Z",
+                            "decision_note": None}
+    agent = FakeAgent(schema_url)
+    tick(scheduler(schema_url, agent, LIVE9, clock=Clock(at(WED2, 13)), bridge=fake.client), at(WED2, 14))
+    assert conn.execute("select status from purchase_submissions").fetchone() == ("accepted",)
+    assert [live for _, live in agent.calls] == [True]
+
+
+def test_the_default_schedule_has_the_thursday_window(monkeypatch):
+    """Round 2, finding 5 (Kevin's decision): unset, AGENT_SCHEDULE is Wednesday 14:00-22:00 and Thursday
+    12:00-20:00, so the first live order is Thu 3 Dec 12:00 ET's run."""
+    monkeypatch.setenv(agent_schedule.MODE_SETTING, "live")
+    sched = agent_schedule.schedule()
+    assert sched.entries == (agent_schedule._entry("wed 14:00-22:00"), agent_schedule._entry("thu 12:00-20:00"))
+    assert agent_schedule.next_time(sched, at(WED, 15)) == at(THU, 12)
+
+
+def test_the_activation_steps_set_the_schedule_and_check_it_on_the_revision():
+    from pathlib import Path
+
+    for name in ("docs/agent.md", "docs/deploy.md"):
+        text = Path(name).read_text(encoding="utf-8")
+        assert "AGENT_SCHEDULE=" in text and "AGENT_SCHEDULE_FROM=" in text, name
+        assert "029" in text and "030" in text, name
+        assert "python -m vending.agent_schedule" in text, name
+
+
+def test_a_json_null_setting_is_a_dry_run_at_the_claim_and_at_the_lease(schema_url, conn, ready):
+    """Round 2, finding 6: a row holding JSON null isn't a missing row. It is a garbled value: a dry run at the claim
+    and at the lease alike, never a skip."""
+    conn.execute("update config set value = 'null'::jsonb where key = %s", (agent_schedule.DB_MODE_KEY,))
+    assert agent_schedule.database_mode(conn) == "dry-run"
+    with conn.transaction():
+        assert agent_schedule.database_mode(conn, lock=True) == "dry-run"
+    agent = FakeAgent(schema_url)
+    tick(scheduler(schema_url, agent, LIVE9, clock=Clock(at(WED2, 13))), at(WED2, 14))
+    assert [live for _, live in agent.calls] == [False]
+    [(_, mode, outcome, _, detail)] = rows(conn)
+    assert mode == "dry-run" and "changed to" not in (detail or "")
+    conn.execute("delete from config where key = %s", (agent_schedule.DB_MODE_KEY,))
+    assert agent_schedule.database_mode(conn) == "off"
