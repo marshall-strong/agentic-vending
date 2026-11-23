@@ -7,7 +7,7 @@ Slots: our slots as PLAN.json placed them (no list is typed here), filled greedi
 profit, then single-slot swaps until no gain, always keeping the most-we-pay fill at or under the cap
 (project.FILL_CAP). Every slot gets a different drink (day one: Kevin, 22 Nov, #230). Only products with a price
 estimate are candidates; --only-checked keeps those with a checked-price sourcing row. A planning aid, not package
-code. Round 7 imports best_price and candidates from here.
+code. Round 7 imports candidates and prices from here.
 """
 from __future__ import annotations
 import argparse, json, math, sys
@@ -16,17 +16,36 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import project as P  # noqa: E402
 
 CAP_CENTS = P.FILL_CAP_CENTS
+CEILING_CENTS = 650     # every regular slot's price ceiling (config.price_ceiling_cents, 12 Nov)
 
 
-def best_price(p: dict, floor_cents: int) -> float:
+def best_price(p: dict, floor_cents: int) -> float | None:
+    """The 5-cent price from the floor to the ceiling that maximises margin x demand; None if the floor is above it."""
     unit = p["price"] / p["pack"]; ref = P.REF_PRICE[p["cat"]]; best = None
-    for c in range(max(floor_cents, 5), 651, 5):
+    for c in range(max(floor_cents, 5), CEILING_CENTS + 1, 5):
         x = c / 100; ratio = x / ref
         m = min(max(ratio ** (P.ELASTICITY_UP if ratio > 1 else P.ELASTICITY_DOWN), P.CLAMP[0]), P.CLAMP[1])
         v = (x / 1.08 - unit) * m
         if best is None or v > best[0]:
             best = (v, x)
-    return best[1]
+    return None if best is None else best[1]
+
+
+def prices(cat: dict, pool: list[str]) -> tuple[dict[str, float], dict[str, str]]:
+    """Each candidate's best price, and the ones that can't be priced legally, with why: a floor (most-we-pay unit
+    cost with tax) above the ceiling leaves no allowed price, so the optimisers leave the product out."""
+    sys.path.insert(0, P.DEFAULT_REPO)
+    from vending.pricing import pack_floor_cents
+    price, skipped = {}, {}
+    for s in pool:
+        floor = pack_floor_cents(round(P.most(cat[s]) * 100), cat[s]["pack"])
+        best = best_price(cat[s], floor)
+        if best is None:
+            skipped[s] = (f"its floor is ${floor / 100:.2f} (most-we-pay unit cost with tax), above the "
+                          f"${CEILING_CENTS / 100:.2f} ceiling, so no price is allowed")
+        else:
+            price[s] = best
+    return price, skipped
 
 
 def candidates(cat: dict, exclude=(), only_checked: bool = False) -> list[str]:
@@ -42,13 +61,13 @@ def main() -> None:
     ap.add_argument("--slots-from", required=True, help="a plan JSON for our current slots (its day_one list)")
     ap.add_argument("--quiet", action="store_true"); ap.add_argument("--seed", nargs="*", default=[], help="plan JSONs to start swaps from")
     a = ap.parse_args()
-    sys.path.insert(0, P.DEFAULT_REPO)
-    from vending.pricing import pack_floor_cents
     SLOTS = P.slots_from(a.slots_from)
     cat = {p["sku"]: p for p in json.load(open(a.catalog, encoding="utf-8"))["products"]}
     cal = P.load_calendar()
-    pool = candidates(cat, a.exclude, a.only_checked)
-    price = {s: best_price(cat[s], pack_floor_cents(round(P.most(cat[s]) * 100), cat[s]["pack"])) for s in pool}
+    price, skipped = prices(cat, candidates(cat, a.exclude, a.only_checked))
+    for s, why in skipped.items():
+        print(f"left out {s}: {why}")
+    pool = list(price)
 
     def score(skus: list[str]) -> tuple[float, dict]:
         plan = {"day_one": [dict(slot=int(SLOTS[i]), sku=s, units=cat[s]["cap"], price=price[s]) for i, s in enumerate(skus)]}

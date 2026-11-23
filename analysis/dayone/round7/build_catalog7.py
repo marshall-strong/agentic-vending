@@ -5,7 +5,8 @@ Price sources, in order:
   2. the approved request's own note (15 Nov Amazon/Costco checks, "N-pack ... $X");
   3. the 11 Nov list round 3/4 used (Red Bull Red/Yellow, Celsius Kiwi, Spindrift, Baja Blast), and round 3's
      15 Nov bubly check.
-Most-we-pay without a sourcing row: the projection's rule, expected x 1.15 rounded up to 50 cents.
+Most-we-pay without a sourcing row: the projection's rule, expected x 1.15 rounded up to 50 cents. A sourcing row
+with no expected price uses its most-we-pay as the expected price too, as the planner does (vending.planner._Sources).
 A product with no price, or a package size with no column figure, is kept but not plannable.
 
 Three flags per product, kept apart (#231 review):
@@ -31,12 +32,6 @@ sys.path.insert(0, P.DEFAULT_REPO)
 from vending.capacity import for_product  # noqa: E402
 
 SNAPSHOT = P.LOCAL / "team_catalog_2026-11-20.json"
-if not SNAPSHOT.exists():
-    sys.exit(f"{SNAPSHOT} is missing: it is a read-only snapshot of the team DB, not committed (README.md, 'Data').")
-snap = json.load(open(SNAPSHOT, encoding="utf-8"))
-over = snap["capacity_overrides"]
-src = {s["sku"]: s for s in snap["sourcing"] if s["rank"] == "primary"}
-req = {r["sku"]: r for r in snap["requests"] if r["sku"]}
 
 CAT = {"ARIZONA": "tea", "PURELEAF": "tea", "BUBLY": "sparkling", "SPINDRIFT_SPARK": "sparkling", "HINT": "water",
        "VITAMINWATER": "water", "ESSENTIA": "water", "SNAPPLE": "juice", "PREMIER": "protein", "CORE": "protein",
@@ -86,15 +81,24 @@ def note_price(note: str | None) -> tuple[int, float] | None:
     return (int(m.group(1)), float(m.group(2))) if m else None
 
 
-out = []
-for c in snap["catalog"]:
+def build(snap: dict) -> list[dict]:
+    """The priced catalog from a team DB snapshot (README.md, "Team DB snapshot")."""
+    over = snap["capacity_overrides"]
+    src = {s["sku"]: s for s in snap["sourcing"] if s["rank"] == "primary"}
+    req = {r["sku"]: r for r in snap["requests"] if r["sku"]}
+    return [product(c, src.get(c["sku"]), req.get(c["sku"]), over) for c in snap["catalog"]]
+
+
+def product(c: dict, s: dict | None, r: dict | None, over: dict) -> dict:
     sku, size = c["sku"], c["size"]
     cap = for_product(sku, size, over)
-    s, r = src.get(sku), req.get(sku)
     pack = price = mx = store = None
     if s:
-        pack, price, mx, store = s["units_per_pack"], s["expected_cents"] / 100, s["max_cents"] / 100, s["store"]
+        expected = s["expected_cents"] if s.get("expected_cents") is not None else s["max_cents"]
+        pack, price, mx, store = s["units_per_pack"], expected / 100, s["max_cents"] / 100, s["store"]
         source = f"sourcing row ({s['store']}, checked {s['checked_at'][:10]})"
+        if s.get("expected_cents") is None:
+            source += "; no expected price, so the most-we-pay is used for it"
     elif r and note_price(r["note"]):
         pack, price = note_price(r["note"])
         store = "Costco" if "Costco" in r["note"] and "Amazon" not in r["note"] else "Amazon"
@@ -106,18 +110,28 @@ for c in snap["catalog"]:
     else:
         source = "not priced: no sourcing row, and no price in a request note"
     reason = LEAVE_OUT.get(sku) or (None if price else source) or (None if cap else f"no column figure for '{size}'")
-    out.append(dict(sku=sku, name=c["name"], size=size, cat=category(sku, size), cap=cap, capacity_assumed=cap is None,
-                    pack=pack or 1, price=price or 0.0, max=mx, store=store, src=source,
-                    request=(r["id"] if r else None), priced=bool(price), checked_source=s is not None,
-                    plannable=reason is None, not_plannable=reason,
-                    interloper=sku in INTERLOPER, in_catalog=True))
-json.dump({"about": "Real team catalog on 20 Nov 2026 (83 live products), priced; see build_catalog6.py for sources.",
-           "products": out}, open(HERE / "catalog7.json", "w", encoding="utf-8"), indent=1)
-ok = [p for p in out if p["plannable"]]
-print(f"{len(ok)} plannable of {len(out)}; {sum(p['priced'] for p in out)} with a price estimate; "
-      f"{sum(p['checked_source'] for p in out)} with a checked sourcing row")
-for p in out:
-    if not p["plannable"]:
-        print("  not plannable:", p["sku"], "-", p["not_plannable"])
-unchecked = [p["sku"] for p in ok if not p["checked_source"]]
-print(f"{len(unchecked)} plannable products have only an estimate, no checked sourcing row:", ", ".join(unchecked))
+    return dict(sku=sku, name=c["name"], size=size, cat=category(sku, size), cap=cap, capacity_assumed=cap is None,
+                pack=pack or 1, price=price or 0.0, max=mx, store=store, src=source,
+                request=(r["id"] if r else None), priced=bool(price), checked_source=s is not None,
+                plannable=reason is None, not_plannable=reason,
+                interloper=sku in INTERLOPER, in_catalog=True)
+
+
+def main() -> None:
+    if not SNAPSHOT.exists():
+        sys.exit(f"{SNAPSHOT} is missing: it is a read-only snapshot of the team DB, not committed (README.md).")
+    out = build(json.load(open(SNAPSHOT, encoding="utf-8")))
+    json.dump({"about": "Real team catalog on 20 Nov 2026 (83 live products), priced; see build_catalog6.py for sources.",
+               "products": out}, open(HERE / "catalog7.json", "w", encoding="utf-8"), indent=1)
+    ok = [p for p in out if p["plannable"]]
+    print(f"{len(ok)} plannable of {len(out)}; {sum(p['priced'] for p in out)} with a price estimate; "
+          f"{sum(p['checked_source'] for p in out)} with a checked sourcing row")
+    for p in out:
+        if not p["plannable"]:
+            print("  not plannable:", p["sku"], "-", p["not_plannable"])
+    unchecked = [p["sku"] for p in ok if not p["checked_source"]]
+    print(f"{len(unchecked)} plannable products have only an estimate, no checked sourcing row:", ", ".join(unchecked))
+
+
+if __name__ == "__main__":
+    main()

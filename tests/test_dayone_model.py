@@ -31,11 +31,13 @@ def P():
     return module("dayone_project", DAYONE / "project.py")
 
 
-def product(sku, cat="tea", size="16 oz can", pack=12, price=9.00, checked=True, priced=True, interloper=False):
-    """A made-up catalog product in catalog7.json's shape. `price` is dollars per pack (expected)."""
+def product(sku, cat="tea", size="16 oz can", pack=12, price=9.00, checked=True, priced=True, interloper=False,
+            most=None):
+    """A made-up catalog product in catalog7.json's shape. `price` and `most` are dollars per pack (expected, and
+    most-we-pay; None: the projection's x1.15 rule)."""
     caps = {"16 oz can": 8, "12 oz can": 8, "20 oz bottle": 7, "8.4 oz can": 11}
     return dict(sku=sku, name=sku.title(), size=size, cat=cat, cap=caps[size], capacity_assumed=False, pack=pack,
-                price=price if priced else 0.0, max=None, store="Costco", priced=priced, checked_source=checked,
+                price=price if priced else 0.0, max=most, store="Costco", priced=priced, checked_source=checked,
                 plannable=priced, interloper=interloper)
 
 
@@ -196,3 +198,63 @@ def test_the_round_reader_reads_a_projected_round(tmp_path, P):
     [(rid, plan_file, projection_file)] = plan_rounds.discover(tmp_path)
     checked, _, _ = plan_rounds.read_round(rid, plan_file, projection_file, TEST_SLOTS)
     assert rid == "9" and len(checked.slots) == 20 and not checked.warnings
+
+
+# --- Re-check of #231 (Sol, 22 Nov) -------------------------------------------------------------------------------
+
+def test_a_sourcing_row_without_an_expected_price_falls_back_to_most_we_pay(monkeypatch):
+    """The planner reads a missing expected price as the most-we-pay (vending.planner._Sources); the catalog builder
+    used to crash on it."""
+    build = module("dayone_build_catalog7", DAYONE / "round7" / "build_catalog7.py")
+    snap = {"capacity_overrides": {},
+            "catalog": [{"sku": "TEA-A", "name": "Tea A", "size": "16 oz can"}],
+            "requests": [],
+            "sourcing": [{"sku": "TEA-A", "rank": "primary", "store": "Costco", "units_per_pack": 12,
+                          "expected_cents": None, "max_cents": 1299, "checked_at": "2026-11-20 12:00:00+00"}]}
+    [p] = build.build(snap)
+    assert (p["price"], p["max"], p["pack"]) == (12.99, 12.99, 12)
+    assert p["priced"] and p["checked_source"] and p["plannable"]
+
+
+def test_the_test_slot_tries_a_cheaper_drink_of_its_category_when_the_best_doesnt_fit():
+    """$6 for three slots. TEA-RICH scores best on its own but costs $4.00, which leaves too little for two sodas;
+    TEA-LEAN ($1.00) with both sodas ($1.50 each) fits. The search used to stop at TEA-RICH and report NoMix."""
+    o = opt7()
+    cat = catalog(product("TEA-RICH", price=3.50, most=4.00),
+                  product("TEA-LEAN", price=0.90, most=1.00, interloper=True),
+                  product("SODA-ONE", cat="sodacan", size="12 oz can", pack=8, price=1.30, most=1.50),
+                  product("SODA-TWO", cat="sodacan", size="12 oz can", pack=8, price=1.30, most=1.50))
+    res = o.optimise(cat, [int(s) for s in TEST_SLOTS[:3]], 600, say=lambda m: None)
+    assert sorted(res["skus"]) == ["SODA-ONE", "SODA-TWO", "TEA-LEAN"]
+    assert res["test_sku"] == "TEA-LEAN" and res["fill_most"] <= 6.00
+
+
+def test_a_product_whose_floor_is_above_the_ceiling_is_left_out_with_a_reason():
+    """A $7.50 unit cost needs at least $8.10 (with 8% tax), over the $6.50 ceiling: it can't be priced legally, so
+    the optimisers leave it out and say why instead of crashing."""
+    opt = module("optimize", DAYONE / "optimize.py")
+    dear = product("TEA-DEAR", pack=1, price=7.00, most=7.50)
+    cat = catalog(product("TEA-A"), dear)
+    price, skipped = opt.prices(cat, ["TEA-A", "TEA-DEAR"])
+    assert list(price) == ["TEA-A"]
+    assert "TEA-DEAR" in skipped and "$8.10" in skipped["TEA-DEAR"] and "$6.50" in skipped["TEA-DEAR"]
+    o = opt7()
+    cat = catalog(product("TEA-A"), product("SODA-B", cat="sodacan", size="12 oz can", pack=8, price=4.00), dear)
+    res = o.optimise(cat, [int(s) for s in TEST_SLOTS[:2]], 40_000, test_slot=False, say=lambda m: None)
+    assert "TEA-DEAR" not in res["skus"] and "TEA-DEAR" in res["unpriceable"]
+
+
+@pytest.mark.parametrize("script", ["compare7.py", "compare7b.py"])
+def test_the_compare_scripts_document_writing_their_tables_to_the_ignored_folder(script):
+    """Their output has per-slot rows: the usage line must send it into the git-ignored local folder."""
+    import re
+    import subprocess
+
+    text = (DAYONE / "round7" / script).read_text(encoding="utf-8")
+    usage = [line for line in text.split('"""')[1].splitlines() if script in line and ">" in line]
+    assert usage, "a usage line with a redirect"
+    for line in usage:
+        target = re.search(r">\s*(\S+)", line).group(1)
+        assert target.startswith("analysis/dayone/local/"), line
+        ignored = subprocess.run(["git", "check-ignore", "-q", target], cwd=DAYONE.parents[1])
+        assert ignored.returncode == 0, f"{target} is not git-ignored"

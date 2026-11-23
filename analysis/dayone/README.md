@@ -50,6 +50,7 @@ Every rate is an assumption, and `project.py` writes each one into the projectio
   - Rounds 2 to 6 credited a second slot with `DUP_DECAY = 0.75` of the first slot's sales. That credit was 24% of plan 6's projected profit.
   - The totals add each product's sales before rounding, so they don't depend on how many slots split a product.
 - **No duplicates on day one.** The optimiser only builds mixes of different drinks. If none fits under the cap, it stops and says so.
+  If a category's best test drink leaves no room for the other slots, it tries that category's next drink.
 - **Category limits.**
   - History shows at most 9 energy products (`CAT_FREE`) and 4 of any other category (`CAT_FREE_DEFAULT`).
   - Past the limit, the products with the least demand before the penalty lose `CAT_DECAY` (0.6) per place past it, because flavours cannibalise each other.
@@ -67,7 +68,8 @@ Every rate is an assumption, and `project.py` writes each one into the projectio
 - **Scenarios.** Demand is x0.6 (low), x1.0 (base) or x1.25 (high), with the haircuts above.
 - **Prices and sources.**
   - The catalog keeps three separate flags per product: `priced` (a price estimate exists), `checked_source` (a checked-price sourcing row exists) and `plannable`.
-  - The optimisers only consider plannable, priced products.
+  - The optimisers only consider plannable, priced products. A product whose floor (most-we-pay unit cost with tax) is above the $6.50 ceiling has no legal price, so they leave it out and say why (`unpriceable` in the output).
+  - A sourcing row with no expected price uses its most-we-pay for both, as the planner does.
   - A projection's `needs_new_source` lists every product without a checked sourcing row. The fill can't buy those until one is added (`python -m vending.sourcing set`).
 - **The $400 cap.**
   - The optimisers keep the fill's most-we-pay cost at or under $400.00 for all 20 slots (`project.FILL_CAP`).

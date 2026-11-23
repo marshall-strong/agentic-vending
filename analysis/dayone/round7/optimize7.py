@@ -35,7 +35,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import project as P            # noqa: E402
-from optimize import best_price, candidates  # noqa: E402
+from optimize import candidates, prices  # noqa: E402
 
 CAP_CENTS = P.FILL_CAP_CENTS
 BRAND_TOL = 5.00   # dollars of base gross profit over the run a new brand may cost (about 0.5%)
@@ -54,18 +54,19 @@ def optimise(cat: dict, slots: list[int], cap_cents: int, cal: dict | None = Non
              distinct: bool = True, test_slot: bool = True, repo: str | None = None, say=print) -> dict:
     """The best mix for `slots` under the cap. `distinct=False` allows a drink in two slots (not for day one).
     `test_slot=False` skips the test-slot and brand-lean steps. Raises NoMix when no mix fits."""
-    sys.path.insert(0, P.DEFAULT_REPO)
-    from vending.pricing import pack_floor_cents
     cal = cal if cal is not None else P.load_calendar()
     repo = repo or os.environ.get("VENDING_REPO", P.DEFAULT_REPO)
-    pool = candidates(cat)
-    price = {s: best_price(cat[s], pack_floor_cents(round(P.most(cat[s]) * 100), cat[s]["pack"])) for s in pool}
+    price, unpriceable = prices(cat, candidates(cat))
+    pool = list(price)
     n_slots = len(slots)
     memo: dict[tuple, float] = {}
     log: list[str] = []
 
     def note(msg: str) -> None:
         say(msg); log.append(msg)
+
+    for s, why in unpriceable.items():
+        note(f"left out {s}: {why}")
 
     def full(skus: list[str]) -> tuple[float, dict]:
         plan = {"day_one": [dict(slot=slots[i], sku=s, units=cat[s]["cap"], price=price[s]) for i, s in enumerate(skus)]}
@@ -141,7 +142,8 @@ def optimise(cat: dict, slots: list[int], cap_cents: int, cal: dict | None = Non
     if not test_slot:
         _, r = full(free)
         return {"skus": free, "price": {s: price[s] for s in set(free)}, "base_gp": round(free_v, 2),
-                "fill_most": r["fill_most"], "fill_expected": r["fill_expected"], "cap_cents": cap_cents, "log": log}
+                "fill_most": r["fill_most"], "fill_expected": r["fill_expected"], "cap_cents": cap_cents,
+                "unpriceable": unpriceable, "log": log}
 
     # 2. Test slot: one category no other slot stocks.
     cats = sorted({cat[s]["cat"] for s in pool})
@@ -152,16 +154,22 @@ def optimise(cat: dict, slots: list[int], cap_cents: int, cal: dict | None = Non
         reg_pool = [s for s in pool if cat[s]["cat"] != c]
         test_pool = [s for s in pool if cat[s]["cat"] == c]
         # Start the test slot on the category's best product alone, so the regular slots are chosen with its cost
-        # under the cap.
-        t = max(test_pool, key=lambda s: score([s]))
-        start = [s for s in free if cat[s]["cat"] != c][:n_slots - 1]
-        # Over the cap with the test drink, or (different drinks) unable to fill the rest: drop the last.
-        while start and (score(start + [t]) <= INFEASIBLE / 10
-                         or (distinct and not completes(start + [t], n_slots, reg_pool + [t]))):
-            start.pop()
-        reg = greedy(reg_pool, n_slots - 1, [t], start)
-        if len(reg) < n_slots - 1:
-            note(f"test {c}: only {len(reg)} regular slots fit under the cap with {t}")
+        # under the cap. If the rest can't be filled around it, try the category's next product, and so on: a
+        # cheaper test drink can leave room for a full mix that the best one doesn't (#231 re-check).
+        reg, t = [], None
+        for cand in sorted(test_pool, key=lambda s: (-score([s]), s)):
+            start = [s for s in free if cat[s]["cat"] != c][:n_slots - 1]
+            # Over the cap with the test drink, or (different drinks) unable to fill the rest: drop the last.
+            while start and (score(start + [cand]) <= INFEASIBLE / 10
+                             or (distinct and not completes(start + [cand], n_slots, reg_pool + [cand]))):
+                start.pop()
+            reg = greedy(reg_pool, n_slots - 1, [cand], start)
+            if len(reg) == n_slots - 1:
+                t = cand
+                break
+            note(f"test {c}: only {len(reg)} regular slots fit under the cap with {cand}; trying the next")
+        if t is None:
+            note(f"test {c}: no product of the category leaves room for the other {n_slots - 1} slots")
             continue
         for _ in range(3):   # polish the regular slots around t, then re-pick t around them, until t stays
             reg, v = polish(reg, reg_pool, [t])
@@ -207,7 +215,7 @@ def optimise(cat: dict, slots: list[int], cap_cents: int, cal: dict | None = Non
             "base_gp": round(v, 2), "low_gp": r["scenarios"]["low"]["gross_profit"], "high_gp": r["scenarios"]["high"]["gross_profit"],
             "fill_most": r["fill_most"], "fill_expected": r["fill_expected"], "cap_cents": cap_cents,
             "free_plan": {"skus": free, "base_gp": round(free_v, 2), "distinct": len(set(free))},
-            "test_by_category": by_cat, "brand_swaps": swaps, "log": log}
+            "test_by_category": by_cat, "brand_swaps": swaps, "unpriceable": unpriceable, "log": log}
 
 
 def main() -> None:

@@ -101,7 +101,7 @@ A projection's `needs_new_source` lists exactly these, from the catalog's `check
   - A mix that repeats a drink scores as infeasible. If no mix of different drinks fits, it says so.
   - The search is local, so it also starts from earlier plans (`--seed`). Plan 7b was seeded with plans 7 and 6, and the #231 version picks the same 7b.
   - Plan 7 came from the earlier search, which could repeat a drink while it searched, and stalled. Re-run at $366 with the #231 version, the search finds a different mix worth $12.82 more base gross profit ($1,040.13 against $1,027.31). Plan 7 is superseded by 7b, so it isn't redone here.
-- **The test slot.** For each category, the optimiser fills the other slots without that category, then puts the category's best drink in the test slot. Juice won for plan 7 and water for plan 7b. A run without the test-slot rule scores no higher for either.
+- **The test slot.** For each category, the optimiser fills the other slots without that category, then puts the category's best drink in the test slot. If that drink leaves no room for the other slots under the cap, it tries the category's next drink. Juice won for plan 7 and water for plan 7b. A run without the test-slot rule scores no higher for either.
 - **The brand lean.** A slot holding a second product of a brand we already stock is swapped for a new brand when the swap costs at most $5 of base gross profit over the run. No swap passed for plan 7 or plan 7b. The closest for plan 7 were C4 for a Red Bull ($7.02) and Pepsi mini cans for a tea ($8.60).
 - **Placement.** `place7.py` orders our slots by shelf, then by fall sales.
   - Before counting any fall row, it checks every row against the fall cut and stops at one from the cut on.

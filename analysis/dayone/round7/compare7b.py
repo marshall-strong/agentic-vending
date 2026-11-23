@@ -1,6 +1,8 @@
 """The "7 vs 7b" section of compare7.md: plan 7 ($366 cap) against plan 7b ($400 cap, Kevin 22 Nov).
 
-    python analysis/dayone/round7/compare7b.py > section.md
+    python analysis/dayone/round7/compare7b.py > analysis/dayone/local/compare7b_tables.md
+
+The tables have per-slot rows, so write them into the git-ignored local folder (or the folder in DAYONE_LOCAL).
 """
 from __future__ import annotations
 

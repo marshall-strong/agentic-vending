@@ -1,6 +1,8 @@
 """Tables for compare7.md: plan 6 (old rule, its own projection6.json), plan 6 re-scored under round 7's rule, and plan 7.
 
-    python analysis/dayone/round7/compare7.py > analysis/dayone/round7/compare7_tables.md
+    python analysis/dayone/round7/compare7.py > analysis/dayone/local/compare7_tables.md
+
+The tables have per-slot rows, so write them into the git-ignored local folder (or the folder in DAYONE_LOCAL).
 
 Also writes projection6_rescored.json (plan 6 under the new project.py) so the re-score can be checked. The plans and
 projections it reads and writes map our slots to products, so they live in the git-ignored local folder (README.md).
