@@ -83,9 +83,11 @@ dated when it was written:
 - a row for the same drink, store and pack (for Amazon, the same listing) gets the new price, `checked_by`
   `agent-search`, its note naming the page (`sourcing.set_price`). Its max stays: a price above it is not stored,
   and a person decides (`over_max`);
-- otherwise a new row: the primary if the drink has none, else the alternate if it has none or only a stale
-  or unpriced one. Its max is the price plus 25%, to the cent (`agent_max`). The primary a person set is never
-  replaced.
+- otherwise a new row: the primary if the drink has none **or only a stale or unpriced one** (the fill refuses a
+  stale primary however fresh the alternate is), else the alternate if it has none or only a stale or unpriced
+  one. Its max is the price plus 25%, to the cent (`agent_max`). A fresh primary is never replaced. If the find
+  is the alternate's own listing and the primary is stale, the find becomes the primary and the alternate copy
+  is removed.
 
 **Does it count as checked?** Yes, every price stored: it clears `no_checked_price` and `stale_price`, goes stale
 after 7 days, and a receipt replaces it after the next fill. The max is the safety margin: the worker never pays
@@ -398,9 +400,13 @@ class PriceSearch:
             if product is None or sku not in sourcing.in_catalog(conn, [sku]):
                 raise _Stop("not_in_catalog", f"sku {sku!r}")
             before = {o.rank: o for o in sourcing.options_for(conn, [sku])}
+            head = before.get("primary")
+            stale_head = head is not None and (head.expected_cents is None or head.is_stale(now))
             for o in before.values():
+                # A fresh alternate behind a stale primary still leaves the fill refusing the drink, so search
+                # anyway: the find becomes the primary (`_record`).
                 if o.store == store and o.units_per_pack == wanted and o.expected_cents is not None \
-                        and not o.is_stale(now):
+                        and not o.is_stale(now) and not (o.rank == "alternate" and stale_head):
                     raise _Stop("fresh_price", f"{o.rank} checked {sourcing.day(o.checked_at)}: {sourcing.describe(o)}")
             if self.person is None:
                 limit = _setting(conn, "price_search_searches_per_run", DEFAULT_SEARCHES_PER_RUN,
@@ -520,16 +526,20 @@ class PriceSearch:
             first = "" if known is not None else ", the drink's first price"
             note = f"found with a web search {sourcing.day(now)}{who}{first}: {found['url']}"[:500]
             expected = found["price"]
+            primary, alternate = rows["primary"], rows["alternate"]
+            # A stale or unpriced primary blocks the fill however fresh the alternate is, so a fresh find goes to
+            # the primary instead (Kevin, 23 Nov). Only a refresh of the primary's own listing keeps its max.
+            stale_primary = primary is not None and (primary.expected_cents is None or primary.is_stale(now))
+            refresh = match is not None and not (stale_primary and match.rank == "alternate")
             try:
-                if match is not None:
+                if refresh:
                     if found["price"] > match.max_cents:
                         refuse("over_max", f"{shown}, above the {match.rank}'s max ${match.max_cents / 100:.2f}")
                     sourcing.set_price(conn, match, expected, now, AGENT_BY, note, by=self.person or AGENT_BY,
                                        now=now, stock=found["stock"])
                     outcome["recorded"], outcome["rank"] = f"refreshed {match.rank}", match.rank
                 else:
-                    primary, alternate = rows["primary"], rows["alternate"]
-                    if primary is None:
+                    if primary is None or stale_primary:
                         rank = "primary"
                     elif alternate is None or alternate.expected_cents is None or alternate.is_stale(now):
                         rank = "alternate"
@@ -550,6 +560,10 @@ class PriceSearch:
                         pack_description=found["description"], checked_at=now, checked_by=AGENT_BY, note=note,
                         stock=found["stock"]), now=now)
                     outcome["recorded"], outcome["rank"] = f"{done} {rank}", rank
+                    if rank == "primary" and match is not None and match.rank == "alternate":
+                        # The alternate was this same listing; now the primary holds it, so drop the copy.
+                        sourcing.remove(conn, sku, "alternate", self.person or AGENT_BY)
+                        outcome["recorded"] += " (its alternate was the same listing, so it was removed)"
             except sourcing.SourcingError as error:
                 if "changed" in str(error):
                     refuse("changed_meanwhile", str(error))
