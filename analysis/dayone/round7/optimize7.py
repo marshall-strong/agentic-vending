@@ -14,7 +14,9 @@ What changed (Kevin, 22 Nov, #230):
   for the opening mix.
 - One slot is the test slot: it holds a drink from a category no other slot stocks. For each plannable category C,
   the 19 regular slots are optimised without C, then the test slot takes the best C product given those 19, then the
-  19 are polished again around it. The C with the highest total base gross profit wins.
+  19 are polished again around it. The C with the highest total base gross profit wins. A new category is a
+  preference, not a rule (#230): if no category leaves room for the other 19, the test slot takes a drink that shares
+  a category with a regular slot (test_new_category is then false), and only if that fails too is there NoMix.
 - Brand lean: after that, a regular slot holding a second product of a brand already stocked is swapped for a
   product of a new brand when the swap costs at most BRAND_TOL of base gross profit over the run.
 - Only products with a price estimate are candidates (optimize.candidates).
@@ -146,19 +148,15 @@ def optimise(cat: dict, slots: list[int], cap_cents: int, cal: dict | None = Non
                 "unpriceable": unpriceable, "log": log}
 
     # 2. Test slot: one category no other slot stocks.
-    cats = sorted({cat[s]["cat"] for s in pool})
-    best = None
-    by_cat = {}
-    for c in cats:
-        t0 = time.time()
-        reg_pool = [s for s in pool if cat[s]["cat"] != c]
-        test_pool = [s for s in pool if cat[s]["cat"] == c]
-        # Start the test slot on the category's best product alone, so the regular slots are chosen with its cost
-        # under the cap. If the rest can't be filled around it, try the category's next product, and so on: a
-        # cheaper test drink can leave room for a full mix that the best one doesn't (#231 re-check).
+    def fit_test(label: str, test_pool: list[str], reg_pool_for) -> tuple[list[str], str, float] | None:
+        """The regular slots around the best test drink from `test_pool`; reg_pool_for(t) is what they may hold."""
+        # Start the test slot on the best product alone, so the regular slots are chosen with its cost under the cap.
+        # If the rest can't be filled around it, try the next product, and so on: a cheaper test drink can leave room
+        # for a full mix that the best one doesn't (#231 re-check).
         reg, t = [], None
         for cand in sorted(test_pool, key=lambda s: (-score([s]), s)):
-            start = [s for s in free if cat[s]["cat"] != c][:n_slots - 1]
+            reg_pool = reg_pool_for(cand)
+            start = [s for s in free if s in reg_pool][:n_slots - 1]
             # Over the cap with the test drink, or (different drinks) unable to fill the rest: drop the last.
             while start and (score(start + [cand]) <= INFEASIBLE / 10
                              or (distinct and not completes(start + [cand], n_slots, reg_pool + [cand]))):
@@ -167,22 +165,43 @@ def optimise(cat: dict, slots: list[int], cap_cents: int, cal: dict | None = Non
             if len(reg) == n_slots - 1:
                 t = cand
                 break
-            note(f"test {c}: only {len(reg)} regular slots fit under the cap with {cand}; trying the next")
+            note(f"test {label}: only {len(reg)} regular slots fit under the cap with {cand}; trying the next")
         if t is None:
-            note(f"test {c}: no product of the category leaves room for the other {n_slots - 1} slots")
-            continue
+            return None
         for _ in range(3):   # polish the regular slots around t, then re-pick t around them, until t stays
-            reg, v = polish(reg, reg_pool, [t])
+            reg, v = polish(reg, reg_pool_for(t), [t])
             tv, t2 = max((score(reg + [s]), s) for s in test_pool)
             if t2 == t or tv <= v + 0.01:
                 break
             t, v = t2, tv
+        return reg, t, v
+
+    cats = sorted({cat[s]["cat"] for s in pool})
+    best = None
+    by_cat = {}
+    for c in cats:
+        t0 = time.time()
+        fit = fit_test(c, [s for s in pool if cat[s]["cat"] == c],
+                       lambda _t, c=c: [s for s in pool if cat[s]["cat"] != c])
+        if fit is None:
+            note(f"test {c}: no product of the category leaves room for the other {n_slots - 1} slots")
+            continue
+        reg, t, v = fit
         by_cat[c] = dict(test=t, base_gp=round(v, 2))
         note(f"test {c}: {t} -> base GP ${v:.2f} ({time.time() - t0:.0f}s)")
         if best is None or v > best[0]:
             best = (v, reg, t, c)
+    new_category = best is not None
     if best is None:
-        raise no_mix(n_slots - 1)
+        # #230: a new category or brand is a preference, not a rule. When no mix fits with a test drink from a
+        # category no regular slot stocks, keep the one test slot with a drink that shares a category.
+        fit = fit_test("any category", pool, lambda t: [s for s in pool if s != t])
+        if fit is None:
+            raise no_mix(n_slots - 1)
+        reg, t, v = fit
+        best = (v, reg, t, cat[t]["cat"])
+        note(f"test slot: no mix fits with a test drink from a new category, so the test drink {t} shares the "
+             f"{cat[t]['cat']} category with a regular slot -> base GP ${v:.2f}")
     v, reg, test, test_cat = best
 
     # 3. Brand lean: prefer a new brand over another flavour of one we stock, if it costs <= BRAND_TOL.
@@ -195,7 +214,7 @@ def optimise(cat: dict, slots: list[int], cap_cents: int, cal: dict | None = Non
             if counts[brand(s)] < 2:
                 continue
             for n in pool:
-                if brand(n) in here or cat[n]["cat"] == test_cat:
+                if brand(n) in here or (new_category and cat[n]["cat"] == test_cat):
                     continue
                 trial = reg[:i] + [n] + reg[i + 1:]
                 tv = score(trial + [test])
@@ -211,7 +230,7 @@ def optimise(cat: dict, slots: list[int], cap_cents: int, cal: dict | None = Non
 
     chosen = reg + [test]
     _, r = full(chosen)
-    return {"skus": chosen, "test_sku": test, "test_category": test_cat, "price": {s: price[s] for s in set(chosen)},
+    return {"skus": chosen, "test_sku": test, "test_category": test_cat, "test_new_category": new_category, "price": {s: price[s] for s in set(chosen)},
             "base_gp": round(v, 2), "low_gp": r["scenarios"]["low"]["gross_profit"], "high_gp": r["scenarios"]["high"]["gross_profit"],
             "fill_most": r["fill_most"], "fill_expected": r["fill_expected"], "cap_cents": cap_cents,
             "free_plan": {"skus": free, "base_gp": round(free_v, 2), "distinct": len(set(free))},

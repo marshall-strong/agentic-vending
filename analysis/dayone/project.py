@@ -77,9 +77,10 @@ TABLES = Path(__file__).resolve().parent / "round7" / "local"
 def tables_path(out: str | None, name: str) -> Path:
     """The file a compare script writes its per-slot tables to: `name` in TABLES, or `out`.
 
-    Refuses (exits) an `out` outside TABLES, or one that `git check-ignore` does not ignore, so a table with slot rows
-    can't land in a tracked file. The scripts print only a summary with no slot in it."""
-    path = Path(out).resolve() if out else TABLES / name
+    Refuses (exits) a path outside TABLES, or one that `git check-ignore` does not ignore, so a table with slot rows
+    can't land in a tracked file. Both paths, the default and `out`, are resolved first: a link in TABLES that points
+    at a tracked file is refused too (#231 review, round 4). The scripts print only a summary with no slot in it."""
+    path = (Path(out) if out else TABLES / name).resolve()
     if not path.is_relative_to(TABLES.resolve()):
         sys.exit(f"refused: {path} is outside {TABLES}; the tables have per-slot rows, so they stay in that "
                  "git-ignored folder. No tables were written.")
@@ -161,6 +162,15 @@ def project(plan: dict, cat: dict, cal: dict, plan_name: str = "", repo: str = D
     from vending.pricing import check_price, pack_floor_cents
     a = argparse.Namespace(plan=plan_name)
     problems, slots, seen = [], [], {}
+    for s in plan["day_one"]:
+        p = cat.get(s["sku"])
+        if p is not None and p.get("cat") not in TIER_RATE:
+            # No demand rate or reference price for it, so nothing can be projected (a hand-written plan can name a
+            # catalog row the builder marked not plannable).
+            what = "no category" if p.get("cat") is None else f"the category '{p['cat']}', which the model has no rate for"
+            raise PlanRefused(f"refused: {p['sku']} has {what}; add its line to CAT or ENERGY in "
+                              "round7/build_catalog7.py (or the round's catalog builder) and rebuild the catalog, "
+                              "or leave it out of the plan")
     past_by_sku = category_ranks(plan, cat)
     for s in plan["day_one"]:
         p = cat.get(s["sku"])
@@ -276,7 +286,11 @@ def project(plan: dict, cat: dict, cal: dict, plan_name: str = "", repo: str = D
                             slots_selling_out_week1=sorted(p["slot"] for p in per_slot if p["first_sellout"] and p["first_sellout"] < "2026-12-10"))
     packs = [dict(sku=p["sku"], real_sku=p.get("real_sku"), name=p["name"], size=p["size"], category=p["cat"], units_per_pack=p["pack"],
                   expected_cents=round(p["price"] * 100), max_cents=round(most(p) * 100), column_capacity=p["cap"],
-                  capacity_assumed=bool(p.get("capacity_assumed")), store=p["store"]) for p in cat.values() if p["sku"] in need]
+                  capacity_assumed=bool(p.get("capacity_assumed")),
+                  # A person's count (capacity_overrides) wins over the chart, as in the runtime planner; the round
+                  # loader (vending.plan_rounds) reads it. Without the field, older projections fall back to the chart.
+                  capacity_counted=bool(p.get("cap_counted")),
+                  store=p["store"]) for p in cat.values() if p["sku"] in need]
     res = dict(schema="vending-day1/projection/v1", money="integer cents in *_cents fields; float dollar fields are kept for older readers",
                plan=a.plan, packs=packs, fill_expected_cents=round(fill_exp * 100), fill_most_cents=round(fill_most * 100), window=f"{START} to {END} (calendar file ends 31 Jan)", slots=slots, purchase=buy,
                fill_expected=fill_exp, fill_most=fill_most, fill_cap=cap, under_cap=fill_most <= cap, problems=problems,

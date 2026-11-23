@@ -52,6 +52,7 @@ for _f in ("BLACKBERRY", "CHERRY", "GRAPEFRUIT", "LIME", "MANGO", "STRAWBERRY"):
 LEAVE_OUT = {
     "CELSIUS-SPARKLING_PEACH-12CAN": "only price is the unconfirmed 11 Nov $13.99 per 12 that round 4 flagged; "
                                      "at the $19.98 of the other Celsius flavours it adds nothing they don't",
+    # Round 7's snapshot predates config product_aliases; the team DB records this pair there now.
     "REDBULL-SUGARFREE-8_4CAN": "same product as REDBULL-SUGARFRE-8_4CAN (our request 1 got a second SKU); "
                                 "the older SKU has our sourcing row",
     "PEPSI-ORIGINAL-20BOT": "15 Nov: no in-stock 20 oz Pepsi at an allowed store",
@@ -86,10 +87,13 @@ def build(snap: dict) -> list[dict]:
     over = snap["capacity_overrides"]
     src = {s["sku"]: s for s in snap["sourcing"] if s["rank"] == "primary"}
     req = {r["sku"]: r for r in snap["requests"] if r["sku"]}
-    return [product(c, src.get(c["sku"]), req.get(c["sku"]), over) for c in snap["catalog"]]
+    # config product_aliases: SKUs that are the same product as another SKU. Only the SKU it maps to is plannable,
+    # so the optimiser can't put one drink in two slots under two SKUs.
+    aliases = snap.get("product_aliases") or {}
+    return [product(c, src.get(c["sku"]), req.get(c["sku"]), over, aliases) for c in snap["catalog"]]
 
 
-def product(c: dict, s: dict | None, r: dict | None, over: dict) -> dict:
+def product(c: dict, s: dict | None, r: dict | None, over: dict, aliases: dict | None = None) -> dict:
     sku, size = c["sku"], c["size"]
     cap = for_product(sku, size, over)
     pack = price = mx = store = None
@@ -111,7 +115,9 @@ def product(c: dict, s: dict | None, r: dict | None, over: dict) -> dict:
         source = "not priced: no sourcing row, and no price in a request note"
     cat = category(sku, size)
     # A product with no category (a new brand: add its line to CAT or ENERGY) has no demand rate or reference price.
-    reason = (LEAVE_OUT.get(sku) or (None if price else source) or (None if cap else f"no column figure for '{size}'")
+    same = (aliases or {}).get(sku)
+    reason = (LEAVE_OUT.get(sku) or (same and f"same product as {same} (config product_aliases)")
+              or (None if price else source) or (None if cap else f"no column figure for '{size}'")
               or (None if cat else f"no category for the line '{sku.split('-')[0]}': add it to CAT or ENERGY here"))
     # cap_counted: the cap is a person's count (capacity_overrides), which wins over the chart, as in the planner.
     return dict(sku=sku, name=c["name"], size=size, cat=cat, cap=cap, capacity_assumed=cap is None,

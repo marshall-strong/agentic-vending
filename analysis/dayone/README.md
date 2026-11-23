@@ -51,6 +51,9 @@ Every rate is an assumption, and `project.py` writes each one into the projectio
   - The totals add each product's sales before rounding, so they don't depend on how many slots split a product.
 - **No duplicates on day one.** The optimiser only builds mixes of different drinks. If none fits under the cap, it stops and says so.
   If a category's best test drink leaves no room for the other slots, it tries that category's next drink.
+  Two SKUs of one product (config `product_aliases`, in the snapshot) are one drink: only the SKU the alias maps to is plannable.
+- **The test slot leans toward a new category.** The optimiser keeps one test slot, with a drink from a category no other slot stocks.
+  That is a preference, not a rule (#230): if no such mix fits, the test drink shares a category with a regular slot, and the output's `test_new_category` is `false`.
 - **Category limits.**
   - History shows at most 9 energy products (`CAT_FREE`) and 4 of any other category (`CAT_FREE_DEFAULT`).
   - Past the limit, the products with the least demand before the penalty lose `CAT_DECAY` (0.6) per place past it, because flavours cannibalise each other.
@@ -108,7 +111,8 @@ python analysis/dayone/round7/compare7b.py     # writes analysis/dayone/round7/l
   - `catalog`: live `catalog_products` rows, with `sku`, `name`, `line`, `flavor`, `size` and `first_seen`;
   - `requests`: `product_requests` rows, with `id`, `name`, `size`, `status`, `sku` and `note`;
   - `sourcing`: `sourcing_options` rows, with `sku`, `rank`, `store`, `units_per_pack`, `expected_cents`, `max_cents`, `checked_at` and `note`;
-  - `capacity_overrides`: the config value, SKU to units.
+  - `capacity_overrides`: the config value, SKU to units;
+  - `product_aliases` (optional; the 20 Nov snapshot has none): the config value, SKU to the SKU of the same product.
 
   Make a new one with a read-only query of those tables for the next round.
 - **A new round.** Make `round8/` scripts beside `round7/`, and keep the round's files in `$L/round8/`. Keep a plan and its projection on the same suffix (`plan8.json` with `projection8.json`), because the round reader pairs them by that suffix.
@@ -132,6 +136,7 @@ python -m vending.plan_store pick ID --by NAME
 - `load` finds `roundN/planN.json` and `projectionN.json` under the folder (`vending.plan_rounds.discover`). A letter after the number is part of the round's ID: `plan7b.json` is round `7b`.
 - It checks the round against our current assignment from the inventory server (`vending.slots.our_slots`), and refuses a plan that names any other selection.
 - It recomputes every floor, price, capacity and the fill cost itself. It reads the projection's demand figures as they are.
+  A capacity a person counted (`capacity_counted` in the projection's packs, from `capacity_overrides`) wins over the loading chart, as in the planner; a projection without the field uses the chart.
 - It stores both files in `first_fill_plans`. `pick` marks the plan the dashboard shows.
 - It needs `DATABASE_URL` for the team database.
 

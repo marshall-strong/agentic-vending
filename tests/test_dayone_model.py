@@ -366,3 +366,115 @@ def test_one_drink_at_two_prices_is_refused_and_no_totals_are_written(P, tmp_pat
                          stdin=subprocess.DEVNULL)
     assert res.returncode != 0 and "TEA-A" in res.stderr and "refused" in res.stderr, (res.stdout, res.stderr)
     assert not out.exists() and "profit" not in res.stdout
+
+
+# --- Re-check of #231, round 4 (GPT-6.2 Sol at 978d5244) -----------------------------------------------------------
+
+def test_a_default_named_link_to_a_tracked_file_is_refused(P):
+    """The default tables file used to skip path resolution: a link in the ignored folder, with the default name,
+    pointing at a tracked file passed both checks, and the compare script overwrote the tracked file."""
+    import os
+    import uuid
+
+    target = DAYONE / "README.md"      # tracked
+    before = target.read_bytes()
+    name = f"pytest-{uuid.uuid4().hex}.md"
+    link = P.TABLES / name
+    P.TABLES.mkdir(parents=True, exist_ok=True)
+    try:
+        os.symlink(target, link)
+    except (OSError, NotImplementedError) as error:
+        pytest.skip(f"can't make a symlink here: {error}")
+    try:
+        with pytest.raises(SystemExit, match="refused"):
+            P.tables_path(None, name)
+        with pytest.raises(SystemExit, match="refused"):
+            P.tables_path(str(link), name)
+    finally:
+        link.unlink()
+    assert target.read_bytes() == before
+    # A plain default name still lands in the ignored folder.
+    assert P.tables_path(None, name) == (P.TABLES / name).resolve()
+
+
+def counted_round(P, tmp_path, rows, projection_edit=lambda j: j):
+    """A one-round folder from (sku, size, counted cap) rows, projected by project.py; returns the checked round."""
+    products = [{**product(sku, size=size), "cap": cap, "cap_counted": True} for sku, size, cap in rows]
+    cat = catalog(*products)
+    p = filled(plan(*((sku, 2.50) for sku, _, _ in rows)), cat)
+    folder = tmp_path / "round9"
+    folder.mkdir()
+    (folder / "plan9.json").write_text(json.dumps(p), encoding="utf-8")
+    projection = projection_edit(P.project(p, cat, P.load_calendar(), "plan9.json"))
+    (folder / "projection9.json").write_text(json.dumps(projection), encoding="utf-8")
+    [(rid, plan_file, projection_file)] = plan_rounds.discover(tmp_path)
+    checked, _, _ = plan_rounds.read_round(rid, plan_file, projection_file, TEST_SLOTS)
+    return checked
+
+
+def test_a_counted_capacity_survives_loading_the_projection(P, tmp_path):
+    """A person counted 7 of one 16 oz can and 9 of one 12 oz can a column; the chart says 8 for both. The projection
+    fills to the counts, and the round loader used the chart: the 7 showed as short and the 9 was refused."""
+    checked = counted_round(P, tmp_path, [("TEA-SEVEN", "16 oz can", 7), ("TEA-NINE", "12 oz can", 9)])
+    by_sku = {s.sku: s for s in checked.slots.values()}
+    assert by_sku["TEA-SEVEN"].capacity == 7 and by_sku["TEA-NINE"].capacity == 9
+    assert not any(s.refusals for s in checked.slots.values()), [s.refusals for s in checked.slots.values()]
+    assert not [w for w in checked.warnings if not w.startswith("no product for slot")], checked.warnings
+    assert not any(s.fill_check for s in checked.slots.values()), [s.fill_check for s in checked.slots.values()]
+
+
+def test_an_older_projection_without_the_count_falls_back_to_the_chart(P, tmp_path):
+    """A projection from before the count was carried has no `capacity_counted`: the chart decides, as before."""
+    def strip(j):
+        for pack in j["packs"]:
+            pack.pop("capacity_counted", None)
+        return j
+    checked = counted_round(P, tmp_path, [("TEA-NINE", "12 oz can", 9)], strip)
+    [slot] = checked.slots.values()
+    assert slot.capacity == 8 and any("a column holds 8" in r for r in slot.refusals), slot.refusals
+
+
+def test_a_plan_with_an_uncategorised_product_is_refused_by_name(P):
+    """A hand-written plan using a catalog row with no category crashed in category_ranks (KeyError: None)."""
+    cat = catalog(product("TEA-A"), {**product("NEWBRAND-STILL-14BOT"), "cat": None})
+    p = filled(plan(("TEA-A", 2.50), ("NEWBRAND-STILL-14BOT", 2.50)), cat)
+    with pytest.raises(P.PlanRefused, match=r"NEWBRAND-STILL-14BOT.*category.*(CAT|ENERGY)"):
+        P.project(p, cat, P.load_calendar())
+    cat["NEWBRAND-STILL-14BOT"]["cat"] = "kombucha"     # a category the model has no rate for
+    with pytest.raises(P.PlanRefused, match=r"NEWBRAND-STILL-14BOT.*kombucha"):
+        P.project(p, cat, P.load_calendar())
+
+
+def test_the_test_slot_shares_a_category_when_no_new_category_fits():
+    """#230: a new category or brand is a preference, not a rule. Two different teas, two slots, $6: there is no
+    second category, so the default run returned NoMix. It now keeps one test slot with a tea, and says so."""
+    o = opt7()
+    cat = catalog(product("TEA-A", price=2.50, most=3.00), product("TEA-B", price=2.40, most=3.00))
+    res = o.optimise(cat, [int(s) for s in TEST_SLOTS[:2]], 600, say=lambda m: None)
+    assert sorted(res["skus"]) == ["TEA-A", "TEA-B"] and res["fill_most"] <= 6.00
+    assert res["test_sku"] in ("TEA-A", "TEA-B") and res["test_category"] == "tea"
+    assert res["test_new_category"] is False
+    assert any("shares" in line and "tea" in line for line in res["log"]), res["log"]
+
+
+def test_a_test_slot_in_a_new_category_is_still_preferred():
+    o = opt7()
+    cat = catalog(product("TEA-A", price=2.50, most=3.00), product("TEA-B", price=2.40, most=3.00),
+                  product("SODA-C", cat="sodacan", size="12 oz can", pack=8, price=2.00, most=2.50))
+    res = o.optimise(cat, [int(s) for s in TEST_SLOTS[:2]], 600, say=lambda m: None)
+    assert res["test_new_category"] is True
+    assert len({cat[s]["cat"] for s in res["skus"]}) == 2
+
+
+def test_a_snapshot_alias_is_not_plannable_beside_its_product():
+    """Two SKUs of one product (config product_aliases, in the snapshot) would let the optimiser put one drink in
+    two slots under different SKUs. The alias is kept in the catalog but not plannable."""
+    build = module("dayone_build_catalog7", DAYONE / "round7" / "build_catalog7.py")
+    row = lambda sku: {"sku": sku, "rank": "primary", "store": "Costco", "units_per_pack": 12, "expected_cents": 900,
+                       "max_cents": 1000, "checked_at": "2026-11-20 12:00:00+00"}
+    snap = {"capacity_overrides": {}, "product_aliases": {"ARIZONA-TEA_A2-16CAN": "ARIZONA-TEA_A-16CAN"},
+            "catalog": [{"sku": s, "name": s, "size": "16 oz can"} for s in ("ARIZONA-TEA_A-16CAN", "ARIZONA-TEA_A2-16CAN")],
+            "requests": [], "sourcing": [row("ARIZONA-TEA_A-16CAN"), row("ARIZONA-TEA_A2-16CAN")]}
+    first, alias = build.build(snap)
+    assert first["plannable"] and not alias["plannable"]
+    assert "same product as ARIZONA-TEA_A-16CAN" in alias["not_plannable"]

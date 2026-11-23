@@ -1173,6 +1173,20 @@ class TestVariety(unittest.TestCase):
         p = plan(DesiredSlot("16", product=MTDEW, sale_price="2.50", fill_to=10), slots=varied(**unknown))
         self.assertEqual(doubles(p), [])
 
+    def test_two_skus_of_one_product_are_one_drink(self):
+        # Red Bull Sugarfree got a second SKU from our request 1 (analysis/dayone/round7/build_catalog7.py): the
+        # catalog's two SKUs are one product, recorded in config product_aliases, so two slots of it are a duplicate.
+        old = "MTDEW-20OZ-OLDSKU"
+        state = varied(**{"16": SlotState("16", old, 250, 4, 50)})
+        aliased = replace(CONFIG, product_aliases={old: MTDEW})
+        p = plan(restock_15(), slots=state, config=aliased)
+        self.assertTrue(p.ok, p.refusals)
+        [warning] = doubles(p)
+        self.assertIn("slot 15 and slot 16 both get MTDEW-20OZ", warning)
+        self.assertIn(old, warning)
+        # Without the alias they are two products, as before.
+        self.assertEqual(doubles(plan(restock_15(), slots=state)), [])
+
     def test_the_wildcard_is_left_to_its_own_rules(self):
         # The wildcard's product is in no other slot, which _check_wildcard refuses or warns of itself.
         state = varied(**{"16": SlotState("16", PICKLE, 300, 5, 250), "17": SlotState("17", PICKLE, 600, 2, 250)})

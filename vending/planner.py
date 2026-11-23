@@ -289,6 +289,9 @@ class Config:
     and $82.00, #100 and #90). See "The wildcard slot" below.
     """
     capacity_overrides: Mapping[str, int] = field(default_factory=dict)
+    # Catalog SKUs that are the same product as another SKU (config `product_aliases`): the duplicate warning
+    # counts them as one drink. Ours, from the team database, never a list typed here.
+    product_aliases: Mapping[str, str] = field(default_factory=dict)
     price_ceiling_cents: int = 650
     tax_percent: int = DEFAULT_TAX_PERCENT
     midweek_fee_cents: int = 2500
@@ -884,20 +887,25 @@ DUPLICATE_HINT = ("a second slot adds stock, not sales: keep it only if one slot
 
 
 def _duplicates(slots: list[_Slot], config: Config) -> list[str]:
-    """One warning per drink that two or more of our regular slots hold after this visit."""
-    by_product: dict[str, list[str]] = defaultdict(list)
+    """One warning per drink that two or more of our regular slots hold after this visit. SKUs that config
+    `product_aliases` maps to one product count as that one drink."""
+    by_product: dict[str, list[_Slot]] = defaultdict(list)
     for s in slots:
         if s.slot != config.wildcard_slot and s.product and not (s.state.unsure and not s.changes_product):
-            by_product[s.product].append(s.slot)
+            by_product[config.product_aliases.get(s.product, s.product)].append(s)
     warnings = []
-    for product, where in by_product.items():
+    for product, group in by_product.items():
+        where = [s.slot for s in group]
         if len(where) < 2:
             continue
         if len(where) == 2:
             who = f"slot {where[0]} and slot {where[1]} both get"
         else:
             who = f"slots {', '.join(where[:-1])} and {where[-1]} all get"
-        warnings.append(f"{who} {product}; {DUPLICATE_HINT}")
+        other = sorted({s.product for s in group} - {product})
+        alias = (f" ({', '.join(other)} {'is' if len(other) == 1 else 'are'} the same product, config "
+                 "product_aliases)") if other else ""
+        warnings.append(f"{who} {product}{alias}; {DUPLICATE_HINT}")
     return warnings
 
 

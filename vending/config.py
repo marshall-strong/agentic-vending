@@ -123,9 +123,38 @@ def _overrides(value: Any) -> str | None:
     return None
 
 
+def _sku(sku: Any) -> str | None:
+    if not isinstance(sku, str) or not sku.strip():
+        return "a blank SKU"
+    if any(c.isspace() for c in sku):
+        return f"SKU {json.dumps(sku)} has a space in it; SKUs have none, so it would never match"
+    return None
+
+
+def _aliases(value: Any) -> str | None:
+    """SKU -> the SKU of the same product that counts for it: one level only, so a lookup is a single step."""
+    if not isinstance(value, dict):
+        return ('must be a JSON object of SKU to SKU, like {"REDBULL-SUGARFREE-8_4CAN": "REDBULL-SUGARFRE-8_4CAN"}, '
+                f"not {json.dumps(value)}")
+    for alias, product in value.items():
+        if not isinstance(product, str):
+            return f"{alias} must be a SKU in quotes, not {json.dumps(product)}"
+        for sku in (alias, product):
+            problem = _sku(sku)
+            if problem:
+                return f"has {problem}" if problem.startswith("a blank") else problem
+        if alias == product:
+            return f"maps {alias} to itself"
+        if product in value:
+            return f"maps {alias} to {product}, but {product} is itself an alias; map both to the one SKU that counts"
+    return None
+
+
 KNOWN: dict[str, Setting] = {
     "capacity_overrides": Setting("units per column for products a person counted; replaces the whole "
                                   "object, wins over the loading chart (default none)", _overrides),
+    "product_aliases": Setting("catalog SKUs that are the same product as another SKU, mapped to that SKU; the "
+                               "planner counts them as one drink; replaces the whole object (default none)", _aliases),
     "price_ceiling_cents": Setting("highest sale price the planner allows (default and most 650)",
                                    _ceiling(AGREED_CEILING_CENTS)),
     "wildcard_slot": Setting("the one slot that may sell above the ceiling and tests products; set once after "
@@ -274,11 +303,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(error, file=sys.stderr)
                 return 1
             print(f"{args.key} = {json.dumps(value)}")
-            if args.key == "capacity_overrides" and isinstance(before, dict):
-                # `set` replaces the whole object, so name any count it just threw away.
+            if args.key in ("capacity_overrides", "product_aliases") and isinstance(before, dict):
+                # `set` replaces the whole object, so name any entry it just threw away.
                 dropped = {sku: units for sku, units in before.items() if sku not in value}
                 if dropped:
-                    print(f"Removed counts that were in the old value: {json.dumps(dropped)}. "
+                    what = "counts" if args.key == "capacity_overrides" else "aliases"
+                    print(f"Removed {what} that were in the old value: {json.dumps(dropped)}. "
                           "To keep them, set the object again with them included.", file=sys.stderr)
             return 0
         for key, value, at, by in conn.execute("select key, value, updated_at, updated_by from config order by key"):

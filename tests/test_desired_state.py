@@ -655,9 +655,11 @@ def test_config_cli_sets_and_shows(schema_url, monkeypatch, capsys):
     assert 'capacity_overrides = {"COKE20": 8}' in out and "midweek_fee_cents = 3000" in out and "note" not in out and "halted = true" in out
     [old] = [line for line in out.splitlines() if line.startswith("slot_capacity")]
     assert old.endswith("[no longer used]") and "[no longer used]" not in out.replace(old, "")
+    assert config.main(["set", "product_aliases", '{"COKE20-OLD": "COKE20"}', "--by", "marshall"]) == 0
     with open_in(*schema_url) as conn:
         assert planning.planner_config(conn).capacity_overrides == {"COKE20": 8}
-        assert conn.execute("select count(*) from action_log where tool = 'config.set'").fetchone() == (2,)
+        assert planning.planner_config(conn).product_aliases == {"COKE20-OLD": "COKE20"}
+        assert conn.execute("select count(*) from action_log where tool = 'config.set'").fetchone() == (3,)
 
 
 def test_config_cli_names_counts_a_new_override_object_drops(schema_url, monkeypatch, capsys):
@@ -687,6 +689,11 @@ def test_config_cli_names_counts_a_new_override_object_drops(schema_url, monkeyp
     ("capacity_overrides", {" ": 8}, "blank SKU"),
     ("capacity_overrides", {"COKE20 ": 8}, "has a space"),            # would never match the catalog
     ("capacity_overrides", {"COKE 20": 8}, "has a space"),
+    ("product_aliases", ["REDBULL-SUGARFREE-8_4CAN"], "JSON object of SKU to SKU"),
+    ("product_aliases", {"REDBULL-SUGARFREE-8_4CAN": 8}, "must be a SKU"),
+    ("product_aliases", {"REDBULL-SUGARFREE-8_4CAN": "REDBULL-SUGARFREE-8_4CAN"}, "itself"),
+    ("product_aliases", {"A-1": "B-1", "B-1": "C-1"}, "B-1 is itself an alias"),
+    ("product_aliases", {"A 1": "B-1"}, "has a space"),
     ("tax_percent", 108, "between 0 and 100"),
     ("midweek_fee", 2500, "unknown setting"),
 ])

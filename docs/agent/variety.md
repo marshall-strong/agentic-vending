@@ -4,7 +4,7 @@ Each slot should earn its own sales: a second slot of the same drink adds stock,
 
 These are Kevin's rules of 22 Nov (#230). They are principles, not counts: the catalog keeps growing, and you add products during the run. None of them is a refusal. Break one when the evidence says to, and say why in `slot_reasons`.
 
-**Duplicates add stock, not sales.** Buyers who want a drink find it in one slot. A second slot of the same drink earns its place only when the first would sell out before the Friday restock, leaving buyers an empty slot. Show that with sales: the slot ran out before Friday, or its sales per class day times the class days to the next visit is more than the column holds. Otherwise give the slot a different drink. The preview warns when two of our slots get the same product ("adds stock, not sales"). Then change the plan, or give each slot it names a reason in `slot_reasons`, kept or changed.
+**Duplicates add stock, not sales.** Buyers who want a drink find it in one slot. A second slot of the same drink earns its place only when the first would sell out before the Friday restock, leaving buyers an empty slot. Show that with sales: the slot ran out before Friday, or its sales per class day times the class days to the next visit is more than the column holds. Otherwise give the slot a different drink. The preview warns when two of our slots get the same product ("adds stock, not sales"). Two catalog SKUs that the team recorded as one product (config `product_aliases`) count as the same product. Then change the plan, or give each slot it names a reason in `slot_reasons`, kept or changed.
 
 **No duplicates on the first fill.** On day one we have no sales of our own, so nothing shows a slot selling out. Every slot gets a different drink.
 
