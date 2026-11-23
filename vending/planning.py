@@ -74,6 +74,11 @@ def planner_config(conn: psycopg.Connection, *, stale_wildcard_unset: bool = Fal
         # Only a hand edit of the table gets here; `config set` checks first.
         raise NotReady(f"config capacity_overrides {problem}; set it again with "
                        "python -m vending.config set capacity_overrides '{\"SKU\": 8}' --by NAME")
+    aliases = config.get_value(conn, "product_aliases", {})
+    problem = config.KNOWN["product_aliases"].check(aliases)
+    if problem:
+        raise NotReady(f"config product_aliases {problem}; set it again with "
+                       "python -m vending.config set product_aliases '{\"SKU\": \"SAME-PRODUCT-SKU\"}' --by NAME")
     try:
         slots = our_slots(conn)
     except SlotsNotRecorded as error:
@@ -82,6 +87,7 @@ def planner_config(conn: psycopg.Connection, *, stale_wildcard_unset: bool = Fal
     return planner.Config(
         wildcard_slot=wildcard_slot(conn, slots, stale_unset=stale_wildcard_unset),
         capacity_overrides=overrides,
+        product_aliases=aliases,
         slots=slots,
         price_ceiling_cents=ceiling,
         # Never below the ceiling: a lowered wildcard ceiling under the regular one is the regular one.

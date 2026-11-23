@@ -37,6 +37,10 @@ One run:
    settles a submission whose POST got a validated `201` but was never settled
    (`vending.submissions.check`); any other open one blocks orders until a person runs
    `python -m vending.submissions resolve`.
+   From the start (3 Dec), a live run also gets one tool of its own, not the server's:
+   `find_pack_price` (`vending.price_search`), a capped web search for one pack's price on a store's
+   own site. It runs here, through the run's harness, because only this process holds the model key
+   (the server never gets it). A dry run never gets it: it writes the sourcing table and spends.
 3. The system prompt is the rules card (`docs/agent/rules-card.md`, read once at the start; a run
    without it fails before any model request) followed by `SYSTEM`. Nothing in it changes between
    requests, so it is read from cache. The model gets the time, the week's rhythm and its own
@@ -75,7 +79,7 @@ import anyio
 import psycopg
 from psycopg.types.json import Jsonb
 
-from vending import agent_runs, db, ledger, run_lease, settings, slots
+from vending import agent_runs, db, ledger, price_search, run_lease, settings, slots
 from vending.config import is_halted
 from vending.harness import DEFAULT_KEY_ENV, EASTERN, Harness, HarnessError, NotHeld
 from vending.tools.project_rules import RULES_DIR
@@ -156,8 +160,9 @@ When you're done, answer with:
 - update: a short weekly update for the team, under 150 words: what happened, what you're \
 changing and why. Plain language; operations should act on it without asking.
 - notes: what you want to remember next week, under 200 words.
-- slot_reasons: for each slot your plan changes, the slot and one sentence on why. Leave out \
-slots you keep as they are; an empty list when you change nothing."""
+- slot_reasons: for each slot your plan changes, the slot and one sentence on why. Add each slot a \
+preview duplicate warning names, changed or not, with why it keeps that drink. Leave out other slots \
+you keep as they are; an empty list when you change nothing and no warning names a slot."""
 
 ANSWER_SCHEMA = {
     "type": "object",
@@ -379,11 +384,13 @@ async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tool
                    halted: Callable[[], bool] = lambda: False,
                    on_submit: Callable[[Outcome], None] = lambda out: None, max_turns: int = MAX_TURNS,
                    label: str = "", on_step: Callable[..., None] = lambda *a, **k: None,
-                   owned: Callable[[], bool] = lambda: True) -> None:
+                   owned: Callable[[], bool] = lambda: True,
+                   local_tools: dict[str, Callable[[dict], tuple[str, bool]]] | None = None) -> None:
     """The tool loop, filling in `out` as it goes so nothing it learned is lost if it stops early.
 
-    `call_tool(name, arguments)` is awaited and returns an MCP `CallToolResult`. `halted()` and
-    `owned()` (the run still holds the run lease) are checked before every model request, and
+    `call_tool(name, arguments)` is awaited and returns an MCP `CallToolResult`. `local_tools` are tools this
+    process runs itself, not the server: `name -> fn(arguments) -> (text, is_error)`, run in a worker thread.
+    `halted()` and `owned()` (the run still holds the run lease) are checked before every model request, and
     `owned()` again just before a submit is sent. `on_submit(out)` runs straight after a submit succeeds.
     `on_step(turn, kind, content, tool=None, is_error=False)` is called for every step, in order.
     """
@@ -434,7 +441,7 @@ async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tool
                     out.tool_calls.append(block.name)
                     try:
                         text, failed = await _use(block, call_tool, schemas, out, live=live, on_submit=on_submit,
-                                                  owned=owned)
+                                                  owned=owned, local_tools=local_tools or {})
                     except LeaseLost:
                         return
                     results.append({"type": "tool_result", "tool_use_id": block.id, "content": text,
@@ -478,13 +485,16 @@ async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tool
 
 
 async def _use(block: Any, call_tool: Callable[[str, dict], Any], schemas: dict, out: Outcome, *, live: bool,
-               on_submit: Callable[[Outcome], None], owned: Callable[[], bool] = lambda: True) -> tuple[str, bool]:
+               on_submit: Callable[[Outcome], None], owned: Callable[[], bool] = lambda: True,
+               local_tools: dict[str, Callable[[dict], tuple[str, bool]]] | None = None) -> tuple[str, bool]:
     """Run one tool call the model asked for: (text for the model, is_error)."""
     name, arguments = block.name, dict(block.input or {})
     if name not in schemas:
         return f"There is no tool called {name}.", True
     if not live and name in WRITE_TOOLS:          # never offered; refused again in case the model makes it up
         return "Not sent: this is a dry run.", True
+    if name in (local_tools or {}):
+        return await anyio.to_thread.run_sync(lambda: local_tools[name](arguments))
     if name == SUBMIT:
         if out.submit_sent:
             return "Not sent: you already submitted once this run.", True
@@ -762,12 +772,18 @@ async def _run_owned(*, live: bool, model: str, effort: str, connect: Callable[[
                                       "submit. Use a dry run.")
                     else:
                         startup = await startup_read(call_tool, record_step)
-                        await converse(harness, call_tool, tool_definitions(listed, live=live), out, model=model,
+                        offered, local = tool_definitions(listed, live=live), {}
+                        if price_search.offered(live=live, now=now()):
+                            lookups = price_search.PriceSearch(harness, connect, model=model)
+                            offered.append(price_search.TOOL)
+                            local[price_search.TOOL_NAME] = lookups.lookup
+                        await converse(harness, call_tool, offered, out, model=model,
                                        effort=effort, system=system,
                                        opening=brief(now(), notes, live=live, startup=startup), live=live,
                                        halted=halted,
                                        on_submit=lambda o: _record_submit(connect, run_id, o), max_turns=max_turns,
-                                       label=f"agent run {run_id}", on_step=record_step, owned=owned)
+                                       label=f"agent run {run_id}", on_step=record_step, owned=owned,
+                                       local_tools=local)
         if timer.cancelled_caught:
             out.status, out.detail = "failed", f"Stopped at the run's deadline ({deadline / 60:g} min)."
     except Exception as error:   # record the run whatever broke; the ledger already holds what was spent

@@ -289,6 +289,9 @@ class Config:
     and $82.00, #100 and #90). See "The wildcard slot" below.
     """
     capacity_overrides: Mapping[str, int] = field(default_factory=dict)
+    # Catalog SKUs that are the same product as another SKU (config `product_aliases`): the duplicate warning
+    # counts them as one drink. Ours, from the team database, never a list typed here.
+    product_aliases: Mapping[str, str] = field(default_factory=dict)
     price_ceiling_cents: int = 650
     tax_percent: int = DEFAULT_TAX_PERCENT
     midweek_fee_cents: int = 2500
@@ -727,6 +730,7 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
         floors.append(SlotFloor(s.slot, floor, tuple(s.parts), s.unknown_cost_drawn))
         refusals.extend(check_price(s.price_cents, floor, config.ceiling_for(s.slot), s.slot))
     refusals.extend(_check_wildcard(slots, config, current, desired.off_cycle, warnings))
+    warnings.extend(_duplicates(slots, config))
 
     # 8. The plan, with every refusal found.
     # Only slots with a source get a line. A slot that couldn't be stocked is
@@ -857,6 +861,40 @@ def _check_wildcard(slots: list[_Slot], config: Config, current: CurrentState, o
                 f"{w.product} goes on trial in the wildcard, slot {w.slot}, so slot {', '.join(into)} can't switch "
                 "to it; the wildcard's product is in no other slot"), w.slot))
     return refusals
+
+
+# --- Variety ------------------------------------------------------------------
+# A second slot of the same drink adds stock, not sales: it earns its place only
+# when one slot would sell out before the Friday restock (Kevin, 22 Nov; #230).
+# The plan may still do it, so it is a warning, never a refusal. Slots no receipt
+# describes are left out (we can't say what they hold), and so is the wildcard,
+# whose own rules (`_check_wildcard`) keep its product out of every other slot.
+
+DUPLICATE_HINT = ("a second slot adds stock, not sales: keep it only if one slot would sell out before Friday "
+                  "(get_project_rules variety)")
+
+
+def _duplicates(slots: list[_Slot], config: Config) -> list[str]:
+    """One warning per drink that two or more of our regular slots hold after this visit. SKUs that config
+    `product_aliases` maps to one product count as that one drink."""
+    by_product: dict[str, list[_Slot]] = defaultdict(list)
+    for s in slots:
+        if s.slot != config.wildcard_slot and s.product and not (s.state.unsure and not s.changes_product):
+            by_product[config.product_aliases.get(s.product, s.product)].append(s)
+    warnings = []
+    for product, group in by_product.items():
+        where = [s.slot for s in group]
+        if len(where) < 2:
+            continue
+        if len(where) == 2:
+            who = f"slot {where[0]} and slot {where[1]} both get"
+        else:
+            who = f"slots {', '.join(where[:-1])} and {where[-1]} all get"
+        other = sorted({s.product for s in group} - {product})
+        alias = (f" ({', '.join(other)} {'is' if len(other) == 1 else 'are'} the same product, config "
+                 "product_aliases)") if other else ""
+        warnings.append(f"{who} {product}{alias}; {DUPLICATE_HINT}")
+    return warnings
 
 
 def _check_promotion(w: _Slot, into: list[str], current: CurrentState, off_cycle: bool) -> list[Refusal]:

@@ -89,6 +89,9 @@ class Pack:
     capacity_assumed: bool
     store: str | None
     real_sku: str | None
+    # A person counted the column (capacity_overrides), so `column_capacity` wins over the chart, as in the
+    # planner. False for a projection that doesn't say (older ones): the chart decides.
+    capacity_counted: bool = False
 
 
 @dataclass(frozen=True)
@@ -278,6 +281,7 @@ def _packs(projection: dict, name: str) -> dict[str, Pack]:
             max_cents=_cents_field(p.get("max_cents"), f"{name}: pack {sku} max_cents"),
             column_capacity=_opt_int(p.get("column_capacity")),
             capacity_assumed=bool(p.get("capacity_assumed")),
+            capacity_counted=p.get("capacity_counted") is True,
             store=p.get("store"), real_sku=p.get("real_sku"))
     return packs
 
@@ -426,9 +430,13 @@ def _parse_round(round_id: str, plan: dict, projection: dict, ours: tuple[str, .
             most = Fraction(units * pack.max_cents, pack.units_per_pack)
             expected = Fraction(units * pack.expected_cents, pack.units_per_pack)
         chart = capacity.from_size(size)
-        cap = chart if chart is not None else (pack.column_capacity if pack else None)
-        # Off the chart, the pack's figure is a count unless the projection says it was assumed.
-        assumed = chart is None and cap is not None and (pack is None or pack.capacity_assumed)
+        if pack and pack.capacity_counted and pack.column_capacity:
+            # A person's count wins over the chart (vending.capacity.for_product), as the projection filled to it.
+            cap, assumed = pack.column_capacity, False
+        else:
+            cap = chart if chart is not None else (pack.column_capacity if pack else None)
+            # Off the chart, the pack's figure is a count unless the projection says it was assumed.
+            assumed = chart is None and cap is not None and (pack is None or pack.capacity_assumed)
         if cap is not None and units > cap:
             problems.append(f"{units} units but a column holds {cap}" + (" (assumed, not counted)" if assumed else ""))
         check = capacity.fill_check(units, None if assumed else cap)
