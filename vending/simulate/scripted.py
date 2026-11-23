@@ -9,7 +9,7 @@ The rule (the bar the model should clear; deliberately simple):
   there are, best expected profit a class day first (see `wide_day_one`). It separates what having
   more drinks is worth in the simulator from what the agent's choices are worth;
 - day one: the five products with a sourcing row, an equal share of our slots each, filled
-  round-robin, as many as fit the opening plan's $366 fill cap and $53 spendable floor
+  round-robin, as many as fit the opening plan's $400 fill cap and $53 spendable floor
   (docs/opening-capital-plan.md);
 - every run after: if nothing is pending, refill every slot to its column with what is in it, and put
   the closet's biggest product in an empty slot when it fills a column, inside the same floor;
@@ -25,6 +25,7 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
+from vending.plan_rounds import FILL_CAP_CENTS
 from vending.simulate import world
 
 # The five products with a sourcing row on 11 Nov (db/sourcing/2026-11-11-amazon.csv), in the order the
@@ -194,7 +195,7 @@ def wide_day_one(slots: list[str] | tuple[str, ...]) -> dict[str, str]:
 
 
 FLOOR = 5300          # the spendable floor, $53.00 (docs/opening-capital-plan.md)
-DAY_ONE_CAP = 36600   # the day-one fill cap, $366.00 most (docs/opening-capital-plan.md)
+DAY_ONE_CAP = FILL_CAP_CENTS   # the day-one fill cap, most-we-pay (docs/opening-capital-plan.md)
 
 
 def _price(cents: int) -> str:

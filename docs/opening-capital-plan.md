@@ -30,7 +30,7 @@ This plan owns the Summative 2 money numbers; the restock policy (`docs/restock-
 | Safety margin | $73.00 | The residual: $600 − $400 − $50 − $9 − $68 |
 | **Total** | **$600.00** | |
 
-**Spendable floor: $53.00 (Proposed).** A rule, not a line. After any request, at most-we-pay cost, spendable must still hold one midweek fee ($25.00, config `midweek_fee_cents`) plus one week of model spend at the daily cap (7 × $4.00 = $28.00, config `model_daily_cap_cents`, default 400). Both can leave before a Friday's takings arrive. This plan owns the figure; restock policy rule 4 applies it. The held-back lines contain it: $25 of the fee line, $1.00 of the model line, $27.00 of the margin.
+**Spendable floor: $53.00 (adopted: #188 checks it at preview and submit).** A rule, not a line. After any request, at most-we-pay cost, spendable must still hold one midweek fee ($25.00, config `midweek_fee_cents`) plus one week of model spend at the daily cap (7 × $4.00 = $28.00, config `model_daily_cap_cents`, default 400). Both can leave before a Friday's takings arrive. This plan owns the figure; restock policy rule 4 applies it. The held-back lines contain it: $25 of the fee line, $1.00 of the model line, $27.00 of the margin.
 
 **The wildcard's $82.00 purchase cap still applies** to every later purchase for that slot (section 2). It is a cap on one purchase, not a separate line of the $600: since 22 Nov the slot's day-one units are inside the $400 fill.
 
@@ -84,7 +84,7 @@ The dearest case leaves $45. Hence the cap.
 | Coca-Cola 12 oz can | 1 | 8 | 1 × 12 | $7.68 | $9.00 |
 | **Total** | **20** | **163** | **10** | **$315.94** | **$365.50** |
 
-"Most" is the list's maximum per pack. Where none is listed we use its rule, price × 1.15 rounded up to 50 cents (its $54.95 × 1.15 = $63.19 is listed as $63.50): Kiwi Guava $19.98 → $22.98 → $23.00; Coca-Cola can $7.68 → $8.83 → $9.00. In the example the wildcard takes the Coca-Cola can slot ($9.00 most, from the wildcard line), and the other 19 cost $308.26 expected, $356.50 most ($365.50 − $9.00).
+"Most" is the list's maximum per pack. Where none is listed we use its rule, price × 1.15 rounded up to 50 cents (its $54.95 × 1.15 = $63.19 is listed as $63.50): Kiwi Guava $19.98 → $22.98 → $23.00; Coca-Cola can $7.68 → $8.83 → $9.00. In the example, which uses the allocation from before 22 Nov, the wildcard takes the Coca-Cola can slot ($9.00 most, from the old wildcard line; since 22 Nov the wildcard's day-one units are inside the $400 fill), and the other 19 cost $308.26 expected, $356.50 most ($365.50 − $9.00).
 
 **How long it lasts.** Kept stocked, our slots sell 23.3 units a class day (recent) or 22 (whole era) (`analysis/REPORT.md`, finding 4, "Next 4 weeks"); #90's older estimate is 70 a week, 14 a day. So 163 units last 7 (163 ÷ 23.3) to 11.6 (163 ÷ 14) class days.
 
@@ -161,14 +161,14 @@ To be numbered in `docs/assumptions.md` (open PRs take A16 to A19: #69 A16, #99 
 4. **Swap first at a slow-seller flag** (Kevin, 12 Nov): at most one price step down, then swap; pulled units to the closet at cost. Depends on A5, end stock valued at cost (confirmed: `docs/planning/2026-10-19-david-api-qa.md` row 16; #102, P2). Reasoning: restock policy rule 3.
 5. **Fill cap.** Decided 22 Nov: $400.00 most for all 20 slots (Kevin, #230; #233). Replaces $360 for 19 slots plus the $82 wildcard line.
 6. **Switch reserve.** Proposed: one pack, $68.00 (earlier draft: two, $136.00).
-7. **Safety margin.** $73.00, the residual ($28 of it is spendable floor).
-8. **Spendable floor.** Proposed: $53.00 ($25 + 7 × $4.00), replacing an earlier $59.
+7. **Safety margin.** $73.00, the residual ($27 of it is spendable floor).
+8. **Spendable floor.** Adopted: $53.00 ($25 + 7 × $4.00), replacing an earlier $59. #188 checks it at preview and submit.
 9. **Midweek visits held back for.** Proposed: 2 ($50), a risk choice.
 10. **Model caps and run frequency** (#51, #107). A $4.00 daily cap doesn't fit a $9.00 line; lowering it shrinks the floor and margin equally.
 11. **Day-one deadline and ordering method** (#102).
 12. **First regular restock:** answered 17 Nov: a valid request received by 23:59 Thu 3 Dec is filled at the Fri 4 Dec visit.
 
-**Follow-ups after team sign-off.** Point `docs/agent/money.md` here (#90). Add a planner check for the $53 floor. Merge the price list (no PR yet).
+**Follow-ups after team sign-off.** Point `docs/agent/money.md` here (#90). Merge the price list (no PR yet).
 
 ## Sources
 
