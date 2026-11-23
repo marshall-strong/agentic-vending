@@ -50,8 +50,10 @@ def prices(cat: dict, pool: list[str]) -> tuple[dict[str, float], dict[str, str]
 
 def candidates(cat: dict, exclude=(), only_checked: bool = False) -> list[str]:
     """SKUs an optimiser may place, in catalog order: a counted capacity, a price estimate (an unpriced pack would
-    look free) and not left out on purpose (plannable), and with only_checked a checked-price sourcing row too."""
+    look free), a category the model rates (one without has no demand rate or reference price), not left out on
+    purpose (plannable), and with only_checked a checked-price sourcing row too."""
     return [s for s, p in cat.items() if p.get("cap") and not p.get("capacity_assumed") and s not in exclude
+            and p.get("cat") in P.TIER_RATE
             and P.priced(p) and p.get("plannable", True) and (not only_checked or P.checked_source(p))]
 
 

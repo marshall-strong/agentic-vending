@@ -1,14 +1,17 @@
 """Tables for compare7.md: plan 6 (old rule, its own projection6.json), plan 6 re-scored under round 7's rule, and plan 7.
 
-    python analysis/dayone/round7/compare7.py > analysis/dayone/local/compare7_tables.md
+    python analysis/dayone/round7/compare7.py [--out analysis/dayone/round7/local/compare7_tables.md]
 
-The tables have per-slot rows, so write them into the git-ignored local folder (or the folder in DAYONE_LOCAL).
+The tables have per-slot rows, so the script writes them itself, to round7/local/compare7_tables.md (git-ignored), and
+refuses an --out outside round7/local/ or one git doesn't ignore. Stdout gets a summary with no slot in it.
 
 Also writes projection6_rescored.json (plan 6 under the new project.py) so the re-score can be checked. The plans and
 projections it reads and writes map our slots to products, so they live in the git-ignored local folder (README.md).
 """
 from __future__ import annotations
 
+import argparse
+import functools
 import json
 import os
 import sys
@@ -19,6 +22,11 @@ sys.path.insert(0, str(HERE.parent))
 import project as P  # noqa: E402
 
 R6, R7 = P.LOCAL / "round6", P.LOCAL / "round7"   # the real round files: git-ignored
+_ap = argparse.ArgumentParser(description="Write compare7's per-slot tables into the git-ignored round7/local/.")
+_ap.add_argument("--out", help="the tables file, under analysis/dayone/round7/local/")
+OUT = P.tables_path(_ap.parse_args().out, "compare7_tables.md")
+_fh = open(OUT, "w", encoding="utf-8")
+emit = functools.partial(print, file=_fh)   # every table line goes to the file, never to stdout
 
 
 def load(p: Path) -> dict:
@@ -51,12 +59,12 @@ b6n = {r["slot"]: r for r in re6["scenarios"]["base"]["per_slot"]}
 b7 = {r["slot"]: r for r in proj7["scenarios"]["base"]["per_slot"]}
 skus6 = {d["sku"] for d in plan6["day_one"]}
 
-print("## Each slot's drink, and peak sales against capacity (base scenario)\n")
-print("Peak = the most units the slot sells between two Friday refills. Plan 6 is shown under both rules: the old rule "
+emit("## Each slot's drink, and peak sales against capacity (base scenario)\n")
+emit("Peak = the most units the slot sells between two Friday refills. Plan 6 is shown under both rules: the old rule "
       "gave each duplicate slot its own extra demand; the new rule splits the product's one demand across its slots. "
       "No slot in any of the three reaches its capacity in the base case.\n")
-print("| Slot | Plan 6 | Plan 6 peak (old rule) | Plan 6 peak (new rule) | Plan 7 | Plan 7 peak | Capacity (6 / 7) |")
-print("|---|---|---|---|---|---|---|")
+emit("| Slot | Plan 6 | Plan 6 peak (old rule) | Plan 6 peak (new rule) | Plan 7 | Plan 7 peak | Capacity (6 / 7) |")
+emit("|---|---|---|---|---|---|---|")
 
 
 # Class-day equivalents in the busiest refill cycle: the same for every slot that never sells out.
@@ -72,45 +80,49 @@ def cyc(row: dict) -> float:
 for slot in sorted(s6):
     a, b = s6[slot], s7[slot]
     tag = " **(test slot)**" if b.get("role") == "test" else ""
-    print(f"| {slot} | {name(cat6, a['sku'])} | {cyc(b6[slot]):.1f} | {b6n[slot]['peak_cycle_units']:.1f} | "
+    emit(f"| {slot} | {name(cat6, a['sku'])} | {cyc(b6[slot]):.1f} | {b6n[slot]['peak_cycle_units']:.1f} | "
           f"{name(cat7, b['sku'])}{tag} | {b7[slot]['peak_cycle_units']:.1f} | {a['units']} / {b['units']} |")
 
-print(f"\nThe busiest refill cycle holds {F:.1f} class days of demand. In the high scenario the busiest 8-can energy "
+emit(f"\nThe busiest refill cycle holds {F:.1f} class days of demand. In the high scenario the busiest 8-can energy "
       "drinks (Celsius, Rockstar) sell exactly their 8 between refills, but none runs out.")
-print("\n## Totals\n")
+emit("\n## Totals\n")
 d6, d7 = len({d['sku'] for d in plan6['day_one']}), len({d['sku'] for d in plan7['day_one']})
-print("| | Plan 6, old rule | Plan 6, re-scored | Plan 7 |")
-print("|---|---|---|---|")
-print(f"| Distinct drinks | {d6} | {d6} | {d7} |")
-print(f"| Fill cost, expected | {money(proj6['fill_expected'])} | {money(re6['fill_expected'])} | {money(proj7['fill_expected'])} |")
-print(f"| Fill cost, most we pay (cap $366) | {money(proj6['fill_most'])} | {money(re6['fill_most'])} | {money(proj7['fill_most'])} |")
-print(f"| Spendable after the fill, worst case ($600 less most we pay; floor $53) | {money(600 - proj6['fill_most'])} | "
+emit("| | Plan 6, old rule | Plan 6, re-scored | Plan 7 |")
+emit("|---|---|---|---|")
+emit(f"| Distinct drinks | {d6} | {d6} | {d7} |")
+emit(f"| Fill cost, expected | {money(proj6['fill_expected'])} | {money(re6['fill_expected'])} | {money(proj7['fill_expected'])} |")
+emit(f"| Fill cost, most we pay (cap $366) | {money(proj6['fill_most'])} | {money(re6['fill_most'])} | {money(proj7['fill_most'])} |")
+emit(f"| Spendable after the fill, worst case ($600 less most we pay; floor $53) | {money(600 - proj6['fill_most'])} | "
       f"{money(600 - re6['fill_most'])} | {money(600 - proj7['fill_most'])} |")
 for sc in ("low", "base", "high"):
-    print(f"| Projected profit, {sc} | {money(proj6['scenarios'][sc]['profit'])} | {money(re6['scenarios'][sc]['profit'])} | "
+    emit(f"| Projected profit, {sc} | {money(proj6['scenarios'][sc]['profit'])} | {money(re6['scenarios'][sc]['profit'])} | "
           f"{money(proj7['scenarios'][sc]['profit'])} |")
 for sc in ("low", "base", "high"):
-    print(f"| Units lost to empty slots, {sc} | {proj6['scenarios'][sc]['units_lost']:.1f} | {re6['scenarios'][sc]['units_lost']:.1f} | "
+    emit(f"| Units lost to empty slots, {sc} | {proj6['scenarios'][sc]['units_lost']:.1f} | {re6['scenarios'][sc]['units_lost']:.1f} | "
           f"{proj7['scenarios'][sc]['units_lost']:.1f} |")
-print(f"| Closet stock after the fill (units) | {sum(p['closet'] for p in proj6['purchase'])} | {sum(p['closet'] for p in re6['purchase'])} | "
+emit(f"| Closet stock after the fill (units) | {sum(p['closet'] for p in proj6['purchase'])} | {sum(p['closet'] for p in re6['purchase'])} | "
       f"{sum(p['closet'] for p in proj7['purchase'])} |")
 
-print("\n## How much of plan 6's profit was the DUP_DECAY credit\n")
-print("| Scenario | Plan 6, old rule | Plan 6, re-scored | Credit | Share |")
-print("|---|---|---|---|---|")
+emit("\n## How much of plan 6's profit was the DUP_DECAY credit\n")
+emit("| Scenario | Plan 6, old rule | Plan 6, re-scored | Credit | Share |")
+emit("|---|---|---|---|---|")
 for sc in ("low", "base", "high"):
     o, n = proj6["scenarios"][sc]["profit"], re6["scenarios"][sc]["profit"]
-    print(f"| {sc} | {money(o)} | {money(n)} | {money(o - n)} | {100 * (o - n) / o:.0f}% |")
+    emit(f"| {sc} | {money(o)} | {money(n)} | {money(o - n)} | {100 * (o - n) / o:.0f}% |")
 
-print("\n## Drinks new to plan 7, and whether they have a checked-price sourcing row\n")
-print("| Drink | Slot | Price source in catalog7.json | Needs a sourcing row |")
-print("|---|---|---|---|")
+emit("\n## Drinks new to plan 7, and whether they have a checked-price sourcing row\n")
+emit("| Drink | Slot | Price source in catalog7.json | Needs a sourcing row |")
+emit("|---|---|---|---|")
 for d in plan7["day_one"]:
     if d["sku"] in skus6:
         continue
     p = cat7[d["sku"]]
     has = p["src"].startswith("sourcing row")
-    print(f"| {name(cat7, d['sku'])} (`{d['sku']}`) | {d['slot']} | {p['src']} | {'no' if has else '**yes**'} |")
+    emit(f"| {name(cat7, d['sku'])} (`{d['sku']}`) | {d['slot']} | {p['src']} | {'no' if has else '**yes**'} |")
 carried = [d["sku"] for d in plan7["day_one"] if d["sku"] in skus6 and not cat7[d["sku"]]["src"].startswith("sourcing row")]
 if carried:
-    print(f"\nKept from plan 6 and still without a sourcing row: {', '.join(sorted(set(carried)))}.")
+    emit(f"\nKept from plan 6 and still without a sourcing row: {', '.join(sorted(set(carried)))}.")
+_fh.close()
+print(f"wrote the compare7 tables to {OUT}")
+print("base profit: plan 6 (old rule) " + money(proj6["scenarios"]["base"]["profit"]) + ", plan 6 re-scored "
+      + money(re6["scenarios"]["base"]["profit"]) + ", plan 7 " + money(proj7["scenarios"]["base"]["profit"]))

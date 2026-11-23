@@ -206,10 +206,11 @@ def test_a_sourcing_row_without_an_expected_price_falls_back_to_most_we_pay(monk
     """The planner reads a missing expected price as the most-we-pay (vending.planner._Sources); the catalog builder
     used to crash on it."""
     build = module("dayone_build_catalog7", DAYONE / "round7" / "build_catalog7.py")
+    # ARIZONA: a line with a category (build_catalog7.CAT), so the only question is the price
     snap = {"capacity_overrides": {},
-            "catalog": [{"sku": "TEA-A", "name": "Tea A", "size": "16 oz can"}],
+            "catalog": [{"sku": "ARIZONA-TEA_A-16CAN", "name": "Tea A", "size": "16 oz can"}],
             "requests": [],
-            "sourcing": [{"sku": "TEA-A", "rank": "primary", "store": "Costco", "units_per_pack": 12,
+            "sourcing": [{"sku": "ARIZONA-TEA_A-16CAN", "rank": "primary", "store": "Costco", "units_per_pack": 12,
                           "expected_cents": None, "max_cents": 1299, "checked_at": "2026-11-20 12:00:00+00"}]}
     [p] = build.build(snap)
     assert (p["price"], p["max"], p["pack"]) == (12.99, 12.99, 12)
@@ -244,17 +245,124 @@ def test_a_product_whose_floor_is_above_the_ceiling_is_left_out_with_a_reason():
     assert "TEA-DEAR" not in res["skus"] and "TEA-DEAR" in res["unpriceable"]
 
 
+# --- Re-check of #231, round 3 ----------------------------------------------------------------------------------
+
+def real_catalog_skus(n: int) -> list[str]:
+    """n plannable SKUs from the committed catalog7.json (it holds products, no slot)."""
+    cat = json.loads((DAYONE / "round7" / "catalog7.json").read_text(encoding="utf-8"))["products"]
+    return [p["sku"] for p in cat if p["plannable"] and p["cat"]][:n]
+
+
+def synthetic_rounds(P, folder: Path) -> list[int]:
+    """Made-up plans 6, 7 and 7b on the tests' assignment, with their projections, as the compare scripts read them."""
+    cat = {p["sku"]: p for p in json.loads((DAYONE / "round7" / "catalog7.json").read_text(encoding="utf-8"))["products"]}
+    skus = real_catalog_skus(5)
+    slots = [int(s) for s in TEST_SLOTS[:4]]
+    mixes = {("round6", "6"): skus[:4], ("round7", "7"): skus[1:5], ("round7", "7b"): [skus[0], *skus[2:5]]}
+    for (sub, rid), mix in mixes.items():
+        (folder / sub).mkdir(parents=True, exist_ok=True)
+        p = {"day_one": [dict(slot=s, sku=k, units=cat[k]["cap"], price=3.00) for s, k in zip(slots, mix)]}
+        (folder / sub / f"plan{rid}.json").write_text(json.dumps(p), encoding="utf-8")
+        (folder / sub / f"projection{rid}.json").write_text(json.dumps(P.project(p, cat, P.load_calendar())),
+                                                            encoding="utf-8")
+    return slots
+
+
 @pytest.mark.parametrize("script", ["compare7.py", "compare7b.py"])
-def test_the_compare_scripts_document_writing_their_tables_to_the_ignored_folder(script):
-    """Their output has per-slot rows: the usage line must send it into the git-ignored local folder."""
-    import re
+def test_the_compare_scripts_write_slot_rows_only_to_the_ignored_folder(script, tmp_path, P):
+    """Stdout can be redirected anywhere, so it gets no slot row: the tables go to a file under round7/local/, which
+    git ignores, and an --out anywhere else is refused before anything is written."""
+    import os
+    import shutil
+    import subprocess
+    import uuid
+
+    repo = DAYONE.parents[1]
+    slots = synthetic_rounds(P, tmp_path / "local")
+    env = {**os.environ, "DAYONE_LOCAL": str(tmp_path / "local"), "PYTHONIOENCODING": "utf-8"}
+    run = lambda *args: subprocess.run([sys.executable, str(DAYONE / "round7" / script), *args], cwd=repo, env=env,
+                                       capture_output=True, text=True, encoding="utf-8", stdin=subprocess.DEVNULL)
+    scratch = DAYONE / "round7" / "local" / f"pytest-{uuid.uuid4().hex}"
+    try:
+        out = scratch / "tables.md"
+        res = run("--out", str(out))
+        assert res.returncode == 0, res.stderr
+        assert "|" not in res.stdout and not any(f"| {s} |" in res.stdout for s in slots), res.stdout
+        assert not any(k in res.stdout for k in real_catalog_skus(5)), res.stdout
+        assert any(f"| {slots[0]} |" in line for line in out.read_text(encoding="utf-8").splitlines())
+        assert subprocess.run(["git", "check-ignore", "-q", str(out)], cwd=repo, stdin=subprocess.DEVNULL, capture_output=True).returncode == 0
+        for bad in (DAYONE / "round7" / f"pytest-{uuid.uuid4().hex}.md", tmp_path / "elsewhere.md"):
+            res = run("--out", str(bad))
+            assert res.returncode != 0 and "refused" in res.stderr and not bad.exists(), (bad, res.stdout, res.stderr)
+            assert "|" not in res.stdout
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    assert P.tables_path(None, "compare7_tables.md") == P.TABLES / "compare7_tables.md"
+
+
+def test_an_uncategorised_product_is_not_plannable_and_the_optimiser_skips_it():
+    """A new brand's 14 oz water has no category: the catalog marks it not plannable with a reason, and the optimiser
+    leaves it out instead of crashing on the missing category (KeyError: None)."""
+    build = module("dayone_build_catalog7", DAYONE / "round7" / "build_catalog7.py")
+    snap = {"capacity_overrides": {},
+            "catalog": [{"sku": "NEWBRAND-STILL-14BOT", "name": "New Brand Still", "size": "14 oz bottle"}],
+            "requests": [],
+            "sourcing": [{"sku": "NEWBRAND-STILL-14BOT", "rank": "primary", "store": "Costco", "units_per_pack": 24,
+                          "expected_cents": 1599, "max_cents": 1799, "checked_at": "2026-11-20 12:00:00+00"}]}
+    [new] = build.build(snap)
+    assert new["priced"] and new["cap"] == 8 and new["cat"] is None
+    assert not new["plannable"] and "category" in new["not_plannable"]
+    opt = module("optimize", DAYONE / "optimize.py")
+    raw = {**new, "plannable": True}     # a hand-made catalog row that skips the builder's check
+    cat = catalog(product("TEA-A"), raw)
+    assert opt.candidates(cat) == ["TEA-A"]
+    price, _ = opt.prices(cat, opt.candidates(cat))
+    assert list(price) == ["TEA-A"]
+
+
+def test_a_counted_capacity_is_not_flagged_against_the_chart(P):
+    """A person counted 7 of a 16 oz can a column (capacity_overrides); the chart says 8. The catalog takes the count,
+    as the runtime planner does (vending.capacity.for_product), and the projection doesn't flag it. A cap that
+    differs from the chart with no count behind it is still flagged."""
+    build = module("dayone_build_catalog7", DAYONE / "round7" / "build_catalog7.py")
+    snap = {"capacity_overrides": {"ARIZONA-TEA_B-16CAN": 7},
+            "catalog": [{"sku": "ARIZONA-TEA_B-16CAN", "name": "Tea B", "size": "16 oz can"}],
+            "requests": [],
+            "sourcing": [{"sku": "ARIZONA-TEA_B-16CAN", "rank": "primary", "store": "Costco", "units_per_pack": 12,
+                          "expected_cents": 900, "max_cents": 1000, "checked_at": "2026-11-20 12:00:00+00"}]}
+    [counted] = build.build(snap)
+    assert counted["cap"] == 7 and counted["cap_counted"] and counted["plannable"]
+    cat = catalog(counted)
+    res = P.project(filled(plan((counted["sku"], 2.50)), cat), cat, P.load_calendar())
+    assert not any("chart" in p or "holds" in p for p in res["problems"]), res["problems"]
+    typo = {**product("TEA-C"), "cap": 7}
+    cat = catalog(typo)
+    res = P.project(filled(plan(("TEA-C", 2.50)), cat), cat, P.load_calendar())
+    assert any("chart says 8" in p for p in res["problems"]), res["problems"]
+
+
+def test_a_priced_product_with_no_column_figure_is_refused_plainly(P):
+    cat = catalog({**product("TEA-A"), "cap": None, "capacity_assumed": True})
+    p = plan(("TEA-A", 2.50))
+    p["day_one"][0]["units"] = 8
+    with pytest.raises(P.PlanRefused, match=r"TEA-A.*column"):
+        P.project(p, cat, P.load_calendar())
+
+
+def test_one_drink_at_two_prices_is_refused_and_no_totals_are_written(P, tmp_path):
+    """Two rows of one SKU at different prices made the profit depend on which row came first. A product has one
+    price, so the projection refuses the plan: a non-zero exit, a plain message and no output file."""
     import subprocess
 
-    text = (DAYONE / "round7" / script).read_text(encoding="utf-8")
-    usage = [line for line in text.split('"""')[1].splitlines() if script in line and ">" in line]
-    assert usage, "a usage line with a redirect"
-    for line in usage:
-        target = re.search(r">\s*(\S+)", line).group(1)
-        assert target.startswith("analysis/dayone/local/"), line
-        ignored = subprocess.run(["git", "check-ignore", "-q", target], cwd=DAYONE.parents[1])
-        assert ignored.returncode == 0, f"{target} is not git-ignored"
+    cat = catalog(product("TEA-A"), product("TEA-B"))
+    p = filled(plan(("TEA-A", 2.50), ("TEA-B", 2.50), ("TEA-A", 3.50)), cat)
+    with pytest.raises(P.PlanRefused, match=r"TEA-A.*2\.50.*3\.50"):
+        P.project(p, cat, P.load_calendar())
+    (tmp_path / "plan.json").write_text(json.dumps(p), encoding="utf-8")
+    (tmp_path / "catalog.json").write_text(json.dumps({"products": list(cat.values())}), encoding="utf-8")
+    out = tmp_path / "projection.json"
+    res = subprocess.run([sys.executable, str(DAYONE / "project.py"), str(tmp_path / "plan.json"),
+                          str(tmp_path / "catalog.json"), str(out)], capture_output=True, text=True,
+                         stdin=subprocess.DEVNULL)
+    assert res.returncode != 0 and "TEA-A" in res.stderr and "refused" in res.stderr, (res.stdout, res.stderr)
+    assert not out.exists() and "profit" not in res.stdout

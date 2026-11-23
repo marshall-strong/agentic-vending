@@ -30,6 +30,7 @@ import argparse
 import json
 import math
 import os
+import subprocess
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -69,6 +70,24 @@ LOCAL = Path(os.environ.get("DAYONE_LOCAL") or Path(__file__).resolve().parent /
 # proposed (docs/opening-capital-plan.md). Plan 7 was made at $366 and plan 7b at $400; see README.md.
 FILL_CAP = 400.00
 FILL_CAP_CENTS = 40_000
+# Where the compare scripts write their per-slot tables: git-ignored, like LOCAL (#231 review, round 3).
+TABLES = Path(__file__).resolve().parent / "round7" / "local"
+
+
+def tables_path(out: str | None, name: str) -> Path:
+    """The file a compare script writes its per-slot tables to: `name` in TABLES, or `out`.
+
+    Refuses (exits) an `out` outside TABLES, or one that `git check-ignore` does not ignore, so a table with slot rows
+    can't land in a tracked file. The scripts print only a summary with no slot in it."""
+    path = Path(out).resolve() if out else TABLES / name
+    if not path.is_relative_to(TABLES.resolve()):
+        sys.exit(f"refused: {path} is outside {TABLES}; the tables have per-slot rows, so they stay in that "
+                 "git-ignored folder. No tables were written.")
+    if subprocess.run(["git", "check-ignore", "-q", str(path)], cwd=REPO, stdin=subprocess.DEVNULL,
+                      capture_output=True).returncode != 0:
+        sys.exit(f"refused: git does not ignore {path}; the tables have per-slot rows. No tables were written.")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def load_calendar(path: Path | str = CALENDAR) -> dict[str, bool]:
@@ -83,6 +102,10 @@ def slots_from(plan_path: Path | str) -> list[int]:
 
 
 EMPTY = 1e-9   # stock at or below this is an empty slot
+
+
+class PlanRefused(ValueError):
+    """A plan the projection can't score at all, so it writes no totals (main exits non-zero)."""
 
 
 def priced(p: dict) -> bool:
@@ -128,7 +151,10 @@ def category_ranks(plan: dict, cat: dict) -> dict[str, int]:
 
 def project(plan: dict, cat: dict, cal: dict, plan_name: str = "", repo: str = DEFAULT_REPO,
             cap: float = FILL_CAP) -> dict:
-    """Project a plan in memory. cat: sku -> product; cal: ISO date -> is a class day."""
+    """Project a plan in memory. cat: sku -> product; cal: ISO date -> is a class day.
+
+    Raises PlanRefused for a plan with no meaningful total: a product with no column figure, or one product at two
+    prices (its one demand would take whichever row came first)."""
     if repo not in sys.path:
         sys.path.insert(0, repo)
     from vending.capacity import from_size
@@ -142,8 +168,13 @@ def project(plan: dict, cat: dict, cal: dict, plan_name: str = "", repo: str = D
             problems.append(f"{s['slot']}: {s['sku']} is not in the sim catalog"); continue
         if not priced(p):
             problems.append(f"{s['slot']}: {p['sku']} has no price estimate, so its cost and floor are unknown")
+        if not p.get("cap"):
+            raise PlanRefused(f"refused: {p['sku']} has no column figure (cap {p.get('cap')}), so its fill and sales "
+                              "can't be projected; count a column (capacity_overrides) or leave it out")
+        # The catalog's cap is the runtime planner's (vending.capacity.for_product): a person's count wins over the
+        # chart, so only a cap with no count behind it is checked against the chart.
         chart = from_size(p["size"])
-        if chart is not None and chart != p["cap"]:
+        if chart is not None and chart != p["cap"] and not p.get("cap_counted"):
             problems.append(f"{p['sku']}: catalog cap {p['cap']} but chart says {chart}")
         if s["units"] != p["cap"]:
             problems.append(f"{s['slot']}: units {s['units']} but the slot holds {p['cap']} (fill to capacity)")
@@ -164,7 +195,8 @@ def project(plan: dict, cat: dict, cal: dict, plan_name: str = "", repo: str = D
         groups.setdefault(s["sku"], []).append(s)
     for sku, g in groups.items():
         if len({x["price"] for x in g}) > 1:
-            problems.append(f"{sku}: its slots have different prices; one product has one demand and one price")
+            raise PlanRefused(f"refused: {sku} is in the plan at " + ", ".join(f"${x:.2f}" for x in sorted({x['price'] for x in g}))
+                              + "; one product has one demand and one price, so give its slots one price")
 
     # day-one purchase: whole packs per SKU
     need = {}
@@ -276,7 +308,10 @@ def main() -> None:
     cat = {p["sku"]: p for p in json.load(open(a.catalog, encoding="utf-8"))["products"]}
     plan = json.load(open(a.plan, encoding="utf-8"))
     cal = load_calendar(a.calendar)
-    res = project(plan, cat, cal, a.plan, a.repo, a.cap)
+    try:
+        res = project(plan, cat, cal, a.plan, a.repo, a.cap)
+    except PlanRefused as e:
+        sys.exit(f"{e}. No projection was written.")
     out_sc, fill_exp, fill_most, problems = res["scenarios"], res["fill_expected"], res["fill_most"], res["problems"]
     json.dump(res, open(a.out, "w", encoding="utf-8"), indent=1)
     b = out_sc["base"]

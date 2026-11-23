@@ -33,7 +33,7 @@ To get a round's files, copy them from someone who has them. A plan and its proj
 | `round7/catalog7.json` | Round 7's priced catalog: 83 live products, 57 of them plannable. It names no slot. |
 | `round7/optimize7.py` | Round 7's product mix: the best mix of different drinks under the cap, with the test slot and the brand lean. |
 | `round7/place7.py` | Puts the mix on our slots by fall position data and writes the plan. |
-| `round7/compare7.py`, `round7/compare7b.py` | Print the comparison tables, per-slot rows included, from the local folder. Keep that output local. |
+| `round7/compare7.py`, `round7/compare7b.py` | Write the comparison tables, per-slot rows included, to `round7/local/` (git-ignored); they refuse an `--out` anywhere else. Stdout gets only a summary with no slot. |
 | `round7/compare7.md` | Round 7's totals and method, with no slot numbers. |
 
 ## What the model assumes
@@ -93,8 +93,8 @@ python analysis/dayone/round7/optimize7.py analysis/dayone/round7/catalog7.json 
 python analysis/dayone/round7/place7.py analysis/dayone/round7/catalog7.json $L/round7/opt7b.json \
     $L/round7/why7b.json $L/round7/plan7b.json
 python analysis/dayone/project.py $L/round7/plan7b.json analysis/dayone/round7/catalog7.json $L/round7/projection7b.json
-python analysis/dayone/round7/compare7.py > $L/compare7_tables.md     # per-slot rows: keep them local
-python analysis/dayone/round7/compare7b.py > $L/compare7b_tables.md
+python analysis/dayone/round7/compare7.py      # writes analysis/dayone/round7/local/compare7_tables.md
+python analysis/dayone/round7/compare7b.py     # writes analysis/dayone/round7/local/compare7b_tables.md
 ```
 
 - **Plan 7:** use `opt7.json`, `why7.json` and `plan7.json`, with `--cap-cents 36600` for `optimize7.py` and `--cap 366` for `project.py`. Plan 7 came from the optimiser before the #231 review, seeded with plan 6. The fixed optimiser skips that seed, because plan 6 repeats drinks, and at $366 it finds a different mix worth $12.82 more base gross profit ($1,040.13 against $1,027.31). Plan 7b, the picked plan, comes out the same.
@@ -112,6 +112,14 @@ python analysis/dayone/round7/compare7b.py > $L/compare7b_tables.md
 
   Make a new one with a read-only query of those tables for the next round.
 - **A new round.** Make `round8/` scripts beside `round7/`, and keep the round's files in `$L/round8/`. Keep a plan and its projection on the same suffix (`plan8.json` with `projection8.json`), because the round reader pairs them by that suffix.
+
+## Known limits of the tools
+
+Plan 7b is already picked. These are limits of the search tools, not reasons to change the plan.
+
+**optimize7's test-slot search is greedy.** It picks a test drink, swaps the regular slots around it one at a time, then re-picks the test drink around them. A better mix that needs the test drink and a regular drink to change together can be missed.
+
+**optimize.py has no budget look-ahead.** It adds the drink with the most gross profit that still fits under the cap, so an early dear pick can leave too little for the last slots. It can then refuse a fill of different drinks that round 7's search finds under the same cap.
 
 ## Load a round for the dashboard
 

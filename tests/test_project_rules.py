@@ -221,3 +221,21 @@ def test_the_agent_reads_the_variety_rules():
         assert phrase in text, phrase
     # The wildcard topic points at the exception (#231 review): a new drink normally comes in through the wildcard.
     assert "(exception: `variety`)" in get_project_rules("wildcard").text
+
+
+def test_a_warned_duplicate_the_plan_keeps_unchanged_gets_its_reason():
+    """#231 review, round 3: the duplicate warning also names slots the plan keeps as they are (two unchanged slots
+    already share a drink while the plan changes a third). The answer's instructions and the variety topic both let
+    such a slot have a slot_reasons entry, and the recorded plan carries it."""
+    from vending import agent
+    from vending.agent import SYSTEM
+
+    assert "Add each slot a preview duplicate warning names, changed or not" in SYSTEM
+    assert "Leave out other slots you keep as they are" in SYSTEM
+    text = get_project_rules("variety").text
+    assert "give each slot it names a reason in `slot_reasons`, kept or changed" in text
+    plan = {"slots": [{"slot": "15", "fill_to": 7}, {"slot": "16", "keep": True}, {"slot": "17", "keep": True}]}
+    said = {"slot_reasons": [{"slot": "15", "reason": "Restocked."},
+                             {"slot": "16", "reason": "Sold out before Friday twice; one slot is not enough."}]}
+    slots = {s["slot"]: s for s in agent.recorded_plan(plan, said)["slots"]}
+    assert slots["16"]["reason"].startswith("Sold out") and "reason" not in slots["17"]

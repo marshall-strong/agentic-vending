@@ -7,7 +7,7 @@ Price sources, in order:
      15 Nov bubly check.
 Most-we-pay without a sourcing row: the projection's rule, expected x 1.15 rounded up to 50 cents. A sourcing row
 with no expected price uses its most-we-pay as the expected price too, as the planner does (vending.planner._Sources).
-A product with no price, or a package size with no column figure, is kept but not plannable.
+A product with no price, a package size with no column figure, or no category, is kept but not plannable.
 
 Three flags per product, kept apart (#231 review):
   priced          it has a price estimate, from any of the sources above;
@@ -109,8 +109,13 @@ def product(c: dict, s: dict | None, r: dict | None, over: dict) -> dict:
         source = ("15 Nov Amazon check (round 3)" if sku.startswith("BUBLY") else "11 Nov list (round 4)")             + (f"; approved request {r['id']}" if r else "") + "; no sourcing row yet"
     else:
         source = "not priced: no sourcing row, and no price in a request note"
-    reason = LEAVE_OUT.get(sku) or (None if price else source) or (None if cap else f"no column figure for '{size}'")
-    return dict(sku=sku, name=c["name"], size=size, cat=category(sku, size), cap=cap, capacity_assumed=cap is None,
+    cat = category(sku, size)
+    # A product with no category (a new brand: add its line to CAT or ENERGY) has no demand rate or reference price.
+    reason = (LEAVE_OUT.get(sku) or (None if price else source) or (None if cap else f"no column figure for '{size}'")
+              or (None if cat else f"no category for the line '{sku.split('-')[0]}': add it to CAT or ENERGY here"))
+    # cap_counted: the cap is a person's count (capacity_overrides), which wins over the chart, as in the planner.
+    return dict(sku=sku, name=c["name"], size=size, cat=cat, cap=cap, capacity_assumed=cap is None,
+                cap_counted=sku in over,
                 pack=pack or 1, price=price or 0.0, max=mx, store=store, src=source,
                 request=(r["id"] if r else None), priced=bool(price), checked_source=s is not None,
                 plannable=reason is None, not_plannable=reason,

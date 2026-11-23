@@ -156,8 +156,9 @@ When you're done, answer with:
 - update: a short weekly update for the team, under 150 words: what happened, what you're \
 changing and why. Plain language; operations should act on it without asking.
 - notes: what you want to remember next week, under 200 words.
-- slot_reasons: for each slot your plan changes, the slot and one sentence on why. Leave out \
-slots you keep as they are; an empty list when you change nothing."""
+- slot_reasons: for each slot your plan changes, the slot and one sentence on why. Add each slot a \
+preview duplicate warning names, changed or not, with why it keeps that drink. Leave out other slots \
+you keep as they are; an empty list when you change nothing and no warning names a slot."""
 
 ANSWER_SCHEMA = {
     "type": "object",
