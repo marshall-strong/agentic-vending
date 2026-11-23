@@ -274,14 +274,44 @@ def test_a_price_over_the_rows_max_is_not_stored(connect):
         assert row(conn).expected_cents == 2599
 
 
-def test_a_new_store_goes_in_the_alternate_and_never_replaces_the_primary(connect):
+def test_a_new_store_goes_in_the_alternate_and_never_replaces_a_fresh_primary(connect):
     with connect() as conn:
-        set_row(conn, checked=LIVE - timedelta(days=10), store="Walmart", url=None)
+        set_row(conn, checked=LIVE - timedelta(days=2), store="Walmart", url=None)
     client = Client(searched())
     reply, failed = lookup(searcher(connect, client))
     assert not failed and reply["recorded"] == "added alternate"
     with connect() as conn:
         assert row(conn).store == "Walmart" and row(conn, "alternate").store == "Amazon"
+
+
+def test_a_fresh_find_replaces_a_stale_primary_at_another_store(connect):
+    # The fill refuses a stale primary however fresh the alternate is, so the fresh price must be the primary
+    # (Kevin, 23 Nov: the first real lookup put Red Bull's fresh price in the alternate and left it blocked).
+    with connect() as conn:
+        set_row(conn, checked=LIVE - timedelta(days=10), store="Walmart", url=None)
+    client = Client(searched(report=found(price="27.48")))
+    reply, failed = lookup(searcher(connect, client))
+    assert not failed and reply["recorded"] == "replaced primary"
+    with connect() as conn:
+        o = row(conn)
+        assert (o.store, o.expected_cents, o.url, o.checked_at) == ("Amazon", 2748, URL, LIVE)
+        assert not o.is_stale(LIVE) and row(conn, "alternate") is None
+
+
+def test_a_stale_primary_is_replaced_when_the_find_is_the_alternates_listing(connect):
+    other = "https://www.amazon.com/Dr-Pepper-old-listing/dp/B000OLD000"
+    with connect() as conn:
+        set_row(conn, checked=LIVE - timedelta(days=10), url=other)
+        set_row(conn, checked=LIVE - timedelta(days=1), rank="alternate", price=2700, most=3400)
+    client = Client(searched(report=found(price="27.48")))
+    reply, failed = lookup(searcher(connect, client))
+    assert not failed, reply
+    assert reply["recorded"].startswith("replaced primary")
+    assert "alternate was the same listing" in reply["recorded"]
+    with connect() as conn:
+        o = row(conn)
+        assert (o.url, o.expected_cents) == (URL, 2748) and not o.is_stale(LIVE)
+        assert row(conn, "alternate") is None
 
 
 def test_nothing_found_stores_nothing(connect):
@@ -798,9 +828,8 @@ def test_plan_mode_needs_a_picked_plan(connect, capsys):
     assert "No first-fill plan is picked" in capsys.readouterr().err
 
 
-def test_plan_mode_names_what_the_fill_would_still_refuse(connect, capsys):
-    # The stale Amazon primary's search finds another listing: it is stored as the alternate, and the primary
-    # stays stale, so the command says so and exits 1 rather than look done.
+def test_plan_mode_replaces_a_stale_primary_with_the_listing_it_finds(connect, capsys):
+    # The stale Amazon primary's search finds another listing: it replaces the primary, so the fill can send it.
     with connect() as conn:
         picked_plan(conn)
         for sku, units, url in (("COKE20", 12, None), ("PICKLE", 24, PICKLE_URL)):
@@ -809,7 +838,23 @@ def test_plan_mode_names_what_the_fill_would_still_refuse(connect, capsys):
                 expected_cents=1800, max_cents=2100, url=url, pack_description=None,
                 checked_at=BEFORE - timedelta(days=(0 if url is None else 17)), checked_by="Kevin"), now=BEFORE)
     client = Client(searched(report=found(price="18.49")))
-    assert command(connect, client, "--plan", "picked", "--by", "Kevin", when=BEFORE) == 1
+    assert command(connect, client, "--plan", "picked", "--by", "Kevin", when=BEFORE) == 0
     out = capsys.readouterr().out
-    assert "PICKLE: price from Amazon: added alternate" in out
+    assert "PICKLE: price from Amazon: replaced primary" in out and "would still refuse" not in out
+
+
+def test_plan_mode_names_what_the_fill_would_still_refuse(connect, capsys):
+    # The stale Amazon primary's search finds nothing: the primary stays stale, so the command says so and exits
+    # 1 rather than look done.
+    with connect() as conn:
+        picked_plan(conn)
+        for sku, units, url in (("COKE20", 12, None), ("PICKLE", 24, PICKLE_URL)):
+            sourcing.set_option(conn, sourcing.Option(
+                sku=sku, rank="primary", store="Costco" if url is None else "Amazon", units_per_pack=units,
+                expected_cents=1800, max_cents=2100, url=url, pack_description=None,
+                checked_at=BEFORE - timedelta(days=(0 if url is None else 17)), checked_by="Kevin"), now=BEFORE)
+    client = Client(searched(report={"found": False, "price": "", "units_per_pack": 0, "pack_description": "",
+                                     "url": "", "note": "no listing"}))
+    assert command(connect, client, "--plan", "picked", "--by", "Kevin", "--no-fallback", when=BEFORE) == 1
+    out = capsys.readouterr().out
     assert "The fill would still refuse:" in out and "PICKLE: Amazon, 24 a pack (primary checked 2026-11-15" in out
