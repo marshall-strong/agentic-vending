@@ -890,9 +890,11 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
 # so turning the schedule off hides none. Two reads, so neither crowds out the other: the newest row, however
 # old, and every failed, missed or halted row of the last week, with any still `running`, and, however old, any
 # whose agent run still says `running` in agent_runs after the schedule recorded its ending (that ending
-# couldn't be written there). No `detail`: a failed one's can hold an error. And the database's
-# `agent_schedule_mode`, to say when it isn't a mode, or says `live` (run as dry-run).
-SCHEDULED_COLUMNS = ("s.due_at, s.mode, s.claimed_at, s.outcome, s.run_id, r.status as agent_status"
+# couldn't be written there). No `detail`: a failed one's can hold an error. What a run sent: its agent run's
+# request ID and the submission that carried it (the newest, if a person resolved an older attempt onto it).
+# And the database's `agent_schedule_mode`, to say when it isn't a mode, or says `live`.
+SCHEDULED_COLUMNS = ("s.due_at, s.mode, s.claimed_at, s.outcome, s.run_id, r.status as agent_status, r.request_id,"
+                     " (select max(p.id) from purchase_submissions p where p.request_id = r.request_id) as submission"
                      " from agent_schedule s left join agent_runs r on r.id = s.run_id")
 SCHEDULED_LATEST_SQL = f"select {SCHEDULED_COLUMNS} order by s.due_at desc limit 1"
 SCHEDULED_INCIDENTS_SQL = (f"select {SCHEDULED_COLUMNS}"
@@ -1363,7 +1365,8 @@ def _scheduled(conn: psycopg.Connection, now: datetime) -> dict:
 
 
 # How Needs attention reads a scheduled agent run (`vending.agent_schedule`), by its outcome.
-SCHEDULED = {"failed": ("bad", "failed"), "missed": ("bad", "was missed: no run started in its window"),
+SCHEDULED = {"submitted": ("info", "submitted a restock request"),
+             "failed": ("bad", "failed"), "missed": ("bad", "was missed: no run started in its window"),
              "halted": ("warn", "was halted: the halt switch was on"), "skipped": ("info", "skipped"),
              "running": ("info", "is running now")}
 # Each of these stays in Needs attention for a week (`agent_schedule.LOOKBACK`), whatever ran after it.
@@ -1371,9 +1374,10 @@ SCHEDULED_PROBLEMS = ("failed", "missed", "halted")
 
 
 def _scheduled_line(row: dict, now: datetime) -> tuple[str, str] | None:
-    """(level, sentence) on one `agent_schedule` row, or None for an outcome it doesn't know."""
+    """(level, sentence) on one `agent_schedule` row, or None for an outcome it doesn't know. It says whether the
+    run was live or a dry run, and, once it has ended, what it sent: the request and submission, or nothing."""
     outcome = row.get("outcome")
-    if outcome not in SCHEDULED:
+    if outcome not in SCHEDULED or (outcome == "submitted" and row.get("mode") != "live"):
         return None
     level, what = SCHEDULED[outcome]
     claimed = row.get("claimed_at")
@@ -1392,8 +1396,16 @@ def _scheduled_line(row: dict, now: datetime) -> tuple[str, str] | None:
         when = ""
     kind = {"dry-run": "dry run", "live": "live run"}.get(row.get("mode"), "run")
     run = f" (agent run {int(row['run_id'])})" if isinstance(row.get("run_id"), int) else ""
+    sent = ""
+    if outcome != "running":
+        request, submission = row.get("request_id"), row.get("submission")
+        if request:
+            sent = f" Sent: request {request}" + (f" (submission {int(submission)})" if isinstance(submission, int)
+                                                  else "") + "."
+        else:
+            sent = " Nothing sent."
     see = "" if outcome in ("running", "submitted") else " `python -m vending.agent_schedule` says why."
-    return level, f"The scheduled {kind}{when} {what}{run}.{see}"
+    return level, f"The scheduled {kind}{when} {what}{run}.{sent}{see}"
 
 
 SCHEDULE_UNAVAILABLE = ("Scheduled agent run status unavailable: the `agent_schedule` table couldn't be read "
@@ -1411,10 +1423,15 @@ def _scheduled_runs(panel: dict | None, syncs: dict | None, now: datetime) -> li
         out.append(("bad", "Scheduled agent runs are off because a setting is wrong (`AGENT_SCHEDULE_MODE`, "
                            "`AGENT_SCHEDULE` or `AGENT_SCHEDULE_FROM`). The container's log says which."))
     data = panel.get("data") if panel is not None and panel.get("ok") else None
-    # Either setting says live: say that it runs as a dry run in this version.
-    if (isinstance(schedule, dict) and schedule.get("setting") == "live") or \
-            (isinstance(data, dict) and data.get("setting_live")):
-        out.append(("info", agent_schedule.LIVE_NOT_ENABLED))
+    # Live only when both say so: say when they do (each run may send), and when only one does.
+    container = schedule.get("setting") if isinstance(schedule, dict) else None
+    in_db = data.get("setting_live") if isinstance(data, dict) else None
+    if container == "live" and in_db:
+        out.append(("warn", agent_schedule.LIVE_ON))
+    elif (container == "live" and in_db is False) or (in_db and container in ("off", "dry-run")):
+        out.append(("info", agent_schedule.HALF_LIVE))
+    if isinstance(schedule, dict) and schedule.get("model_key") is False:
+        out.append(("bad", agent_schedule.NO_KEY_LINE))
     if panel is None:
         return out
     if not isinstance(data, dict):

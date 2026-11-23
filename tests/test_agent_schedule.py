@@ -194,10 +194,10 @@ def test_the_dashboard_line_follows_the_outcome():
     assert line("missed")[0] == "bad" and "missed" in line("missed")[1]
     assert line("halted")[0] == "warn" and "halt switch" in line("halted")[1]
     assert line("skipped") == ("info", "The scheduled dry run due Wed 02 Dec, 2:00 PM ET skipped (agent run 7). "
-                                       "`python -m vending.agent_schedule` says why.")
+                                       "Nothing sent. `python -m vending.agent_schedule` says why.")
     assert line("skipped", "off", run_id=None)[1].startswith(
         "The scheduled run due Wed 02 Dec, 2:00 PM ET skipped: `agent_schedule_mode` is off in the database.")
-    assert line("submitted") is None            # a scheduled run is a dry run: it never submits
+    assert line("submitted") is None            # a dry run never submits (a live one may: tests/test_live_schedule.py)
     assert line("skipped", agent_status="running")[0] == "bad"
     assert line("running") == ("info", "The scheduled dry run due Wed 02 Dec, 2:00 PM ET is running now (agent run 7).")
     assert line("<b>") is None
@@ -217,7 +217,7 @@ def test_the_home_page_shows_the_schedule_only_when_it_is_on():
         "last": {"due_at": at(WED - timedelta(days=7), 14).isoformat(), "outcome": "<b>", "mode": "dry-run"}}}
     page = html.unescape(worker.home_page(shown))
     assert "Scheduled agent run" in page
-    assert "dry runs only (live scheduling is not enabled in this version); next Wed 02 Dec, 2:00 PM ET" in page
+    assert "dry runs; next Wed 02 Dec, 2:00 PM ET" in page
     assert "unknown, due Wed 25 Nov, 2:00 PM ET" in page      # an outcome it doesn't know isn't echoed
     del shown["agent_schedule"]
     assert "Scheduled agent run" not in worker.home_page(shown)
@@ -380,7 +380,9 @@ def test_the_worker_starts_a_dry_run_at_its_time_and_the_dashboard_reads_it(sche
     # The dashboard reads the table, with or without the worker's /health.
     [(level, text)] = attention(conn, at(WED, 14, 30))
     assert level == "info" and f"agent run {run_id}" in text and "due Wed 02 Dec, 2:00 PM ET" in text
-    assert attention(conn, at(WED, 14, 30), syncs=shown) == [(level, text)]
+    # With the worker's /health too (here without a model key, which it also says).
+    assert [line for line in attention(conn, at(WED, 14, 30), syncs=shown)
+            if line[1].startswith("The scheduled ")] == [(level, text)]
 
 
 def test_a_restart_never_runs_the_same_time_twice(schema_url, conn, allowed):
@@ -867,9 +869,10 @@ def test_a_database_setting_of_the_wrong_type_is_off_and_shown(schema_url, conn,
 # Scheduled runs are dry runs only in this version (finding 1 is removed by that). The rest change something
 # from a second connection, or fake the clocks, between two steps of a scheduled run.
 
-def test_live_in_both_settings_is_still_a_dry_run_with_no_write_tools(schema_url, conn, allowed):
-    """Round 3, finding 1 (removed): a scheduled run is never live. With both settings `live`, the agent is
-    called with live=False, and the model is offered no write tool: no purchase, no catalog request."""
+def test_live_in_both_settings_before_the_start_is_a_dry_run_with_no_write_tools(schema_url, conn, allowed):
+    """Round 3, finding 1, now with live scheduling (tests/test_live_schedule.py): before the competition starts
+    a scheduled run is never live. With both settings `live` on Wed 2 Dec, the agent is called with live=False,
+    and the model is offered no write tool: no purchase, no catalog request."""
     import anyio
 
     from tests.test_agent import LIVE_TOOLS, Script, Tools, answer
@@ -890,29 +893,32 @@ def test_live_in_both_settings_is_still_a_dry_run_with_no_write_tools(schema_url
     offered = {t["name"] for t in client.sent[0]["tools"]}
     assert offered and not offered & agent.WRITE_TOOLS
     assert {"submit_desired_state", "request_catalog_product"} <= agent.WRITE_TOOLS
-    [(_, mode, outcome, run_id, _)] = rows(conn)
-    assert (mode, outcome) == ("dry-run", "skipped")
+    [(_, mode, outcome, run_id, detail)] = rows(conn)
+    assert (mode, outcome) == ("dry-run", "skipped") and "never live before" in detail
     assert conn.execute("select mode from agent_runs where id = %s", (run_id,)).fetchone()[0] == "dry-run"
-    # /health, the home page and the dashboard say live scheduling isn't enabled.
+    # /health shows this worker may run live; the dashboard says both switches are live.
     shown = worker.State(schedule=sched).public()
-    assert shown["agent_schedule"]["mode"] == "dry-run" and shown["agent_schedule"]["setting"] == "live"
-    assert shown["agent_schedule"]["note"] == agent_schedule.LIVE_NOT_ENABLED
-    assert "live scheduling is not enabled in this version" in html.unescape(worker.home_page(shown))
-    assert ("info", agent_schedule.LIVE_NOT_ENABLED) in attention(conn, at(WED, 15), syncs=shown)
-    assert ("info", agent_schedule.LIVE_NOT_ENABLED) in attention(conn, at(WED, 15))     # from the database's
+    assert shown["agent_schedule"]["mode"] == "live" and shown["agent_schedule"]["setting"] == "live"
+    assert ("warn", agent_schedule.LIVE_ON) in attention(conn, at(WED, 15), syncs=shown)
     db_mode(conn, "dry-run")
-    assert ("info", agent_schedule.LIVE_NOT_ENABLED) not in attention(conn, at(WED, 15))
+    assert ("info", agent_schedule.HALF_LIVE) in attention(conn, at(WED, 15), syncs=shown)
 
 
-def test_the_default_entry_point_refuses_a_live_run():
-    with pytest.raises(ValueError, match="live scheduling is not enabled"):
-        agent_schedule.default_run_agent(True)
+def test_the_default_entry_point_is_the_agents_own_live_or_not(monkeypatch):
+    """`vending.agent.run`, with `live` as the scheduler chose it: no second submit path."""
+    from vending import agent
+    from vending.harness import DEFAULT_KEY_ENV
 
+    monkeypatch.setenv(DEFAULT_KEY_ENV, "sk-test")
+    seen = []
 
-def test_the_table_never_holds_a_live_scheduled_run(conn):
-    with pytest.raises(psycopg.errors.CheckViolation):
-        conn.execute("insert into agent_schedule (due_at, latest_at, mode) values (%s, %s, 'live')",
-                     (at(WED, 14), at(WED, 22)))
+    async def run(**kw):
+        seen.append(kw)
+        return 1, SimpleNamespace(status="skipped", detail="")
+    monkeypatch.setattr(agent, "run", run)
+    assert agent_schedule.default_run_agent(True)[0] == 1
+    assert agent_schedule.default_run_agent(False)[0] == 1
+    assert [k["live"] for k in seen] == [True, False] and set(seen[0]) == {"live", "authorize"}
 
 
 def test_off_committed_while_the_run_is_being_authorized_waits_for_the_start(schema_url, conn, allowed,

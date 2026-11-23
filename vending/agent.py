@@ -16,7 +16,7 @@ One run:
    the request (`LEASE_MARGIN`). A takeover locks the same row, so the two never interleave. A run
    that lost it stops there and is `failed`, and reserves and sends nothing. A run that finds it
    taken is recorded as `skipped` at once, and its detail names the other run. A scheduled run
-   (always a dry run) passes `authorize`, which runs in the transaction that takes the lease, once
+   (live or dry) passes `authorize`, which runs in the transaction that takes the lease, once
    it is free and before anything is paid for (`vending.agent_schedule`). The run's ending is
    written to `agent_runs` with `FINISH_RETRIES` more tries if it fails. The whole run has a
    deadline (`RUN_DEADLINE`): past it, the run stops and is `failed`, and the harness sends no more

@@ -154,9 +154,10 @@ can't fill the disk.
 
 **The agent runs here only when the schedule is on** (`vending/agent_schedule.py`, #213). It is
 off unless both the app's `AGENT_SCHEDULE_MODE` env var and the database's `agent_schedule_mode`
-setting turn it on. Scheduled runs are dry runs only: live scheduling is not enabled in this version;
-it needs a later change approved by the team, so `live` in either setting is run as `dry-run`. Then it
-starts `vending.agent.run` as a dry run at the times in `AGENT_SCHEDULE`, which starts `python -m vending.server` over stdio from the same image,
+setting turn it on; the lower of the two runs. A scheduled run is live, and may send a restock request,
+only when both say `live`, from the competition's start (Thu 3 Dec), and after its checks before a send
+pass ([`docs/agent.md`](agent.md#live-scheduled-runs)); otherwise it is a dry run. Then it
+starts `vending.agent.run` at the times in `AGENT_SCHEDULE`, which starts `python -m vending.server` over stdio from the same image,
 with `VENDING_TOOLS=built` so only working tools are offered. [`docs/agent.md`](agent.md) has the
 settings, and a dry run to try on Azure before the first scheduled run. The container gets the model
 key as `VENDING_ANTHROPIC_API_KEY` (the name the agent reads, per the README), from the optional
@@ -171,6 +172,17 @@ the database's setting (`python -m vending.config set agent_schedule_mode off --
 word, so it works in every shell, Windows PowerShell 5.1 too): it reaches every replica at the next
 scheduled time, an old one still running during a deploy too, and a run that has been claimed but
 not started yet.
+
+**Live scheduled runs need the team's agreement first.** A live run spends the competition's money and
+sends a purchase request nobody looks at before it goes. Agree as a team, on GitHub, before anyone sets
+`live`. Migration 029 must be on the team database first (`python -m vending.db migrate`): the worker
+refuses to schedule on a database that is behind. Then turn it on in two places:
+`az containerapp update --name ai-group-2-vend --resource-group data_systems_resource_group --set-env-vars AGENT_SCHEDULE_MODE=live`
+(the worker reads it when it starts, so this makes a new revision), and
+`python -m vending.config set agent_schedule_mode live --by <name>`. Turn it off with one command,
+`python -m vending.config set agent_schedule_mode off --by <name>`: it applies from the next scheduled
+time. `python -m vending.config set agent_schedule_mode dry-run --by <name>` keeps the runs, as dry runs.
+The halt switch (`python -m vending.halt on --by <name>`) stops a run that has already started.
 The deploy of `c1505c2` on 11 Nov, from an older script, set `ANTHROPIC_API_KEY` in the container. `--set-env-vars` only
 adds, so the script now passes `--remove-env-vars` for it when the app still has it (the list is
 `$Retired`). The `anthropic-api-key` secret itself stays in the app, unused by any variable; to
