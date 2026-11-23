@@ -291,7 +291,8 @@ def _stale(options: Sequence[sourcing.Option], checked: plan_rounds.Round, now: 
         found.append(Refusal(STALE_PRICE, (
             f"{o.sku}'s {o.rank} price ({o.store}) was checked {o.checked_at:%Y-%m-%d}, {(now - o.checked_at).days} "
             f"days ago, and the request would send it for slot{'s' if len(used) > 1 else ''} {', '.join(used)}; "
-            f"check it again and record it (python -m vending.sourcing set {o.sku}"
+            f"look it up again (python -m vending.price_search --plan picked --by NAME) or record it (python -m "
+            f"vending.sourcing set {o.sku}"
             f"{' --alternate' if o.rank == 'alternate' else ''} --store ... --pack N --price P --by NAME)"),
             used[0] if len(used) == 1 else None))
     return found
@@ -407,7 +408,8 @@ def _unpriced(options: Sequence[sourcing.Option], checked: plan_rounds.Round) ->
         else:
             continue
         found.append(Refusal(NO_CHECKED_PRICE, (
-            f"slot {s.slot}: {why}; look it up and record it (python -m vending.sourcing set "
+            f"slot {s.slot}: {why}; look it up (python -m vending.price_search --plan picked --by NAME) or record "
+            f"it (python -m vending.sourcing set "
             f"{s.sku or 'SKU'} --store ... --pack N --price P --by NAME; #202)"), s.slot))
     for o in options:
         if o.rank != "alternate" or o.sku not in primary or (o.store and o.expected_cents is not None):
@@ -415,7 +417,8 @@ def _unpriced(options: Sequence[sourcing.Option], checked: plan_rounds.Round) ->
         used = sorted(s.slot for s in checked.slots.values() if s.sku == o.sku)
         found.append(Refusal(NO_CHECKED_PRICE, (
             f"{o.sku}'s alternate ({o.store or 'no store'}) has no checked price, and the request would send it "
-            f"for slot{'s' if len(used) > 1 else ''} {', '.join(used)}; look it up and record it (python -m "
+            f"for slot{'s' if len(used) > 1 else ''} {', '.join(used)}; look it up (python -m vending.price_search "
+            f"--plan picked --by NAME) or record it (python -m "
             f"vending.sourcing set {o.sku} --alternate --store ... --pack N --price P --by NAME), or remove it "
             f"(python -m vending.sourcing remove {o.sku} --alternate --by NAME; #202)")))
     return found

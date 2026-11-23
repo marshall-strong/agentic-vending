@@ -72,7 +72,8 @@ repo root points here.
 - **The agent has no web-fetch tool.** It can't browse to another team's dashboard.
   `tests/test_server.py::test_tool_list_is_pinned` pins the MCP server's tool names, so
   adding a tool (a web fetcher, say) is a deliberate change that shows up in review. Its one
-  web search, `find_pack_price` (from the start, live runs only, `vending/price_search.py`), is
+  web search, `find_pack_price` (from the start, live runs only, `vending/price_search.py`; people
+  run the same lookup with `python -m vending.price_search`), is
   limited by `allowed_domains` to the four stores' own sites, and the code refuses any page off
   them, so it can't reach the other team's pages or the Interloper. The harness refuses any
   other search or fetch tool (`vending/harness.py`).

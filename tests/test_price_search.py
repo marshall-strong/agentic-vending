@@ -53,9 +53,9 @@ def searched(*, urls=(URL,), report=None, searches=2, input_tokens=30_000, outpu
     return SimpleNamespace(id="msg_search", model=model, content=content, stop_reason="tool_use", usage=usage)
 
 
-def found(price="27.48", pack=24, url=URL, description="24 x 20 oz bottles"):
+def found(price="27.48", pack=24, url=URL, description="24 x 20 oz bottles", stock="in_stock"):
     return {"found": True, "price": price, "units_per_pack": pack, "pack_description": description, "url": url,
-            "note": "listed price on the product page"}
+            "stock": stock, "note": "listed price on the product page"}
 
 
 class Client:
@@ -155,21 +155,31 @@ def test_the_worst_case_adds_each_search_and_the_results_it_could_read():
 
 # --- Lookups on a database --------------------------------------------------------------
 
-def test_a_drink_with_no_price_gets_an_unchecked_candidate_row(connect):
-    # Nothing to check the price against, so it is stored without a checked price: a person confirms it.
+def test_a_first_price_on_the_stores_product_page_counts_as_checked(connect):
+    # No earlier price to compare: the exact pack on the store's own product page, within the per-pack and per-unit
+    # limits, is a checked price, so the fill doesn't refuse it (#237, gap 2). No unchecked candidates.
     client = Client(searched())
     reply, failed = lookup(searcher(connect, client))
-    assert not failed and reply["recorded"] == "added primary" and reply["checked"] is False
+    assert not failed and reply["recorded"] == "added primary" and reply["checked"] is True
     assert reply["price"] == "27.48" and reply["url"] == URL and reply["seen_at"] == LIVE.isoformat()
     tool = client.sent[0]["tools"][0]
     assert tool == {"type": "web_search_20250305", "name": "web_search", "max_uses": 2,
                     "allowed_domains": ["amazon.com"]}
     with connect() as conn:
         o = row(conn)
-    assert (o.store, o.units_per_pack, o.expected_cents, o.url) == ("Amazon", 24, None, URL)
-    assert o.checked_by == price_search.AGENT_BY and o.checked_at == LIVE
+    assert (o.store, o.units_per_pack, o.expected_cents, o.url) == ("Amazon", 24, 2748, URL)
+    assert o.checked_by == price_search.AGENT_BY and o.checked_at == LIVE and not o.is_stale(LIVE)
     assert o.max_cents == price_search.agent_max(2748) == 3435          # exactly the price + 25%
-    assert URL in o.note and "unchecked" in o.note and "27.48" in o.note
+    assert URL in o.note and "unchecked" not in o.note and "candidate" not in o.note
+
+
+def test_a_first_price_past_the_per_pack_or_per_unit_limit_is_refused(connect):
+    for price in ("240.01", "201.00"):          # $10.00 a unit for 24, and over $200 a pack
+        client = Client(searched(report=found(price=price)))
+        reply, failed = lookup(searcher(connect, client))
+        assert failed and reply["refused"] == "implausible_price"
+    with connect() as conn:
+        assert row(conn) is None
 
 
 def test_spend_is_recorded_with_the_searches_in_model_calls_and_the_ledger(connect):
@@ -572,3 +582,234 @@ def test_a_hand_edited_setting_is_held_to_the_hard_limits(connect):
     lookup(s, store="Walmart")
     reply, failed = lookup(s, store="Costco")
     assert failed and reply["refused"] == "search_cap" and len(client.sent) == 2
+
+
+# --- Round 2 (#237): stock, store fallback and the command for the day-one fill ------------
+
+# Stock (gap 3): stored with the row; an out-of-stock pack is never a usable price.
+
+@pytest.mark.parametrize("stock", ["in_stock", "unknown"])
+def test_the_stock_the_page_shows_is_stored_with_the_price(connect, stock):
+    client = Client(searched(report=found(stock=stock)))
+    reply, failed = lookup(searcher(connect, client))
+    assert not failed and reply["stock"] == stock and reply["checked"] is True
+    with connect() as conn:
+        assert (row(conn).stock, row(conn).expected_cents) == (stock, 2748)
+    assert price_search.REPORT_TOOL["input_schema"]["properties"]["stock"]["enum"] == \
+        ["in_stock", "out_of_stock", "unknown"]
+    assert "stock" in price_search.REPORT_TOOL["input_schema"]["required"]
+
+
+def test_an_out_of_stock_pack_stores_no_price(connect):
+    client = Client(searched(report=found(stock="out_of_stock")))
+    reply, failed = lookup(searcher(connect, client))
+    assert failed and reply["refused"] == "out_of_stock"
+    with connect() as conn:
+        assert row(conn) is None
+        set_row(conn, checked=LIVE - timedelta(days=10), price=2599, most=3000)
+    reply, failed = lookup(searcher(connect, Client(searched(report=found(stock="out_of_stock")))))
+    assert failed and reply["refused"] == "out_of_stock"
+    with connect() as conn:
+        assert (row(conn).expected_cents, row(conn).checked_by, row(conn).stock) == (2599, "Kevin", None)
+
+
+def test_the_database_refuses_an_out_of_stock_row_with_a_price(connect):
+    with connect() as conn:
+        set_row(conn, checked=LIVE - timedelta(days=1))
+        with pytest.raises(psycopg.errors.CheckViolation):
+            conn.execute("update sourcing_options set stock = 'out_of_stock' where sku = %s", (SKU,))
+        conn.execute("update sourcing_options set stock = 'unknown' where sku = %s", (SKU,))
+
+
+def test_a_persons_row_or_a_receipt_has_no_stock_recorded(connect):
+    with connect() as conn:
+        set_row(conn, checked=LIVE - timedelta(days=10))
+    lookup(searcher(connect, Client(searched())))
+    with connect() as conn:
+        o = row(conn)
+        assert o.stock == "in_stock"
+        after = sourcing.set_price(conn, o, 2700, LIVE, sourcing.RECEIPT_BY, "paid on a receipt", by="receipt",
+                                   now=LIVE)
+        assert after.stock is None and row(conn).stock is None
+
+
+# The command (gap 1) and the other stores (gap 4). Each run is one `Harness`: its run cap is the invocation's cap.
+
+def command(connect, client, *argv, when=LIVE):
+    return price_search.main(list(argv), client=client, connect=connect, now=lambda: when)
+
+
+def failing(store):
+    """A search at `store` that finds no listing."""
+    return searched(urls=(PAGES[store],), report={"found": False, "price": "", "units_per_pack": 0,
+                                                  "pack_description": "", "url": "", "stock": "unknown",
+                                                  "note": "no listing"})
+
+
+def test_the_command_tries_the_next_store_in_a_fixed_order_and_says_which_gave_the_price(connect, capsys):
+    client = Client(failing("Amazon"), at_store("Walmart"))
+    assert command(connect, client, SKU, "--store", "Amazon", "--pack", "24", "--by", "Kevin") == 0
+    assert [b["tools"][0]["allowed_domains"] for b in client.sent] == [["amazon.com"], ["walmart.com"]]
+    out = capsys.readouterr().out
+    assert "Amazon: not_found" in out and "price from Walmart" in out
+    with connect() as conn:
+        assert (row(conn).store, row(conn).expected_cents, row(conn).checked_by) == ("Walmart", 2748,
+                                                                                    price_search.AGENT_BY)
+
+
+def test_the_order_starts_at_the_store_asked_for_then_follows_the_fixed_list(connect, capsys):
+    client = Client(*(failing(s) for s in ("Costco", "Amazon", "Walmart", "BJs")))
+    assert command(connect, client, SKU, "--store", "Costco", "--pack", "24", "--by", "Kevin") == 1
+    assert [b["tools"][0]["allowed_domains"][0] for b in client.sent] == \
+        ["costco.com", "amazon.com", "walmart.com", "bjs.com"]
+    assert price_search.STORE_ORDER == ("Amazon", "Walmart", "Costco", "BJs")
+    assert set(price_search.STORE_ORDER) == set(price_search.STORE_DOMAINS)
+
+
+def test_an_out_of_stock_store_falls_back_to_the_next(connect, capsys):
+    client = Client(searched(report=found(stock="out_of_stock")), at_store("Walmart", report={"stock": "unknown"}))
+    assert command(connect, client, SKU, "--store", "Amazon", "--pack", "24", "--by", "Kevin") == 0
+    with connect() as conn:
+        assert (row(conn).store, row(conn).stock) == ("Walmart", "unknown")
+    assert "Amazon: out_of_stock" in capsys.readouterr().out
+
+
+def test_no_fallback_tries_only_the_store_asked_for(connect, capsys):
+    client = Client(failing("Amazon"), at_store("Walmart"))
+    assert command(connect, client, SKU, "--store", "Amazon", "--pack", "24", "--by", "Kevin",
+                   "--no-fallback") == 1
+    assert len(client.sent) == 1
+
+
+def test_a_cap_or_the_halt_switch_stops_the_fallback(connect, capsys):
+    with connect() as conn:
+        config.set_halted(conn, True, "test")
+    client = Client(failing("Amazon"))
+    assert command(connect, client, SKU, "--store", "Amazon", "--pack", "24", "--by", "Kevin") == 1
+    assert client.sent == [] and "halted" in capsys.readouterr().out
+    with connect() as conn:
+        config.set_halted(conn, False, "test")
+    client = Client(failing("Amazon"), at_store("Walmart"))
+    assert command(connect, client, SKU, "--store", "Amazon", "--pack", "24", "--by", "Kevin",
+                   "--max-usd", "0.10") == 1                # less than one lookup's worst case
+    assert client.sent == [] and "search_cap" in capsys.readouterr().out
+
+
+def test_before_the_start_the_command_runs_as_dev_spend_outside_the_ledger(connect, capsys):
+    client = Client(searched())
+    assert command(connect, client, SKU, "--store", "Amazon", "--pack", "24", "--by", "Kevin", when=BEFORE) == 0
+    with connect() as conn:
+        purpose, label, by = conn.execute('select purpose, label, recorded_by from model_calls').fetchone()
+        entries = conn.execute("select count(*) from ledger_entries where kind = 'tokens'").fetchone()[0]
+        logged = conn.execute("select arguments ->> 'by' from action_log where tool = %s",
+                              (price_search.TOOL_NAME,)).fetchall()
+    assert purpose == "test" and entries == 0 and by == "Kevin" and logged == [("Kevin",)]
+    assert label == f"{price_search.CLI_LABEL} {SKU} Amazon"
+    assert not label.startswith(price_search.LABEL + " ")      # outside the live agent's $1 a day
+    with connect() as conn:
+        assert (row(conn).expected_cents, row(conn).checked_at) == (2748, BEFORE)
+    # The live agent still gets no lookups before the start.
+    reply, failed = lookup(searcher(connect, Client(), when=BEFORE), store="Walmart")
+    assert failed and reply["refused"] == "not_live"
+
+
+def test_the_command_prints_each_lookups_cost_and_the_total(connect, capsys):
+    client = Client(failing("Amazon"), at_store("Walmart"))
+    command(connect, client, SKU, "--store", "Amazon", "--pack", "24", "--by", "Kevin")
+    out = capsys.readouterr().out
+    assert out.count("$0.1480") >= 2 and "Model spend this run: $0.2960 of the $5.00 cap" in out
+
+
+@pytest.mark.parametrize("argv", [
+    ("--max-usd", "10.01"),          # above the hard per-invocation cap
+    ("--max-usd", "0"),
+    ("--by", "agent-search"),        # a person's name, not the agent's or a receipt's
+    ("--by", "receipt"),
+])
+def test_the_command_refuses_a_cap_past_its_hard_limit_or_a_borrowed_name(connect, capsys, argv):
+    client = Client(searched())
+    base = [SKU, "--store", "Amazon", "--pack", "24", "--by", "Kevin"]
+    assert command(connect, client, *base, *argv) == 2 and client.sent == []
+    assert price_search.HARD_CLI_CAP_CENTS == 1000 and price_search.DEFAULT_CLI_CAP_CENTS == 500
+
+
+# The picked plan's drinks, for the day-one fill (#234).
+
+def picked_plan(conn):
+    from psycopg.types.json import Jsonb
+
+    from tests.conftest import TEST_SLOTS
+    from tests.test_fill import PROJECTION, plan_json
+
+    for sku, name in (("COKE20", "Coca-Cola"), ("PICKLE", "Pickle Potion")):
+        conn.execute("insert into catalog_products (sku, name, size, last_response) values (%s, %s, null, '{}')",
+                     (sku, name))
+    conn.execute("insert into first_fill_plans (loaded_by, label, source_note, plan, projection, slots, picked)"
+                 " values ('Test Loader', '7b', 'round7b/plan.json', %s, %s, %s, true)",
+                 (Jsonb(plan_json()), Jsonb(PROJECTION), list(TEST_SLOTS)))
+
+
+PICKLE_URL = "https://www.amazon.com/Pickle-Potion/dp/B000PICKLE"
+
+
+def test_plan_mode_looks_up_each_drink_the_fill_would_refuse(connect, capsys):
+    with connect() as conn:
+        picked_plan(conn)
+        sourcing.set_option(conn, sourcing.Option(          # stale since 15 Nov: the fill would refuse it
+            sku="PICKLE", rank="primary", store="Amazon", units_per_pack=24, expected_cents=1800, max_cents=2100,
+            url=PICKLE_URL, pack_description=None, checked_at=BEFORE - timedelta(days=17), checked_by="Kevin"),
+            now=BEFORE)
+    assert command(connect, Client(), "--plan", "picked", "--by", "Kevin", "--dry-run", when=BEFORE) == 0
+    out = capsys.readouterr().out
+    assert "COKE20: Amazon, 12 a pack (no sourcing row)" in out
+    assert "PICKLE: Amazon, 24 a pack (primary checked 2026-11-15, stale)" in out
+    client = Client(at_store("Amazon", report={"pack": 12, "price": "12.37"}),
+                    searched(urls=(PICKLE_URL,), report=found(url=PICKLE_URL, price="18.49")))
+    assert command(connect, client, "--plan", "picked", "--by", "Kevin", when=BEFORE) == 0
+    assert [b["messages"][0]["content"].split("catalog SKU ")[1].split(".")[0] for b in client.sent] == \
+        ["COKE20", "PICKLE"]
+    with connect() as conn:
+        coke, pickle = sourcing._row(conn, "COKE20", "primary"), sourcing._row(conn, "PICKLE", "primary")
+    assert (coke.expected_cents, coke.units_per_pack, coke.checked_at) == (1237, 12, BEFORE)
+    assert (pickle.expected_cents, pickle.max_cents, pickle.checked_at) == (1849, 2100, BEFORE)
+    again = Client()
+    assert command(connect, again, "--plan", "picked", "--by", "Kevin", when=BEFORE) == 0
+    assert again.sent == [] and "Every drink in the picked plan has a fresh checked price" in capsys.readouterr().out
+
+
+def test_plan_mode_looks_up_a_stale_alternate_too(connect, capsys):
+    with connect() as conn:
+        picked_plan(conn)
+        for sku, url in (("COKE20", None), ("PICKLE", PICKLE_URL)):
+            sourcing.set_option(conn, sourcing.Option(
+                sku=sku, rank="primary", store="Costco" if url is None else "Amazon",
+                units_per_pack=12 if url is None else 24, expected_cents=1237 if url is None else 1800,
+                max_cents=2100, url=url, pack_description=None, checked_at=BEFORE, checked_by="Kevin"), now=BEFORE)
+        sourcing.set_option(conn, sourcing.Option(
+            sku="COKE20", rank="alternate", store="Walmart", units_per_pack=12, expected_cents=None, max_cents=1500,
+            url=None, pack_description=None, checked_at=BEFORE, checked_by="Kevin"), now=BEFORE)
+    assert command(connect, Client(), "--plan", "picked", "--by", "Kevin", "--dry-run", when=BEFORE) == 0
+    out = capsys.readouterr().out
+    assert "COKE20: Walmart, 12 a pack (alternate has no checked price)" in out and "PICKLE" not in out
+
+
+def test_plan_mode_needs_a_picked_plan(connect, capsys):
+    assert command(connect, Client(), "--plan", "picked", "--by", "Kevin", when=BEFORE) == 1
+    assert "No first-fill plan is picked" in capsys.readouterr().err
+
+
+def test_plan_mode_names_what_the_fill_would_still_refuse(connect, capsys):
+    # The stale Amazon primary's search finds another listing: it is stored as the alternate, and the primary
+    # stays stale, so the command says so and exits 1 rather than look done.
+    with connect() as conn:
+        picked_plan(conn)
+        for sku, units, url in (("COKE20", 12, None), ("PICKLE", 24, PICKLE_URL)):
+            sourcing.set_option(conn, sourcing.Option(
+                sku=sku, rank="primary", store="Costco" if url is None else "Amazon", units_per_pack=units,
+                expected_cents=1800, max_cents=2100, url=url, pack_description=None,
+                checked_at=BEFORE - timedelta(days=(0 if url is None else 17)), checked_by="Kevin"), now=BEFORE)
+    client = Client(searched(report=found(price="18.49")))
+    assert command(connect, client, "--plan", "picked", "--by", "Kevin", when=BEFORE) == 1
+    out = capsys.readouterr().out
+    assert "PICKLE: price from Amazon: added alternate" in out
+    assert "The fill would still refuse:" in out and "PICKLE: Amazon, 24 a pack (primary checked 2026-11-15" in out
