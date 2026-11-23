@@ -128,7 +128,7 @@ To number in `docs/assumptions.md` (open PRs use A16-A19: #69 A16, #99 A17-A18, 
 - **Swap first at a slow-seller flag** (Proposed by Kevin, 12 Nov): at most one price step down, then swap; pulled units to the closet at cost. Depends on A5, end stock valued at cost (#102, P2). See `docs/restock-policy.md` rule 3.
 - **Does the door counter stay in the polls after 3 Dec?** Yes (David, 17 Nov), and from 3 Dec the polls carry the full, raw DEX response. Readers must filter to our slots for every poll taken from the fall cut on (`FALL_CUTOFF`, 18 Nov when unset; `docs/integrity.md`).
 - **Day-one deadline:** catalog approvals by Wed 25 Nov, the fill request by 23:59 Sun 29 Nov, stocking Mon 30 Nov (David, 17 Nov).
-- **Opening day:** David's 20 Nov email says both "not until 3 Dec" and "1 or 2 Dec". We plan for 3 Dec until he answers (A24, `planning/2026-11-20-david-update.md`).
+- **Opening day:** Thu 3 Dec, 00:00 ET (settled, A24). David's 20 Nov email says the machine won't operate until 3 Dec; its "1 or 2 Dec" is when stocking is finished (`planning/2026-11-20-david-update.md`).
 
 ## Sources
 

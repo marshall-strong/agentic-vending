@@ -246,8 +246,8 @@ or a misconfigured bridge can't hand us an assignment outside our team.
 **The lock.** The assignment is fixed from the start. The lock time is the setting `SLOTS_LOCK_AT`,
 an ISO 8601 time with its offset; unset, it is `2026-12-03T00:00:00-05:00` (midnight Eastern,
 Thu 3 Dec, the first day of Winter Quarter on the Institute's calendar and the start David gave on
-12 Nov). If the instructors move the start (David's 20 Nov email names 1 or 2 Dec as well as 3 Dec;
-assumption A24), set it on the Container App, for example `2026-12-02T00:00:00-05:00`. Times are taken from the database clock, not the host's.
+12 Nov; settled, assumption A24). To move the lock, set it on the Container App, for example
+`2026-12-02T00:00:00-05:00`. Times are taken from the database clock, not the host's.
 Each process reads these settings itself: when you run `record` or `confirm` from a laptop, set the
 same `SLOTS_LOCK_AT` and `SLOTS_TEAM` as the Container App. Every `record`, `check` and `confirm`
 prints the lock and team it used, so a difference shows.
