@@ -37,6 +37,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from datetime import datetime, timezone
 from http import HTTPStatus
 from typing import Any, NamedTuple
@@ -219,7 +220,7 @@ class Bridge:
         """
         return json.loads(self._once("POST", path, body, keep_body=True, redirects=False))
 
-    def post_answer(self, path: str, body: dict) -> PostAnswer:
+    def post_answer(self, path: str, body: dict, *, ready: Callable[[], None] | None = None) -> PostAnswer:
         """A purchase POST, once, never retried, never redirected: whatever HTTP answer came back, whole.
 
         Raises `BridgeUnreachable` only when connecting failed (the name didn't resolve, the connection was
@@ -232,6 +233,10 @@ class Bridge:
         Every other answer, a `3xx`, `4xx` or `5xx` included, comes back as a `PostAnswer`; `submit_desired_state`
         settles a request only on the documented `201`.
 
+        `ready`, if given, runs once the connection is open and before any byte of the request is written: the
+        submit tool's last checks, with the clock read at that moment, so a slow connect can't carry a send past a
+        cutoff. Whatever it raises closes the connection and goes up unchanged: nothing was sent.
+
         It uses `http.client` directly, not urllib, so no redirect is followed and connecting is its own step.
         It honors `http_proxy`, `https_proxy` and `no_proxy` as urllib does for the rest of this client
         (`_route`): on Azure the bridge is reachable only through Tailscale's proxy (`docker/entrypoint.sh`).
@@ -239,12 +244,13 @@ class Bridge:
         response, data = self._exchange(
             "POST", path, json.dumps(body).encode(),
             {"Content-Type": "application/json", "Accept": "application/json", "Accept-Encoding": "identity"},
-            deadline=PURCHASE_DEADLINE_SECONDS, cap=PURCHASE_ANSWER_BYTES, strict=True)
+            deadline=PURCHASE_DEADLINE_SECONDS, cap=PURCHASE_ANSWER_BYTES, strict=True, ready=ready)
         parsed, problem = _framing(response, data) or _strict_json(response, data)
         return PostAnswer(response.status, parsed, problem, _printable(data[:PURCHASE_TEXT_CHARS]))
 
     def _exchange(self, method: str, path: str, body: bytes | None, headers: dict[str, str], *,
-                  deadline: float, cap: int, strict: bool = False) -> tuple[http.client.HTTPResponse, bytes]:
+                  deadline: float, cap: int, strict: bool = False,
+                  ready: Callable[[], None] | None = None) -> tuple[http.client.HTTPResponse, bytes]:
         """One request, never retried or redirected, and its whole answer within `deadline` seconds and `cap`
         bytes: (the response, its body). Raises as `post_answer` says; `strict` reads a chunked body with
         exact framing (`_StrictResponse`). A message never quotes the answer."""
@@ -264,6 +270,13 @@ class Bridge:
         # Kept for the deadline: an answer with `Connection: close` makes `getresponse` drop `conn.sock` while
         # the response goes on reading from the same socket, so `conn.sock` can't be what the deadline shuts.
         sock = conn.sock
+        if ready is not None:
+            try:
+                ready()             # connected, nothing written: the caller's last word before the request goes
+            except BaseException:
+                conn.close()
+                sock.close()
+                raise
         expired = threading.Event()
 
         def cut() -> None:            # the deadline: end the exchange wherever it is, writing or reading
