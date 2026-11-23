@@ -131,7 +131,6 @@ TOOL = "fill.submit"
 EASTERN = ZoneInfo("America/New_York")
 # Staff buy and stock the fill on Mon 30 Nov (David, 20 Nov), as the Key dates panel lists it.
 DAY_ONE_VISIT = key_dates.STOCKING.day
-FRIDAY = 4
 # Codes this command adds to the planner's.
 PLAN_ASSIGNMENT = "plan_assignment"
 NO_CHECKED_PRICE = "no_checked_price"
@@ -441,8 +440,7 @@ def day_one_warnings(plan: planner.Plan, now: datetime, visit: date = DAY_ONE_VI
             cutoff = cutoffs.get(option.store) if option else None
             if cutoff is None:
                 continue
-            day = visit - timedelta(days=(FRIDAY - cutoff.weekday) % 7)
-            deadline = datetime.combine(day, cutoff.at, EASTERN) + timedelta(seconds=59)
+            deadline = planner.cutoff_deadline(visit, cutoff, EASTERN)
             if now > deadline:
                 late.setdefault((option.store, deadline), []).extend(stocked)
     return [f"past the {store} cutoff for the {visit:%a %d %b} stocking ({deadline:%a %d %b %H:%M} ET) for slots "

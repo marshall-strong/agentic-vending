@@ -165,7 +165,8 @@ Anthropic's web search tool, and records what it found here. The agent's topic i
 
 - **When.** Only before a restock, for a drink in its plan with no checked price or one older than
   7 days. A lookup for a price still fresh at that store is refused (`fresh_price`) before
-  anything is spent.
+  anything is spent. The agent's tool prices one store a call; comparing every store is the
+  command's (next section).
 - **Where.** Only Amazon, BJs, Costco and Walmart, the stores the purchase API accepts. The search
   is limited (`allowed_domains`) to that store's own site: `amazon.com`, `bjs.com`, `costco.com`
   or `walmart.com`. So it can't read the other team's dashboard or repo, the Interloper or any
@@ -174,8 +175,10 @@ Anthropic's web search tool, and records what it found here. The agent's topic i
   search returned (only the case of the scheme and host and a trailing slash may differ), and the
   stored link is the search result's, not the model's text. It must be on the store's own domain
   or its `www.` host, with no port, and be the store's product page: Amazon `/dp/ASIN` or
-  `/gp/product/ASIN`, Walmart `/ip/...`, Costco `....product.....html`, BJs `/product/...`. The
-  pack must be the one asked for, the price at most $200 a pack and $10 a unit, and the price per
+  `/gp/product/ASIN`. Amazon's `us.amazon.com` and `smile.amazon.com` count as its own site, and
+  such a link is stored on `www.amazon.com` with the same ASIN. Walmart `/ip/...`, Costco
+  `....product.....html`, BJs `/product/...`. The pack must be the one asked for (with
+  `--compare`, one the slots can use), the price at most $200 a pack and $10 a unit, and the price per
   unit within half and twice the price the table already has for the drink (the row it refreshes,
   else the primary, else the alternate). A pack the page or search result says is out of stock is
   not stored (`out_of_stock`). A refusal tells the agent only a code and a fixed message
@@ -222,29 +225,64 @@ URL)`, and the dashboard's Pricing panel labels its cost **expected · agent**. 
 Nobody needs to check a price by hand. This runs the agent's lookup for you:
 
 ```
-python -m vending.price_search --plan picked --by NAME --dry-run   # list what the fill would refuse
-python -m vending.price_search --plan picked --by NAME             # look them all up
-python -m vending.price_search SKU --store Amazon --pack 24 --by NAME
+python -m vending.price_search --plan picked --by NAME --dry-run          # list what it would compare
+python -m vending.price_search --plan picked --by NAME                    # compare every store, keep the cheapest
+python -m vending.price_search --plan picked --max-age 24 --by NAME       # the same, re-pricing anything over 24 hours old
+python -m vending.price_search --plan ours --max-age 24 --by NAME         # also the drinks in our slots now (weekly)
+python -m vending.price_search SKU --pack 24 --compare --by NAME          # one drink, every store
+python -m vending.price_search SKU --store Amazon --pack 24 --by NAME     # one drink, one store at a time
 ```
 
-- **`--plan picked`** takes each drink in the picked plan that the day-one fill would refuse: no
-  sourcing row (tried at Amazon, in the plan's pack size), or a primary or alternate with no checked
-  price or one older than 7 days (tried at that row's store and pack). Run it against the **team**
-  database within the week before the fill, so the prices are still fresh when it goes. Afterwards
-  it lists anything the fill would still refuse and exits 1: for example a stale Amazon primary
-  whose search found another listing, which is stored as the alternate and leaves the primary stale.
-- **Other stores.** If the store tried gives no usable price (no listing, blocked, no product page,
-  another pack, out of stock), it tries the others in a fixed order, Amazon, Walmart, Costco, BJs,
-  for the same pack. Each line says which store gave the price. `--no-fallback` tries one store.
-- **Stored** exactly as the agent's lookups are: same checks, same rows, `checked_by`
-  `agent-search`, the note naming you, the halt switch and `action_log`.
-- **Cost.** Each run has a hard cap, `--max-usd` (default $5.00, at most $10.00): a lookup whose
-  worst case doesn't fit is refused before anything is sent, and the rest stop. The command prints
-  each lookup's cost and the run's total. Before the start this is dev spend on the team key
-  (`model_calls`, purpose `test`, under `model_test_daily_cap_cents`), not the ledger; from the
-  start it is live spend in the ledger. It doesn't use the agent's $1.00 a day. A two-search
-  lookup's worst case is about $0.41 on Opus; what one really costs hasn't been measured, since no
-  paid lookup has run yet. The first runs will show it.
+- **Order at the lowest price (`--compare`, the default with `--plan`).** For each drink it prices
+  every approved store and keeps the cheapest usable pack **per unit** as the primary and the next
+  best as the alternate (Kevin, 23 Nov). With only one usable price the alternate is removed.
+  Usable means:
+  - a pack the slots can use: the units one fill loads into all the drink's slots, bought in at most
+    20 packs on one line (`planner.pack_usable`). Extras go to the closet at cost (A5), so a bigger
+    pack is fine. The search asks for the lowest price per unit among those packs, so the stores'
+    different pack sizes are compared;
+  - not out of stock;
+  - from a store whose cutoff for the next stocking hasn't passed (the fill's rule,
+    `planner.cutoff_deadline`: Amazon Wednesday 23:59 and in-store Thursday 23:59 for a Friday visit,
+    the same lead time for another day). **For the Mon 30 Nov stocking that is Amazon Sat 28 Nov 23:59
+    and in-store Sun 29 Nov 23:59, so a compare run on Sunday can't pick Amazon.** A store past its
+    cutoff isn't searched;
+  - every check the one-store lookup makes (below and in the previous section).
+
+  Ties go to the pack the page says is in stock, then the order Amazon, Walmart, Costco, BJs. A
+  store with a row still fresh (see `--max-age`) is compared from the table, not searched again. A
+  person's fresh row can lose to a cheaper find; `action_log` keeps what it replaced. The pack may
+  differ from the pick's, so the fill lists it (`pick_deviation`), and the submit needs
+  `--accept-deviations`.
+- **Which drinks.** `--plan picked`: each drink in the picked plan whose rows the fill would refuse (no
+  row, or a primary or alternate with no checked price or one older than 7 days), plus, with
+  `--max-age HOURS`, any with a row checked longer ago than that. `--plan ours` adds the drinks in our
+  slots now, from our receipts (`price_search.current_drinks`). The weekly check is
+  `price_search.check_prices(by=..., max_age_hours=N)`, the same as `--plan ours --max-age N`.
+  Afterwards the command lists anything the fill would still refuse and exits 1.
+- **`--first-usable`** keeps the old way for `--plan picked`: one store at a time, in the row's pack
+  size, the next store only when one fails (Amazon, Walmart, Costco, BJs), and the first usable price
+  is stored. `--no-fallback` tries one store.
+- **The model.** The setting `price_search_model` (`python -m vending.config set price_search_model
+  '"claude-haiku-5-5"' --by NAME`) picks the model for the agent's tool and the command; it must be a
+  model `vending/model_prices.json` prices. Unset, it is the agent's model. `--model` overrides it for
+  one run.
+- **A benchmark (`--no-store`).** `--compare --no-store --json FILE` searches every store for every
+  drink (fresh rows and cutoffs aside), works out which would win, and saves what each store gave:
+  price, pack, stock, link, refusal code and cost. Nothing is written to the sourcing table. Its
+  spend is test spend (`model_calls`, label `price_search_bench`, under `model_test_daily_cap_cents`),
+  even after the start. `python scripts/compare_price_runs.py a.json b.json [c.json]` lines up two or
+  three runs: same listing, same price, the winner and the cost per drink.
+- **Stored** exactly as the agent's lookups are: same checks, `checked_by` `agent-search`, the note
+  naming you, the halt switch and `action_log`.
+- **Cost.** Each run has a hard cap, `--max-usd` (default $5.00, at most $10.00), and at most 160
+  searches: a lookup whose worst case doesn't fit is refused before anything is sent, and the rest
+  stop. The command prints each lookup's cost, each drink's and the run's total. Before the start
+  this is dev spend on the team key (`model_calls`, purpose `test`, under
+  `model_test_daily_cap_cents`), not the ledger; from the start it is live spend in the ledger. It
+  doesn't use the agent's $1.00 a day. A two-search lookup's worst case is about $0.42 on Opus,
+  $0.22 on Sonnet and $0.03 on Haiku, so comparing four stores reserves up to about $1.68, $0.88 and
+  $0.12 a drink. The first real run (23 Nov, Opus) billed about $0.10 a lookup.
 - It needs `VENDING_ANTHROPIC_API_KEY`. `--dry-run` needs no key and spends nothing.
 
 ## What reads it
