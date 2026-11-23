@@ -1345,3 +1345,52 @@ def test_a_dry_run_never_checks_the_bridge(connect, conn):
     bridge = Lookup({"pr-lost": LOST})
     go(connect, Script(answer("skip")), Tools(), bridge=bridge)
     assert bridge.asked == []
+
+
+# --- The price lookup (#202 part 2) ---------------------------------------------------
+
+AFTER_START = datetime(2026, 12, 4, 15, 0, tzinfo=timezone.utc)     # Friday 10:00 Eastern
+
+
+@pytest.fixture
+def fake_lookups(monkeypatch):
+    """`price_search.PriceSearch` replaced: records what it was built with and asked, and answers each lookup."""
+    from vending import price_search
+
+    seen = []
+
+    class Fake:
+        def __init__(self, harness, connect, *, model, now=None):
+            seen.append(("built", model, harness is not None))
+
+        def lookup(self, arguments):
+            seen.append(("lookup", arguments))
+            return json.dumps({"recorded": "added primary", "price": "27.48"}), False
+
+    monkeypatch.setattr(price_search, "PriceSearch", Fake)
+    return seen
+
+
+def test_a_live_run_from_the_start_looks_up_prices_in_the_agent_not_the_server(connect, conn, fake_lookups):
+    client = Script(tool_turn(use("find_pack_price", {"sku": "DRPEPPER-20BOT", "store": "Amazon"})), answer())
+    tools = Tools(LIVE_TOOLS)
+    run_id, out = anyio.run(lambda: agent.run(live=True, connect=connect, client=client, now=lambda: AFTER_START,
+                                              open_tools=tools.opener()))
+    assert "find_pack_price" in [t["name"] for t in client.sent[0]["tools"]]
+    assert fake_lookups == [("built", agent.DEFAULT_MODEL, True),
+                            ("lookup", {"sku": "DRPEPPER-20BOT", "store": "Amazon"})]
+    assert "find_pack_price" not in [name for name, _ in tools.calls]      # never sent to the MCP server
+    result = client.sent[1]["messages"][-1]["content"][0]
+    assert result["tool_use_id"] == "t1" and "added primary" in result["content"] and not result["is_error"]
+    assert out.status == "skipped"
+
+
+@pytest.mark.parametrize("live, when", [(False, AFTER_START), (True, NOW)])
+def test_a_dry_run_or_a_run_before_the_start_gets_no_price_lookup(connect, conn, fake_lookups, live, when):
+    client = Script(tool_turn(use("find_pack_price", {"sku": "DRPEPPER-20BOT", "store": "Amazon"})), answer())
+    tools = Tools(LIVE_TOOLS)
+    anyio.run(lambda: agent.run(live=live, connect=connect, client=client, now=lambda: when,
+                                open_tools=tools.opener()))
+    assert "find_pack_price" not in [t["name"] for t in client.sent[0]["tools"]]
+    assert fake_lookups == []
+    assert "There is no tool called find_pack_price" in client.sent[1]["messages"][-1]["content"][0]["content"]

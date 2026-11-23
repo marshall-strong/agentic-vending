@@ -71,7 +71,11 @@ repo root points here.
   (`vending/slots.py`). `get_sales_history` refuses any other slot ("Not our slots: ...").
 - **The agent has no web-fetch tool.** It can't browse to another team's dashboard.
   `tests/test_server.py::test_tool_list_is_pinned` pins the MCP server's tool names, so
-  adding a tool (a web fetcher, say) is a deliberate change that shows up in review.
+  adding a tool (a web fetcher, say) is a deliberate change that shows up in review. Its one
+  web search, `find_pack_price` (from the start, live runs only, `vending/price_search.py`), is
+  limited by `allowed_domains` to the four stores' own sites, and the code refuses any page off
+  them, so it can't reach the other team's pages or the Interloper. The harness refuses any
+  other search or fetch tool (`vending/harness.py`).
 - **Our stock count reads only our machine's counters.** `vending/stock.py` reads poll
   counters only from `DEVICE_ID`, and only for selections in the current server assignment
   that our own receipts name. A historical receipt does not authorize reads after reassignment.

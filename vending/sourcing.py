@@ -9,8 +9,10 @@
 
 The catalog names the products we may order but has no prices or packs, and
 every purchase line needs a store, a pack size, a max price per pack and, for
-Amazon, a link. People look those up and record them here; the agent has no
-tool that browses stores (`docs/planning/tool-list.md`). The planner reads this
+Amazon, a link. People look those up and record them here. From the start
+(3 Dec) the live agent may also look up one pack's price with a capped web
+search on the store's own site (`vending.price_search`), stored with
+`checked_by` `agent-search`. The planner reads this
 table through `table(conn)` when the agent gives no sourcing of its own.
 
 `--price` is what the pack cost when someone looked (`expected`). `--max` is the
@@ -46,6 +48,8 @@ RANKS = ("primary", "alternate")
 STALE_AFTER = timedelta(days=7)
 # `checked_by` on a price taken from a purchase receipt (`vending.receipt_prices`), not seen by a person.
 RECEIPT_BY = "receipt"
+# `checked_by` on a price the live agent found with its capped web search (`vending.price_search`), not a person.
+AGENT_BY = "agent-search"
 # The team's rule of thumb (price list, 11 Nov): max = price + 15%, rounded up to 50 cents.
 DEFAULT_MARKUP = Decimal("1.15")
 MAX_ROUNDING_CENTS = 50
@@ -84,6 +88,11 @@ class Option:
     def from_receipt(self) -> bool:
         """The price is what the worker paid on a receipt (`vending.receipt_prices`), not one a person saw."""
         return self.checked_by == RECEIPT_BY
+
+    @property
+    def from_agent(self) -> bool:
+        """The agent found the price with a web search (`vending.price_search`); `note` names the page."""
+        return self.checked_by == AGENT_BY
 
 
 def cents(text: str, what: str) -> int:
@@ -433,7 +442,8 @@ def _show(conn: psycopg.Connection, now: datetime) -> int:
         per_unit = f", {_money(int(unit.to_integral_value(rounding=ROUND_CEILING)))} a unit" if unit else ""
         age = (now - o.checked_at).days
         stale = "  STALE" if o.is_stale(now) else ""
-        source = f"from {o.note or 'a receipt'}" if o.from_receipt else f"by {o.checked_by}"
+        source = (f"from {o.note or 'a receipt'}" if o.from_receipt
+                  else f"by the agent ({o.note or 'web search'})" if o.from_agent else f"by {o.checked_by}")
         print(f"{o.sku:40} {o.rank:9} {describe(o)}{per_unit}; checked {day(o.checked_at)} "
               f"({age} days ago) {source}{stale}")
         if o.url:
@@ -448,6 +458,8 @@ def _from_fields(f: dict[str, str], by: str, now: datetime) -> Option:
         raise SourcingError("sku is empty")
     if by.strip().lower() == RECEIPT_BY:
         raise SourcingError(f"--by {RECEIPT_BY} is kept for prices taken from receipts; give your name")
+    if by.strip().lower() == AGENT_BY:
+        raise SourcingError(f"--by {AGENT_BY} is kept for prices the agent found itself; give your name")
     try:
         units = int(f.get("units_per_pack", ""))
     except ValueError:

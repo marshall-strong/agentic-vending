@@ -19,3 +19,4 @@ Each topic file starts with a `#` title and then a one-line summary, which must 
 - `directive`: The restock and pricing directive must let a person who has never seen our code load every slot and set every price without asking a question.
 - `competition-and-integrity`: Our slot assignment is private; we may not know which other slots are a rival's; the team has chosen to ignore other slots' prices, though the brief calls them a pricing input.
 - `interloper`: An outside seller's machine beside ours sells nine drinks; never use its prices, and you know only the drinks the team has recorded here.
+- `price-lookup`: From the start, a live run may look up one pack's price with find_pack_price: a capped web search on one store's own site, for a drink with no checked price or a stale one.

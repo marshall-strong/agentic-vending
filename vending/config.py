@@ -146,6 +146,12 @@ KNOWN: dict[str, Setting] = {
                                    "this and the container's AGENT_SCHEDULE_MODE wins (default off)", _schedule_mode),
     "model_test_daily_cap_cents": Setting("most test calls (replays, sweeps) may spend in one Eastern day "
                                           "(default 2000)", lambda v: _whole(v, 1, 60000, "cents")),
+    "price_search_searches_per_run": Setting("web searches one live agent run may make to look up pack prices; "
+                                             "0 turns the lookup off (default 4)",
+                                             lambda v: _whole(v, 0, 20, "searches")),
+    "price_search_daily_cap_cents": Setting("most the agent's price lookups may spend in one Eastern day, searches "
+                                            "and tokens, inside the model caps (default 100)",
+                                            lambda v: _whole(v, 0, 2000, "cents")),
 }
 
 
