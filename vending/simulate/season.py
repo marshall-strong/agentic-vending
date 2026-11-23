@@ -296,7 +296,11 @@ def _spent(conn: psycopg.Connection) -> Decimal:
     return Decimal(conn.execute("select coalesce(sum(cost_usd), 0) from model_calls").fetchone()[0])
 
 
-def _open_tools():
+def _open_tools(context: dict[str, str] | None = None):
+    """The MCP server in process. The run's context (`vending.agent.run_context`: its lease, and a scheduled time)
+    goes into the environment the server reads, as the real server's own process gets it, and comes out after."""
+    import os
+
     from mcp.shared.memory import create_connected_server_and_client_session
 
     import logging
@@ -306,9 +310,18 @@ def _open_tools():
 
     @contextlib.asynccontextmanager
     async def opened():
-        async with create_connected_server_and_client_session(server.mcp) as session:
-            listed = (await session.list_tools()).tools
-            yield listed, session.call_tool
+        saved = {k: os.environ.get(k) for k in context or {}}
+        os.environ.update(context or {})
+        try:
+            async with create_connected_server_and_client_session(server.mcp) as session:
+                listed = (await session.list_tools()).tools
+                yield listed, session.call_tool
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
     return opened()
 
 
