@@ -12,8 +12,9 @@ so the container joins it with Tailscale in userspace mode.
 
 `Dockerfile` builds one image with the package and the Tailscale binaries. Its default command
 is `python -m vending.worker`: every hour, at 5 minutes past (UTC), it runs `python -m vending.sync_history`,
-`python -m vending.sync_requests`, `python -m vending.sync_catalog` and
-`python -m vending.sync_product_requests` (which catalog requests were approved or rejected) and
+`python -m vending.sync_requests`, `python -m vending.sync_catalog`,
+`python -m vending.sync_product_requests` (which catalog requests were approved or rejected),
+`python -m vending.midweek_wake` and
 `python -m vending.tracking_daily` (the day's tracking check, only when turned on: see below),
 each with a 30-minute
 limit (`JOB_TIMEOUT_MINUTES`), and it answers `GET /health` on port 8080 with the last round's
@@ -25,6 +26,15 @@ names the host and user); the errors are in the log, a database error as its cla
 `/health`, so it can't show more. `docker/entrypoint.sh` joins the tailnet first and
 routes plain-http traffic (the bridge) through Tailscale's local proxy; HTTPS (the Anthropic API)
 and Postgres go straight out, which is why `DEX_BASE_URL` must be `http://`.
+
+**Midweek wake-up** (`vending.midweek_wake`, #219). After the syncs, a job runs the team's
+midweek rule (docs/restock-policy.md, section 2) over the stored facts the agent reads: when a slot
+of ours is projected to sell out before this week's Friday restock and a paid midweek visit would
+save more margin than the fee, it records one wake-up row — at most one per Saturday-to-Friday
+week, Eastern, held in the database — names the slots and the arithmetic in its reason, and asks
+for a midweek agent run. `MIDWEEK_WAKE` is off by default; `on` (any case) runs the job, any other
+value or unset leaves it out and the job opens no database connection. The dashboard's Needs
+attention and the briefing show the row, so the run and the visit fee have a why on the record.
 
 **Why 5 minutes past.** The course staff's poller reads the machine on the hour, and the bridge keeps
 every poll. A round at 5 past brings the new poll into our database about 5 minutes after it was
@@ -223,8 +233,8 @@ or a misconfigured bridge can't hand us an assignment outside our team.
 **The lock.** The assignment is fixed from the start. The lock time is the setting `SLOTS_LOCK_AT`,
 an ISO 8601 time with its offset; unset, it is `2026-12-03T00:00:00-05:00` (midnight Eastern,
 Thu 3 Dec, the first day of Winter Quarter on the Institute's calendar and the start David gave on
-12 Nov). If the instructors move the start (David's 20 Nov email names 1 or 2 Dec as well as 3 Dec;
-assumption A24), set it on the Container App, for example `2026-12-02T00:00:00-05:00`. Times are taken from the database clock, not the host's.
+12 Nov; settled, assumption A24). To move the lock, set it on the Container App, for example
+`2026-12-02T00:00:00-05:00`. Times are taken from the database clock, not the host's.
 Each process reads these settings itself: when you run `record` or `confirm` from a laptop, set the
 same `SLOTS_LOCK_AT` and `SLOTS_TEAM` as the Container App. Every `record`, `check` and `confirm`
 prints the lock and team it used, so a difference shows.

@@ -12,7 +12,7 @@ The instructor's 12 Nov answers (PR #106, issue #107):
 
 - Our **day-one order fills all 20 slots to capacity**, paid from the $600 (whether a slot may take fewer units is still asked, #102).
 - The request is due by **23:59 Sun 29 Nov**, and staff buy and stock on **Mon 30 Nov**. Every product on it must be requested and approved in the catalog by **Wed 25 Nov**, or the whole request is denied (David, 17 Nov; `docs/planning/2026-11-17-david-answers.md`).
-- The machine goes live **Thu 3 Dec**. David's 20 Nov email also says 1 or 2 Dec, and that the machine won't operate before 3 Dec; asked (`docs/planning/2026-11-20-david-update.md`). Restocks are **Friday afternoons** (3 PM target, likely later).
+- The machine goes live **Thu 3 Dec**, 00:00 ET (settled, A24). David's 20 Nov email says the machine won't operate before 3 Dec; its "1 or 2 Dec" is when stocking is finished (`docs/planning/2026-11-20-david-update.md`). Restocks are **Friday afternoons** (3 PM target, likely later).
 - The ledger opens **before the fill is fulfilled**, so its receipts count (#104, #106).
 
 This plan owns the Summative 2 money numbers; the restock policy (`docs/restock-policy.md`, #91) and demand doc (`docs/inventory-demand.md`, #93) cite them.
@@ -23,19 +23,22 @@ This plan owns the Summative 2 money numbers; the restock policy (`docs/restock-
 
 | Line | Amount | Basis |
 |---|---|---|
-| Day-one fill, 19 regular slots (most) | **$360.00** | Proposed cap. The example's 19 regular slots at most, $356.50, rounded up; run 1's dry run came to $360 most for 20 (#90) |
-| Wildcard slot | $82.00 | Adopted (#110, item 1). The 20th slot's day-one units, and the cap on one purchase for it (section 2) |
+| Day-one fill, all 20 slots (most) | **$400.00** | Decided (Kevin, 22 Nov, #230; #233). Covers the wildcard slot's day-one units too. The picked plan, round 7b, costs $399.00 most |
 | Midweek visit fees | $50.00 | 2 × $25 (`docs/agent/restocking.md`) |
 | Model spend | $9.00 | 9 run weeks × 1 run × $1.00 run cap (#51) |
 | Product-switch reserve | $68.00 | Proposed. One pack of the dearest listed drink at the worker's maximum (section 2) |
-| Safety margin | $31.00 | Proposed. The residual: $600 − $360 − $82 − $50 − $9 − $68 |
+| Safety margin | $73.00 | The residual: $600 − $400 − $50 − $9 − $68 |
 | **Total** | **$600.00** | |
 
-**Spendable floor: $53.00 (Proposed).** A rule, not a line. After any request, at most-we-pay cost, spendable must still hold one midweek fee ($25.00, config `midweek_fee_cents`) plus one week of model spend at the daily cap (7 × $4.00 = $28.00, config `model_daily_cap_cents`, default 400). Both can leave before a Friday's takings arrive. This plan owns the figure; restock policy rule 4 applies it. The held-back lines contain it: $25 of the fee line, $1.00 of the model line, $27.00 of the margin.
+**Spendable floor: $53.00 (adopted: #188 checks it at preview and submit).** A rule, not a line. After any request, at most-we-pay cost, spendable must still hold one midweek fee ($25.00, config `midweek_fee_cents`) plus one week of model spend at the daily cap (7 × $4.00 = $28.00, config `model_daily_cap_cents`, default 400). Both can leave before a Friday's takings arrive. This plan owns the figure; restock policy rule 4 applies it. The held-back lines contain it: $25 of the fee line, $1.00 of the model line, $27.00 of the margin.
 
-**Headroom.** At expected prices the example's 19 regular slots cost $308.26, $51.74 under the cap. After the fill and the wildcard at their most ($360 + $82) and one live run between the ledger's opening and 3 Dec ($1), $600 − $443 = $157 stays spendable.
+**The wildcard's $82.00 purchase cap still applies** to every later purchase for that slot (section 2). It is a cap on one purchase, not a separate line of the $600: since 22 Nov the slot's day-one units are inside the $400 fill.
 
-**The wildcard slot is adopted** (Kevin's proposal on #100; the team agreed on #110, item 1, 16 Nov). One fixed slot of our 20 tests products for the other 19 (`docs/agent/wildcard.md`). The fill cap covers the 19 regular slots ($360), the wildcard gets its own $82 line, and the safety margin is $31. The planner enforces the $82.00 cap on every purchase for it (`wildcard_purchase_cap_cents`).
+**The picked plan.** Round 7b (`first_fill_plans` id 7, picked 22 Nov): 20 different drinks from 10 brands, no duplicates (#230). Fill: $343.50 expected, $399.00 most. The slot-by-slot plan is on the Day-One Plan Rounds page (`docs/artifacts.md`, `docs/plan-page.md`).
+
+**Headroom.** At expected prices round 7b costs $343.50, $56.50 under the cap. After the fill at its most ($399.00) and one live run between the ledger's opening and 3 Dec ($1), $600 − $400 = $200 stays spendable.
+
+**Why $400 and not $360 + $82.** The earlier split capped the 19 regular slots at $360 and gave the wildcard its own $82 line (#110, item 1). With no duplicates on day one, 20 different drinks cost more than the old example mix, so Kevin raised the cap to $400 for all 20 slots on 22 Nov (#230). The wildcard is still adopted (Kevin's proposal on #100; the team agreed on #110, item 1, 16 Nov): one fixed slot of our 20 tests products for the other 19 (`docs/agent/wildcard.md`). The planner enforces the $82.00 cap on every purchase for it (`wildcard_purchase_cap_cents`).
 
 ## 1. The day-one fill
 
@@ -68,7 +71,7 @@ The other 9 listed drinks cost $6.97 ($20.91 ÷ 24 × 8) to $19.47 ($42.48 ÷ 24
 
 The dearest case leaves $45. Hence the cap.
 
-**Example mix** (a pricing example, not the team's pick). It leans on energy drinks, 45% of our fall units (`analysis/REPORT.md`, finding 14). Slots are grouped so packs divide: three 20 oz slots use 21 of 24; three Celsius slots use two 12-packs exactly. 17 units go to the closet. Celsius Kiwi Guava and the Coca-Cola 12 oz can are "Wanted, not in the catalog yet" on the list, so the example needs 2 catalog requests (`request_catalog_product`), approved by Wed 25 Nov.
+**Example mix** (a pricing example from before the redraw, not the team's pick; the pick is round 7b, above). It leans on energy drinks, 45% of our fall units (`analysis/REPORT.md`, finding 14). Slots are grouped so packs divide: three 20 oz slots use 21 of 24; three Celsius slots use two 12-packs exactly. 17 units go to the closet. Celsius Kiwi Guava and the Coca-Cola 12 oz can are "Wanted, not in the catalog yet" on the list, so the example needs 2 catalog requests (`request_catalog_product`), approved by Wed 25 Nov.
 
 | Drink | Slots | Units | Packs | Expected | Most |
 |---|---|---|---|---|---|
@@ -81,7 +84,7 @@ The dearest case leaves $45. Hence the cap.
 | Coca-Cola 12 oz can | 1 | 8 | 1 × 12 | $7.68 | $9.00 |
 | **Total** | **20** | **163** | **10** | **$315.94** | **$365.50** |
 
-"Most" is the list's maximum per pack. Where none is listed we use its rule, price × 1.15 rounded up to 50 cents (its $54.95 × 1.15 = $63.19 is listed as $63.50): Kiwi Guava $19.98 → $22.98 → $23.00; Coca-Cola can $7.68 → $8.83 → $9.00. In the example the wildcard takes the Coca-Cola can slot ($9.00 most, from the wildcard line), and the other 19 cost $308.26 expected, $356.50 most ($365.50 − $9.00).
+"Most" is the list's maximum per pack. Where none is listed we use its rule, price × 1.15 rounded up to 50 cents (its $54.95 × 1.15 = $63.19 is listed as $63.50): Kiwi Guava $19.98 → $22.98 → $23.00; Coca-Cola can $7.68 → $8.83 → $9.00. In the example, which uses the allocation from before 22 Nov, the wildcard takes the Coca-Cola can slot ($9.00 most, from the old wildcard line; since 22 Nov the wildcard's day-one units are inside the $400 fill), and the other 19 cost $308.26 expected, $356.50 most ($365.50 − $9.00).
 
 **How long it lasts.** Kept stocked, our slots sell 23.3 units a class day (recent) or 22 (whole era) (`analysis/REPORT.md`, finding 4, "Next 4 weeks"); #90's older estimate is 70 a week, 14 a day. So 163 units last 7 (163 ÷ 23.3) to 11.6 (163 ÷ 14) class days.
 
@@ -105,15 +108,15 @@ $3.35 = $1,881.50 ÷ 562, fall takings per unit at staff's prices (`analysis/REP
 
 A slot is flagged after 5 in-stock class days with no sales (PR #100). The first 5 end Wed 9 Dec, so the first switch is Fri 11 Dec, with $58.93 to $98.08 of week-one surplus in hand. So we hold one pack, not two: Mountain Dew Baja Blast 20 oz, the dearest listed pack, $58.80 × 1.15 = $67.62 → $68.00. Reserve plus surplus buys 1.87 to 2.44 packs ((68.00 + 58.93) ÷ 68.00; (68.00 + 98.08) ÷ 68.00). If week one sells less, the second switch waits. Swap-first (Open decision 4) would draw on it sooner.
 
-### Wildcard slot: $82.00 (adopted)
+### Wildcard slot: $82.00 purchase cap (adopted)
 
-The team agreed on #110 (item 1), 16 Nov: one wildcard, 19 regular slots. Adopting it cut the fill cap from $366.00 for 20 slots to $360.00 for 19, added this line, and cut the safety margin from $107.00 to $31.00 ($600 − $360 − $82 − $50 − $9 − $68).
+The team agreed on #110 (item 1), 16 Nov: one wildcard, 19 regular slots. Adopting it first cut the fill cap from $366.00 for 20 slots to $360.00 for 19 and added an $82 line. On 22 Nov the $400 fill cap replaced both (#230): the wildcard's day-one units are in the fill, and the $82 stays as the cap on one purchase for the slot.
 
 **What it is** (Kevin, #100; rules in `docs/agent/wildcard.md`). A testing ground in one fixed slot, set once after the slot redraw (config `wildcard_slot`) and never moved. A product with no sales of ours gets a trial there, priced as a regular slot would be. If it sells at least 4 units over at least 5 in-stock class days, it is copied into a regular slot that sold nothing since the last Friday visit (a silent slot), whose product goes to the closet. The switch happens at a Friday visit, and the wildcard moves on to the next product in the same plan; the planner refuses the promotion otherwise. While a passing trial waits for a silent slot, it stays eligible only while it keeps at least 0.7 units a class day since it began (judged at every Friday after its fifth day, a request filed or not) and has 7 by 10 days; below that it is extended or dropped. Its ceiling is $8.00 (others $6.50, PR #100) for a deliberate price test; same floor as every slot. Aim: every sale profits, no loss leaders, which needs a floor above today's break-even (Open decision 3; Kevin's margin-floor proposal on #100). Purchase cap $82 (below).
 
 **Bound.** No product is picked; the dearest listed unit is Pepsi 20 oz at $2.50 ($29.99 ÷ 12). An $8.00 price allows a unit cost up to $8.00 ÷ 1.08 = $7.407 (`vending/pricing.py` allows fractional cents). The largest column holds 11: 11 × $7.407 = $81.48 → $82.00. (12 oz can column: $59.26; 20 oz: $51.85.)
 
-**The rule.** One wildcard purchase costs at most $82.00 at the worker's maximum. A bigger pack fits only if its unit cost is lower. A higher floor only lowers unit cost, so $82.00 stays the top. The 20th slot's day-one units always come from this line (the fill cap covers 19); what a cheaper choice leaves unspent joins the switch reserve. A later wildcard purchase is paid from takings or that reserve, same cap.
+**The rule.** One wildcard purchase costs at most $82.00 at the worker's maximum. A bigger pack fits only if its unit cost is lower. A higher floor only lowers unit cost, so $82.00 stays the top. The slot's day-one units are part of the $400 fill. A later wildcard purchase is paid from takings or the switch reserve, same cap.
 
 ### Midweek visit fees: $50.00
 
@@ -123,9 +126,9 @@ A non-Friday visit costs $25 (`docs/agent/restocking.md`); we hold 2 (Proposed).
 
 Live calls are charged at real cost from the ledger's opening (`vending/harness.py`, #51, #104). Observed: $0.02 to $0.80 a run (#90); run 2, $0.40 (`docs/sample-directive.md`). Caps are placeholders: $1.00 a run, $4.00 a day (#51). #39 (closed) built the agent loop, but nothing schedules it (#107); we assume one run a week. Every day at the cap would be 63 days (9 × 7) × $4.00 = $252.00, 42% of the $600, so set the daily cap before go-live.
 
-### Safety margin: $31.00 (Proposed)
+### Safety margin: $73.00
 
-$27.00 for one week at the daily cap beyond the planned $1.00 (7 × $4.00 − $1.00), $1.00 for one live run between the ledger's opening and 3 Dec, $3.00 unassigned. (A model call before the opening is development spend and doesn't come out of the $600, #104.) Before the wildcard was adopted the margin was $107.00, with $79.00 unassigned. Price rises up to the maximum (about 15%) are already in the fill cap and pack lines.
+$27.00 for one week at the daily cap beyond the planned $1.00 (7 × $4.00 − $1.00), $1.00 for one live run between the ledger's opening and 3 Dec, $45.00 unassigned. (A model call before the opening is development spend and doesn't come out of the $600, #104.) It was $107.00 under #113's first $366 cap, then $31.00 under $360 + $82. Price rises up to the maximum (about 15%) are already in the fill cap and pack lines.
 
 ### Sales tax: $0 from the capital
 
@@ -153,19 +156,19 @@ To be numbered in `docs/assumptions.md` (open PRs take A16 to A19: #69 A16, #99 
 ## Open decisions
 
 1. **Day-one products and prices** (#107). Fall top sellers Monster, Gorgie and Ghost (`analysis/REPORT.md`) are not on the price list.
-2. **Wildcard slot** (Kevin, #100). Decided on #110 (item 1), 16 Nov: adopted. An $82.00 line and per-purchase cap, taken from the safety margin and the 20th slot's fill (section 2).
+2. **Wildcard slot** (Kevin, #100). Decided on #110 (item 1), 16 Nov: adopted. An $82.00 per-purchase cap; its day-one units are in the $400 fill since 22 Nov (section 2).
 3. **The floor.** Today's breaks even after tax. Kevin proposed (unit cost + $0.25) × 1.08, rounded up to 5 cents, for every slot, with a new setting `min_margin_cents` defaulting to 25 (#100). Not decided.
 4. **Swap first at a slow-seller flag** (Kevin, 12 Nov): at most one price step down, then swap; pulled units to the closet at cost. Depends on A5, end stock valued at cost (confirmed: `docs/planning/2026-10-19-david-api-qa.md` row 16; #102, P2). Reasoning: restock policy rule 3.
-5. **Fill cap.** Proposed: $360.00 most for the 19 regular slots (the example's 19 rounded up).
+5. **Fill cap.** Decided 22 Nov: $400.00 most for all 20 slots (Kevin, #230; #233). Replaces $360 for 19 slots plus the $82 wildcard line.
 6. **Switch reserve.** Proposed: one pack, $68.00 (earlier draft: two, $136.00).
-7. **Safety margin.** Proposed: $31.00, the residual ($28 of it is spendable floor).
-8. **Spendable floor.** Proposed: $53.00 ($25 + 7 × $4.00), replacing an earlier $59.
+7. **Safety margin.** $73.00, the residual ($27 of it is spendable floor).
+8. **Spendable floor.** Adopted: $53.00 ($25 + 7 × $4.00), replacing an earlier $59. #188 checks it at preview and submit.
 9. **Midweek visits held back for.** Proposed: 2 ($50), a risk choice.
 10. **Model caps and run frequency** (#51, #107). A $4.00 daily cap doesn't fit a $9.00 line; lowering it shrinks the floor and margin equally.
 11. **Day-one deadline and ordering method** (#102).
 12. **First regular restock:** answered 17 Nov: a valid request received by 23:59 Thu 3 Dec is filled at the Fri 4 Dec visit.
 
-**Follow-ups after team sign-off.** Point `docs/agent/money.md` here (#90). Add a planner check for the $53 floor. Merge the price list (no PR yet).
+**Follow-ups after team sign-off.** Point `docs/agent/money.md` here (#90). Merge the price list (no PR yet).
 
 ## Sources
 

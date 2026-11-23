@@ -46,9 +46,10 @@ from typing import Any
 
 from vending import capacity, pricing
 
-# Proposed in #113 ("Opening capital plan"), not yet agreed: the day-one fill's most-we-pay cap and the
-# starting money. Shown as reference lines only; nothing here enforces them.
-FILL_CAP_CENTS = 36_600
+# The day-one fill's most-we-pay cap and the starting money. #113 proposed $366 for the cap; Kevin raised it
+# to $400 on 22 Nov (#230) so the variety plan (round 7b) fits. Shown as reference lines only; nothing here
+# enforces them.
+FILL_CAP_CENTS = 40_000
 START_CENTS = 60_000
 CEILING_CENTS = 650           # config.price_ceiling_cents on main (12 Nov decision)
 SCENARIOS = ("low", "base", "high")

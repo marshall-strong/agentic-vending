@@ -332,3 +332,8 @@ def test_an_unsplit_swap_shows_its_estimate_apart_from_profit(conn, page_conn):
     assert (p["cost_of_sales"], p["gross_margin"], p["net"]) == (None, None, None)
     page = money_panel.html(panel)
     assert f"${ledger.money(SWAP_ESTIMATE)}" in page and "(an estimate, not in profit)" in page
+
+
+def test_the_proposed_split_adds_up_to_the_600():
+    # #233 raised the fill line to $400 without cutting the margin, so the split added up to $634.
+    assert sum(cents for _, cents in money_panel.PROPOSED_SPLIT) == 60_000

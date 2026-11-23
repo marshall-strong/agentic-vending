@@ -480,3 +480,74 @@ def test_resume_picks_up_mid_hour_where_the_checkpoint_was_taken(monkeypatch, tm
     assert "probe" in events and again[0] == events
     assert sorted(set(again[1])) == sorted(set(polls)) and len(again[1]) == len(polls)
     assert again[2] == sold and sum(sold.values()) > 0
+
+
+def _check_in_week(conn, *, price_cents, pack_cents, tag):
+    """A full machine of WAKE-SKU at `price_cents`, four slots emptied by Monday and the rest
+    holding 8, with the catalog synced, a sourcing row and the halt switch off, so the wake
+    check has everything it needs but the margin."""
+    import json
+
+    from tests.conftest import TEST_SLOTS, store_poll
+    from tests.test_dashboard import fulfilled
+    from vending import config, sourcing
+
+    empty = TEST_SLOTS[:4]
+    config.set_halted(conn, False, "tester")
+    conn.execute("insert into catalog_products (sku, name, size, last_response)"
+                 " values ('WAKE-SKU', 'Wake Cola', '12 fl oz can', %s)",
+                 (json.dumps({"sku": "WAKE-SKU", "size": "12 fl oz can", "active": True}),))
+    conn.execute("insert into catalog_syncs (synced_at, product_count) values (%s, 1)",
+                 (datetime(2026, 12, 7, 11, tzinfo=EASTERN),))
+    sourcing.set_option(conn, sourcing.Option(
+        sku="WAKE-SKU", rank="primary", store="Walmart", units_per_pack=6,
+        expected_cents=pack_cents, max_cents=pack_cents, url=None, pack_description=None,
+        checked_at=datetime(2026, 12, 5, 17, tzinfo=timezone.utc), checked_by="tester"),
+        datetime(2026, 12, 7, 12, 30, tzinfo=EASTERN))
+    for slot in TEST_SLOTS:
+        loaded = 6 if slot in empty else 8
+        fulfilled(conn, f"checkin-{tag}-{slot}", slot, "WAKE-SKU", units_loaded=loaded,
+                  paid=f"{pack_cents * loaded / 600:.2f}", at=datetime(2026, 12, 4, 20, tzinfo=timezone.utc))
+    store_poll(conn, f"checkin-before-{tag}", datetime(2026, 12, 4, 18, tzinfo=timezone.utc).isoformat(),
+               {s: (price_cents, 100) for s in TEST_SLOTS})
+    store_poll(conn, f"checkin-monday-{tag}", datetime(2026, 12, 7, 16, 30, tzinfo=timezone.utc).isoformat(),
+               {s: (price_cents, 106 if s in empty else 100) for s in TEST_SLOTS})
+
+
+def test_the_monday_check_in_runs_the_agent_when_a_midweek_visit_would_pay(schema_url, monkeypatch):
+    """The check-in gate is the midweek wake's own decision (`vending.midweek_wake.eligible`,
+    the worker's path through the planner), not a separate count of empty slots: four cheap
+    slow sellers empty together never pay the $25 fee, so they don't run the agent; a paying
+    week does."""
+    from types import SimpleNamespace
+
+    from tests.conftest import open_in
+    from vending import ledger
+    from vending.simulate import season
+
+    url, schema = schema_url
+    monday = datetime(2026, 12, 7, 12, 30, tzinfo=EASTERN)      # CHECK_IN_AT
+    opts = {"budget": 1.0, "run_cap": 1.0, "min_run": 0}
+    ran = []
+    monkeypatch.setattr(season, "run_agent", lambda *a: ran.append(a[2]))
+    with open_in(url, schema) as conn:
+        ledger.record(conn, "opening", 60000, "opening capital", "tester",
+                      at=datetime(2026, 12, 1, 15, tzinfo=timezone.utc))
+        st = SimpleNamespace(clock=SimpleNamespace(now=lambda: monday),
+                             bridge=SimpleNamespace(requests={}), runs=[], log=[])
+
+        def check_in():
+            season.handle(conn, st, season.Event(monday, "check_in"), opts)
+
+        _check_in_week(conn, price_cents=325, pack_cents=600, tag="slow")   # 4 empty, saves $11.61 < $25
+        check_in()
+        assert ran == []
+        assert st.log[-1]["kind"] == "check_in" and st.log[-1]["wake"] is None
+
+        for table in ("polls", "purchase_lines", "purchase_requests", "sourcing_options",
+                      "catalog_products", "catalog_syncs"):
+            conn.execute(f"delete from {table}")
+        _check_in_week(conn, price_cents=450, pack_cents=1014, tag="fast")   # 4 empty, saves $26.83 > $25
+        check_in()
+        assert ran == ["check-in"]
+        assert st.log[-1]["wake"] == ["15", "16", "17", "18"]

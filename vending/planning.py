@@ -277,7 +277,14 @@ def plan(conn: psycopg.Connection, desired: schema.DesiredState, bridge: Bridge,
          now: datetime | None = None, *, pool: bool = False,
          count_takings: bool = True) -> tuple[planner.Plan, Gathered]:
     """Run the planner on live data. Raises `NotReady` when a person has to act first. `count_takings`: see
-    `gather`; never the agent's.
+    `gather`; never the agent's."""
+    gathered = gather_live(conn, bridge, now, count_takings=count_takings)
+    return plan_gathered(gathered, desired, pool=pool), gathered
+
+
+def gather_live(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = None, *,
+                count_takings: bool = True) -> Gathered:
+    """The catalog (our synced copy first, `read_catalog`) and everything else `gather` reads.
 
     The halt switch is checked before the catalog is read, so that halted with
     the bridge down tells the agent to stop, not to check Tailscale.
@@ -293,12 +300,19 @@ def plan(conn: psycopg.Connection, desired: schema.DesiredState, bridge: Bridge,
             raise NotReady(f"{HALTED_HINT} (and {blocked})") from None
         raise
     gathered = gather(conn, catalog, now, count_takings=count_takings)
-    gathered = replace(gathered, notes=(*catalog_notes, *gathered.notes))
+    return replace(gathered, notes=(*catalog_notes, *gathered.notes))
+
+
+def plan_gathered(gathered: Gathered, desired: schema.DesiredState, *, pool: bool = False) -> planner.Plan:
+    """The planner's answer for `desired` on what `gather_live` read. Pure: no database, no bridge.
+
+    The preview, the submit and the midweek wake check (`vending.midweek_wake`) all plan through
+    here, so the same desired state always gets the same lines, cost and refusals."""
     result = planner.plan_restock(gathered.current, to_planner(desired, pool=pool), gathered.config, gathered.now)
     stale = _stale_table_prices(gathered.sourcing_rows, result, desired, gathered.now)
     if stale:
         result = replace(result, warnings=(*result.warnings, *stale))
-    return result, gathered
+    return result
 
 
 def _stale_table_prices(rows: tuple[sourcing.Option, ...], result: planner.Plan, desired: schema.DesiredState,

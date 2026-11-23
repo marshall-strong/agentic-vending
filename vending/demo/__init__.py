@@ -20,7 +20,7 @@ The copy sits behind the same password as the live page, and its views are not c
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from fractions import Fraction
 from pathlib import Path
@@ -36,7 +36,8 @@ DEMO_PRODUCTS = "/dashboard/demo/products"
 # Links on the demo page: back to the live page first.
 NAV = (("Live dashboard", LIVE), ("Products", DEMO_PRODUCTS), ("Home", "/"))
 
-_TAGS = {"$datetime": datetime.fromisoformat, "$decimal": Decimal, "$fraction": Fraction}
+_TAGS = {"$datetime": datetime.fromisoformat, "$date": date.fromisoformat,
+         "$decimal": Decimal, "$fraction": Fraction}
 
 
 class DemoError(Exception):
@@ -44,13 +45,15 @@ class DemoError(Exception):
 
 
 def encode(value: Any) -> Any:
-    """`value` as plain JSON types: dates, Decimals and Fractions become one-key tagged objects.
+    """`value` as plain JSON types: dates, datetimes, Decimals and Fractions become one-key tagged objects.
 
     Raises TypeError for anything else, so a new kind of value in the snapshot is noticed when the
     file is made, not when the page is served. Tuples become lists, as in the live JSON.
     """
     if isinstance(value, datetime):
         return {"$datetime": value.isoformat()}
+    if isinstance(value, date):
+        return {"$date": value.isoformat()}
     if isinstance(value, Decimal):
         return {"$decimal": str(value)}
     if isinstance(value, Fraction):

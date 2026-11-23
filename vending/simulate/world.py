@@ -17,7 +17,7 @@ from fractions import Fraction
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from vending import capacity
+from vending import capacity, demand
 from vending.evadts import crc16_arc
 from vending.slots import DEVICE_ID
 
@@ -197,8 +197,9 @@ OPENING_PRICE_CENTS = 250
 # a class day averages 1. 66% of units sell 8 to 11 AM (finding 7); the rest of the day is assumed.
 _DOW = (1.19, 1.74, 1.10, 1.61, 1.33)
 DOW = tuple(v * 5 / sum(_DOW) for v in _DOW)
-HOUR_SHARE = {7: 0.02, 8: 0.26, 9: 0.22, 10: 0.18, 11: 0.08, 12: 0.07, 13: 0.06, 14: 0.04, 15: 0.03,
-              16: 0.02, 17: 0.01, 18: 0.01}
+# The hourly shares live in `vending.demand`, which the midweek wake check reads too; floats here,
+# as before, so the simulator's arithmetic is unchanged.
+HOUR_SHARE = {hour: float(share) for hour, share in demand.HOUR_SHARE.items()}
 OFF_DAY = 0.05      # a weekend or no-class weekday sells "about nothing" (inventory-demand.md, assumptions)
 
 

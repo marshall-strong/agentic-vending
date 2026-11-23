@@ -107,11 +107,12 @@ STOCKING = KeyDate(
     "bridge's tracking check starts answering", EMAIL_20NOV)
 OPENING = KeyDate(
     "opening", START.date(),
-    "Opening day. The email says both \"not until 3 Dec\" and \"1 or 2 Dec\"; our code starts on 3 Dec",
-    EMAIL_20NOV, earliest=date(2026, 12, 1), checks=("slots_confirmed",))
+    "Opening day: the competition starts at 00:00. Staff finish stocking by 1 or 2 Dec; the machine doesn't "
+    "operate before 3 Dec",
+    ANSWERS_17NOV + "; " + EMAIL_20NOV, checks=("slots_confirmed",))
 FIRST_RESTOCK = KeyDate(
     "first_restock_request", date(2026, 12, 3),
-    "First restock request due, whatever the opening day. Staff fill it Fri 4 Dec; then a restock visit every Friday",
+    "First restock request due, on the opening day. Staff fill it Fri 4 Dec; then a restock visit every Friday",
     ANSWERS_17NOV + "; " + EMAIL_20NOV, at=IN_STORE_CUTOFF.at, checks=("restock_request",), through_minute=True)
 FIRST_TAX = KeyDate(
     "first_tax", date(2026, 12, 5),

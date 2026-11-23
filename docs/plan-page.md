@@ -2,7 +2,7 @@
 
 One page that shows the agent's day-one plan round by round:
 - what goes in each of our 20 slots, and how each round changed from the one before
-- what the fill costs against the proposed $366 cap
+- what the fill costs against the $400 day-one cap (raised from #113's $366 on 22 Nov)
 - what each slot is projected to sell and earn
 - which catalog requests the plan needs, and how far each has got
 - where the Interloper (#116) sells the same drink
@@ -204,7 +204,7 @@ The page reads float prices through their decimal text and refuses any that isn'
 - **No script.** The round tabs and the "Changed slots only" switch are HTML inputs styled with CSS. The server sends `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`.
 - **Local and read-only.** The server listens on 127.0.0.1 and answers only `localhost` or `127.0.0.1`. The database session is read-only, with a statement timeout. With no database, or if it can't be reached, the page refuses, as it does with nothing recorded, because it can't tell which selections are ours. `--no-db` skips only the catalog check, and the catalog panel then says the requests weren't checked.
 - **Interloper prices are display only.** The Interloper is an outside seller, not the other team. No pricing code reads these files, and none may: David said on 17 Nov that the Interloper's prices are not a pricing input. Prices are compared only when both sizes are known and match; otherwise the row says "different size" or "size unknown". The **I** flag on a slot uses the same match as the table.
-- **The $366 cap and the $600 split are proposed (#113), not agreed.** They are reference lines only (`plan_rounds.FILL_CAP_CENTS`).
+- **The $400 cap (raised from #113's proposed $366 by Kevin on 22 Nov, #230) and the $600 split are reference lines.** They are reference lines only (`plan_rounds.FILL_CAP_CENTS`).
 - **A request's status isn't synced back yet.** Nothing reads it from the bridge. So a drink counts as approved once it appears in our copy of the catalog. The team's list is #119.
 
 ## Not here yet

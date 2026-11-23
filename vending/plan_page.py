@@ -311,7 +311,7 @@ def _px(v: float | Fraction) -> str:
 
 
 def rounds_chart(rounds: list[pr.Round]) -> str:
-    """One row per round: the fill's most-we-pay cost against the $366 cap (left), and projected gross
+    """One row per round: the fill's most-we-pay cost against the day-one cap (left), and projected gross
     profit to the end of the window, base with a low-to-high line (right)."""
     if not rounds:
         return ""
@@ -775,7 +775,7 @@ def render(page: Page) -> str:
             + '<div class="rounds">'
             + "".join(_round(r, rounds[i - 1] if i else None, page) for i, r in enumerate(rounds))
             + "</div>"
-            + '<footer>Computed in code from the round files: no model calls. The $366 day-one cap and the $600 split are '
+            + '<footer>Computed in code from the round files: no model calls. The day-one cap ($400 since 22 Nov, up from $366) and the $600 split are '
               f'proposed in <a href="{CAP_ISSUE}">#113</a>, not yet agreed. Forecasts are the projection script\'s, under '
               'its assumptions; they are estimates, not promises.</footer>')
     return _wrap(body, tab_css, f"Day-one plan, round {latest.id}")
