@@ -2,10 +2,11 @@
 
 Every purchase line needs a store, a pack size, the most the worker may pay per pack and, for
 Amazon, a link. The catalog doesn't carry any of that (David, 19 Oct: "cost comes from the store
-and the receipt"), so we keep it in our own table, `sourcing_options` (migration 015). People
-look prices up and record them; **the agent has no tool that browses stores**, by the team's
-choice in [`planning/tool-list.md`](planning/tool-list.md). After each fill, prices also refresh
-from what the worker paid (see [Prices from receipts](#prices-from-receipts)).
+and the receipt"), so we keep it in our own table, `sourcing_options` (migration 015). Before the
+competition, people look prices up and record them. After each fill, prices also refresh from
+what the worker paid (see [Prices from receipts](#prices-from-receipts)). From the start (3 Dec),
+the live agent may also look up one price itself with a capped web search on a store's own site
+(see [Prices the agent finds](#prices-the-agent-finds)). It has no other way to browse.
 
 Each product has a **primary** way to buy it and, optionally, an **alternate**: the same shape
 as a purchase line.
@@ -149,6 +150,102 @@ size the table already has. These still need `python -m vending.sourcing set`:
 - a new store or pack size for a drink;
 - a max the worker's price has passed;
 - a drink we haven't bought for over 7 days: its receipt price goes `STALE` like any other.
+
+From the start, the live agent can cover the first and last of these itself (next section). A
+max, and a store or pack the table has no row for when both rows are already fresh, still need
+a person.
+
+## Prices the agent finds
+
+From the start (3 Dec), a live agent run has one tool of its own, `find_pack_price`
+(`vending/price_search.py`, #202 part 2). It looks up one pack's price at one store with
+Anthropic's web search tool, and records what it found here. The agent's topic is
+`docs/agent/price-lookup.md`. People run the same lookup with a command, before the start too
+(next section).
+
+- **When.** Only before a restock, for a drink in its plan with no checked price or one older than
+  7 days. A lookup for a price still fresh at that store is refused (`fresh_price`) before
+  anything is spent.
+- **Where.** Only Amazon, BJs, Costco and Walmart, the stores the purchase API accepts. The search
+  is limited (`allowed_domains`) to that store's own site: `amazon.com`, `bjs.com`, `costco.com`
+  or `walmart.com`. So it can't read the other team's dashboard or repo, the Interloper or any
+  other seller.
+- **Checked in code.** The lookup names its pack size. The cited link must be exactly one the
+  search returned (only the case of the scheme and host and a trailing slash may differ), and the
+  stored link is the search result's, not the model's text. It must be on the store's own domain
+  or its `www.` host, with no port, and be the store's product page: Amazon `/dp/ASIN` or
+  `/gp/product/ASIN`, Walmart `/ip/...`, Costco `....product.....html`, BJs `/product/...`. The
+  pack must be the one asked for, the price at most $200 a pack and $10 a unit, and the price per
+  unit within half and twice the price the table already has for the drink (the row it refreshes,
+  else the primary, else the alternate). A pack the page or search result says is out of stock is
+  not stored (`out_of_stock`). A refusal tells the agent only a code and a fixed message
+  (`price_search.REASONS`); `action_log` keeps the whole report.
+- **Stored.** A row for the same drink, store and pack (for Amazon, the same listing) gets the new
+  price, dated when it was written, `checked_by` `agent-search`, and a note naming the page. Its max
+  stays; a price above it is not stored (`over_max`), and a person decides. With no such row, it
+  becomes the primary if the drink has none, else the alternate if that is missing, unpriced or
+  stale. A person's fresh rows are never replaced. A new row's max is the price plus 25%, to the
+  cent (`price_search.agent_max`: $27.48 gets $34.35); a new row whose max would put the slot's
+  floor above the price ceiling is not stored (`over_ceiling`). A row someone changed while the
+  search ran is left alone (`changed_meanwhile`). `action_log` keeps the change, as for `set`.
+- **Checked.** Every price stored clears the planner's and the fill's checked-price gates
+  (`no_checked_price`, `stale_price`) like a person's, and goes `STALE` after 7 days. That includes
+  a drink's first price, with nothing to compare it against: the exact pack, on the store's own
+  product page, within $200 a pack and $10 a unit. The max is the margin for a search being a
+  little off: the worker never pays more than the max. The next receipt replaces it. This is the
+  default for the team to review on #202 and #237.
+- **Stock.** The row keeps what the page said: `stock` is `in_stock` or `unknown` (migration 031).
+  `python -m vending.sourcing` shows it. The database refuses an `out_of_stock` row with a price.
+  A person's row or a receipt's has none.
+- **Caps.** `price_search_searches_per_run` (default and most 4) searches a run, every search tried
+  counted, at most 2 a lookup, and `price_search_daily_cap_cents` (default and most 100, $1.00) an
+  Eastern day for all lookups, inside the model caps (`model_run_cap_cents`,
+  `model_daily_cap_cents`). Set them lower with `python -m vending.config set`;
+  `price_search_searches_per_run 0` turns the tool off. Each lookup reserves its worst case (the
+  fee for its searches, its output and 25,000 tokens of results per search, about $0.41) under the
+  harness's lock, in the same transaction that reads the day's lookup spend, on the reservation's
+  Eastern day; one that doesn't fit is refused before anything is sent. So reservations never pass
+  $1.00. Billed spend can: the API doesn't bound a result's tokens, so a lookup can bill more than
+  its worst case. The harness records what it billed, and no further lookup runs that Eastern day:
+  **a day's lookups bill at most $1.00 plus one lookup's excess** (assumption A27).
+- **Spend.** Each lookup is one `model_calls` row labelled `price_search SKU STORE`, its cost the
+  tokens plus $0.01 a billed search (`web_search_requests`: Anthropic's price, $10 per 1,000;
+  a search that errored isn't billed), and in a live run a ledger
+  `tokens` entry, like every model call.
+
+`python -m vending.sourcing` shows such a row as `by the agent (found with a web search DATE:
+URL)`, and the dashboard's Pricing panel labels its cost **expected · agent**. Nobody may set
+`--by agent-search` by hand.
+
+## Looking prices up with the command
+
+Nobody needs to check a price by hand. This runs the agent's lookup for you:
+
+```
+python -m vending.price_search --plan picked --by NAME --dry-run   # list what the fill would refuse
+python -m vending.price_search --plan picked --by NAME             # look them all up
+python -m vending.price_search SKU --store Amazon --pack 24 --by NAME
+```
+
+- **`--plan picked`** takes each drink in the picked plan that the day-one fill would refuse: no
+  sourcing row (tried at Amazon, in the plan's pack size), or a primary or alternate with no checked
+  price or one older than 7 days (tried at that row's store and pack). Run it against the **team**
+  database within the week before the fill, so the prices are still fresh when it goes. Afterwards
+  it lists anything the fill would still refuse and exits 1: for example a stale Amazon primary
+  whose search found another listing, which is stored as the alternate and leaves the primary stale.
+- **Other stores.** If the store tried gives no usable price (no listing, blocked, no product page,
+  another pack, out of stock), it tries the others in a fixed order, Amazon, Walmart, Costco, BJs,
+  for the same pack. Each line says which store gave the price. `--no-fallback` tries one store.
+- **Stored** exactly as the agent's lookups are: same checks, same rows, `checked_by`
+  `agent-search`, the note naming you, the halt switch and `action_log`.
+- **Cost.** Each run has a hard cap, `--max-usd` (default $5.00, at most $10.00): a lookup whose
+  worst case doesn't fit is refused before anything is sent, and the rest stop. The command prints
+  each lookup's cost and the run's total. Before the start this is dev spend on the team key
+  (`model_calls`, purpose `test`, under `model_test_daily_cap_cents`), not the ledger; from the
+  start it is live spend in the ledger. It doesn't use the agent's $1.00 a day. A two-search
+  lookup's worst case is about $0.41 on Opus; what one really costs hasn't been measured, since no
+  paid lookup has run yet. The first runs will show it.
+- It needs `VENDING_ANTHROPIC_API_KEY`. `--dry-run` needs no key and spends nothing.
 
 ## What reads it
 

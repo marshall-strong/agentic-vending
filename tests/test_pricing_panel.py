@@ -109,6 +109,22 @@ def test_an_expected_cost_taken_from_a_receipt_says_so(conn, page_conn):
     assert "expected · receipt</span>" in panel and "taken from what the worker paid" in panel
 
 
+def test_an_expected_cost_the_agent_found_says_so(conn, page_conn):
+    """#202 part 2: a sourcing price the agent found with `find_pack_price` is labelled as the agent's."""
+    catalog(conn, ("FAKE-FIZZ-12", "Made-up Fizz", "Made-up", None, "12 oz can"))
+    source(conn, "FAKE-FIZZ-12", pack=24, expected=1200, most=1450)
+    conn.execute("update sourcing_options set checked_by = 'agent-search',"
+                 " note = 'found by the agent with a web search 2026-12-04: https://www.walmart.com/ip/1'")
+    store_poll(conn, "p1", (MONDAY - timedelta(hours=1)).isoformat(), {"16": (200, 9)})
+    run = _live_run(conn)
+    agent_runs.finish(conn, run, "skipped", plan=plan(
+        {"slot": "16", "product": "FAKE-FIZZ-12", "fill_to": 8, "sale_price": "2.00", "reason": "start it"}))
+    snap = dashboard.snapshot(page_conn, MONDAY)
+    assert rows(snap)["16"]["expected_from"] == "agent"
+    panel = section(dashboard.render(snap))
+    assert "expected · agent</span>" in panel and "found itself, with a web search" in panel
+
+
 def test_an_illegal_price_is_flagged_now_and_in_the_plan(conn, page_conn, open_ledger):
     catalog(conn, ("FAKE-COLA-20", "Made-up Cola", "Made-up", None, "20 oz bottle"))
     fulfilled(conn, "pr-15", "15", "FAKE-COLA-20", units_loaded=6, paid="4.80", at=MONDAY - timedelta(days=3))

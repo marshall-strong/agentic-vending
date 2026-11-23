@@ -9,8 +9,11 @@
 
 The catalog names the products we may order but has no prices or packs, and
 every purchase line needs a store, a pack size, a max price per pack and, for
-Amazon, a link. People look those up and record them here; the agent has no
-tool that browses stores (`docs/planning/tool-list.md`). The planner reads this
+Amazon, a link. People look those up and record them here. From the start
+(3 Dec) the live agent may also look up one pack's price with a capped web
+search on the store's own site (`vending.price_search`), stored with
+`checked_by` `agent-search` and the stock the page showed (`stock`).
+People can run the same lookup (`python -m vending.price_search`). The planner reads this
 table through `table(conn)` when the agent gives no sourcing of its own.
 
 `--price` is what the pack cost when someone looked (`expected`). `--max` is the
@@ -46,6 +49,10 @@ RANKS = ("primary", "alternate")
 STALE_AFTER = timedelta(days=7)
 # `checked_by` on a price taken from a purchase receipt (`vending.receipt_prices`), not seen by a person.
 RECEIPT_BY = "receipt"
+# `checked_by` on a price the live agent found with its capped web search (`vending.price_search`), not a person.
+AGENT_BY = "agent-search"
+# `stock` on a row the price lookup wrote: what the store's page said. None: nobody recorded it.
+STOCK = ("in_stock", "out_of_stock", "unknown")
 # The team's rule of thumb (price list, 11 Nov): max = price + 15%, rounded up to 50 cents.
 DEFAULT_MARKUP = Decimal("1.15")
 MAX_ROUNDING_CENTS = 50
@@ -72,6 +79,7 @@ class Option:
     checked_at: datetime
     checked_by: str
     note: str | None = None
+    stock: str | None = None        # `STOCK`, from a price lookup; None for a person's row or a receipt's
 
     def unit_cents(self) -> Decimal | None:
         """The expected price per unit, or None when no price is known."""
@@ -84,6 +92,11 @@ class Option:
     def from_receipt(self) -> bool:
         """The price is what the worker paid on a receipt (`vending.receipt_prices`), not one a person saw."""
         return self.checked_by == RECEIPT_BY
+
+    @property
+    def from_agent(self) -> bool:
+        """The agent found the price with a web search (`vending.price_search`); `note` names the page."""
+        return self.checked_by == AGENT_BY
 
 
 def cents(text: str, what: str) -> int:
@@ -149,6 +162,10 @@ def problems(o: Option, now: datetime) -> list[str]:
     elif o.expected_cents is not None and o.expected_cents > o.max_cents:
         found.append(f"max {_money(o.max_cents)} is below the price {_money(o.expected_cents)}, "
                      "so the worker couldn't buy it")
+    if o.stock is not None and o.stock not in STOCK:
+        found.append(f"stock must be one of {', '.join(STOCK)}, not {o.stock!r}")
+    elif o.stock == "out_of_stock" and o.expected_cents is not None:
+        found.append("an out-of-stock pack can't have a usable price")
     if o.pack_description is not None and not 1 <= len(o.pack_description) <= planner.MAX_PACK_DESCRIPTION:
         found.append(f"pack description must be 1 to {planner.MAX_PACK_DESCRIPTION} characters")
     if not o.checked_by.strip():
@@ -162,7 +179,7 @@ def options(conn: psycopg.Connection) -> list[Option]:
     """Every stored row, by product, primary first."""
     rows = conn.execute(
         "select sku, rank, store, units_per_pack, expected_cents, max_cents, url, pack_description,"
-        " checked_at, checked_by, note from sourcing_options order by sku, rank desc").fetchall()
+        " checked_at, checked_by, note, stock from sourcing_options order by sku, rank desc").fetchall()
     return [Option(*row) for row in rows]
 
 
@@ -170,7 +187,7 @@ def options_for(conn: psycopg.Connection, skus: list[str]) -> list[Option]:
     """The stored rows for `skus` only, filtered in the query, by product, primary first."""
     rows = conn.execute(
         "select sku, rank, store, units_per_pack, expected_cents, max_cents, url, pack_description,"
-        " checked_at, checked_by, note from sourcing_options where sku = any(%s) order by sku, rank desc",
+        " checked_at, checked_by, note, stock from sourcing_options where sku = any(%s) order by sku, rank desc",
         (list(skus),)).fetchall()
     return [Option(*row) for row in rows]
 
@@ -224,14 +241,15 @@ def set_option(conn: psycopg.Connection, o: Option, now: datetime | None = None)
         before = _row(conn, o.sku, o.rank)
         conn.execute(
             "insert into sourcing_options (sku, rank, store, units_per_pack, expected_cents, max_cents, url,"
-            " pack_description, checked_at, checked_by, note) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            " pack_description, checked_at, checked_by, note, stock)"
+            " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
             " on conflict (sku, rank) do update set store = excluded.store,"
             " units_per_pack = excluded.units_per_pack, expected_cents = excluded.expected_cents,"
             " max_cents = excluded.max_cents, url = excluded.url, pack_description = excluded.pack_description,"
             " checked_at = excluded.checked_at, checked_by = excluded.checked_by, note = excluded.note,"
-            " updated_at = now()",
+            " stock = excluded.stock, updated_at = now()",
             (o.sku, o.rank, o.store, o.units_per_pack, o.expected_cents, o.max_cents, o.url,
-             o.pack_description, o.checked_at, o.checked_by.strip(), o.note))
+             o.pack_description, o.checked_at, o.checked_by.strip(), o.note, o.stock))
         outcome = "replaced" if before else "added"
         _log(conn, "sourcing.set", o.checked_by, {"new": _jsonable(o), "old": before and _jsonable(before)},
              f"sourcing {o.sku} {o.rank} {outcome}: {describe(o)}"
@@ -280,9 +298,10 @@ def locked_row(conn: psycopg.Connection, sku: str, rank: str) -> Option | None:
 
 def set_price(conn: psycopg.Connection, before: Option, expected_cents: int | None, checked_at: datetime,
               checked_by: str, note: str | None, by: str, now: datetime | None = None,
-              dry_run: bool = False) -> Option:
+              dry_run: bool = False, stock: str | None = None) -> Option:
     """Change only a row's price and where it came from (`expected_cents`, `checked_at`, `checked_by`,
-    `note`), logged in `action_log` like `set_option`. The store, pack, max, link and description stay.
+    `note`, `stock`), logged in `action_log` like `set_option`. The store, pack, max, link and description stay.
+    `stock` is the price lookup's; a receipt's price leaves it None (nobody recorded it).
 
     `before` is the row as the caller checked it, best read with `locked_row` in the same transaction.
     The write happens only if the row still matches `before` in every column, so a change a person made
@@ -290,7 +309,8 @@ def set_price(conn: psycopg.Connection, before: Option, expected_cents: int | No
     Returns the row as it is (or would be) after.
     """
     now = now or datetime.now(timezone.utc)
-    new = replace(before, expected_cents=expected_cents, checked_at=checked_at, checked_by=checked_by, note=note)
+    new = replace(before, expected_cents=expected_cents, checked_at=checked_at, checked_by=checked_by, note=note,
+                  stock=stock)
     found = problems(new, now)
     if not in_catalog(conn, [new.sku]):
         found.append("not in our catalog copy, or delisted")
@@ -301,14 +321,15 @@ def set_price(conn: psycopg.Connection, before: Option, expected_cents: int | No
     with conn.transaction():
         changed = conn.execute(
             "update sourcing_options set expected_cents = %s, checked_at = %s, checked_by = %s, note = %s,"
-            " updated_at = now()"
+            " stock = %s, updated_at = now()"
             " where sku = %s and rank = %s and store = %s and units_per_pack = %s and max_cents = %s"
             " and url is not distinct from %s and pack_description is not distinct from %s"
             " and expected_cents is not distinct from %s and checked_at = %s and checked_by = %s"
-            " and note is not distinct from %s",
-            (new.expected_cents, new.checked_at, new.checked_by.strip(), new.note, before.sku, before.rank,
-             before.store, before.units_per_pack, before.max_cents, before.url, before.pack_description,
-             before.expected_cents, before.checked_at, before.checked_by, before.note)).rowcount
+            " and note is not distinct from %s and stock is not distinct from %s",
+            (new.expected_cents, new.checked_at, new.checked_by.strip(), new.note, new.stock, before.sku,
+             before.rank, before.store, before.units_per_pack, before.max_cents, before.url,
+             before.pack_description, before.expected_cents, before.checked_at, before.checked_by, before.note,
+             before.stock)).rowcount
         if changed != 1:
             raise SourcingError(f"{before.sku} {before.rank}: changed since it was read; left as it is")
         _log(conn, "sourcing.set", by,
@@ -433,9 +454,11 @@ def _show(conn: psycopg.Connection, now: datetime) -> int:
         per_unit = f", {_money(int(unit.to_integral_value(rounding=ROUND_CEILING)))} a unit" if unit else ""
         age = (now - o.checked_at).days
         stale = "  STALE" if o.is_stale(now) else ""
-        source = f"from {o.note or 'a receipt'}" if o.from_receipt else f"by {o.checked_by}"
+        stock = {"in_stock": "; in stock", "unknown": "; stock unknown"}.get(o.stock or "", "")
+        source = (f"from {o.note or 'a receipt'}" if o.from_receipt
+                  else f"by the agent ({o.note or 'web search'})" if o.from_agent else f"by {o.checked_by}")
         print(f"{o.sku:40} {o.rank:9} {describe(o)}{per_unit}; checked {day(o.checked_at)} "
-              f"({age} days ago) {source}{stale}")
+              f"({age} days ago) {source}{stock}{stale}")
         if o.url:
             print(f"{'':40} {'':9} {o.url}")
     return 0
@@ -448,6 +471,8 @@ def _from_fields(f: dict[str, str], by: str, now: datetime) -> Option:
         raise SourcingError("sku is empty")
     if by.strip().lower() == RECEIPT_BY:
         raise SourcingError(f"--by {RECEIPT_BY} is kept for prices taken from receipts; give your name")
+    if by.strip().lower() == AGENT_BY:
+        raise SourcingError(f"--by {AGENT_BY} is kept for prices the agent found itself; give your name")
     try:
         units = int(f.get("units_per_pack", ""))
     except ValueError:
@@ -475,7 +500,7 @@ def _purchase_option(o: Option) -> planner.PurchaseOption:
 def _row(conn: psycopg.Connection, sku: str, rank: str, lock: bool = False) -> Option | None:
     row = conn.execute(
         "select sku, rank, store, units_per_pack, expected_cents, max_cents, url, pack_description,"
-        " checked_at, checked_by, note from sourcing_options where sku = %s and rank = %s"
+        " checked_at, checked_by, note, stock from sourcing_options where sku = %s and rank = %s"
         + (" for update" if lock else ""), (sku, rank)).fetchone()
     return None if row is None else Option(*row)
 
@@ -490,7 +515,7 @@ def _log(conn: psycopg.Connection, tool: str, by: str, arguments: dict, detail: 
 def _jsonable(o: Option) -> dict:
     return {"store": o.store, "units_per_pack": o.units_per_pack, "expected_cents": o.expected_cents,
             "max_cents": o.max_cents, "url": o.url, "pack_description": o.pack_description,
-            "checked_at": o.checked_at.isoformat(), "checked_by": o.checked_by, "note": o.note}
+            "checked_at": o.checked_at.isoformat(), "checked_by": o.checked_by, "note": o.note, "stock": o.stock}
 
 
 def _money(value: int) -> str:

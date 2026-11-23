@@ -3,6 +3,11 @@
   "checked": "2026-11-09",
   "source": "https://platform.claude.com/docs/en/about-claude/pricing",
   "us_only_multiplier": "1.1",
+  "server_tools": {
+    "web_search_20250305": {"per_use": "0.01", "checked": "2026-11-22",
+                            "source": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool",
+                            "about": "$10 per 1,000 searches on top of tokens; the results bill as input tokens; a failed search isn't billed"}
+  },
   "models": {
     "claude-opus-5-5": [
       {"prompt_up_to": null, "input": "4", "cache_write_5m": "5", "cache_write_1h": "8", "cache_read": "0.20", "output": "20"}
