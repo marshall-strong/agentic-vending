@@ -1108,5 +1108,93 @@ class TestWildcard(unittest.TestCase):
         self.assertTrue(wild(mtdew_16, slots=state, sourcing=(dear,)).ok)
 
 
+def varied(**overrides) -> dict[str, SlotState]:
+    """Every slot holds its own drink (none of them on the catalog), so only the slots a test names can match."""
+    base = {s: SlotState(s, f"DRINK-{s}", 200, 10, 125) for s in TEST_SLOTS}
+    base.update(overrides)
+    return base
+
+
+def doubles(p) -> list[str]:
+    return [w for w in p.warnings if "adds stock, not sales" in w]
+
+
+class TestVariety(unittest.TestCase):
+    """Kevin, 22 Nov (#230): a second slot of the same drink adds stock, not sales. Warned of, never refused."""
+
+    def test_two_slots_switched_to_one_drink_are_warned_of_not_refused(self):
+        mtdew_16 = DesiredSlot("16", product=MTDEW, sale_price="2.50", fill_to=10)
+        mtdew_18 = DesiredSlot("18", product=MTDEW, sale_price="2.50", fill_to=10)
+        p = plan(mtdew_16, mtdew_18, slots=varied())
+        self.assertTrue(p.ok, p.refusals)
+        [warning] = doubles(p)
+        self.assertIn("slot 16 and slot 18 both get MTDEW-20OZ", warning)
+        self.assertIn("keep it only if one slot would sell out before Friday", warning)
+        self.assertIn("get_project_rules variety", warning)
+
+    def test_a_switch_into_a_drink_a_kept_slot_holds_is_warned_of(self):
+        kept = varied(**{"15": SlotState("15", MTDEW, 250, 4, 50)})
+        p = plan(DesiredSlot("16", product=MTDEW, sale_price="2.50", fill_to=10), slots=kept)
+        self.assertTrue(p.ok, p.refusals)
+        self.assertEqual(len(doubles(p)), 1)
+        self.assertIn("slot 15 and slot 16 both get MTDEW-20OZ", doubles(p)[0])
+
+    def test_three_slots_of_one_drink_are_one_warning(self):
+        p = plan(*(DesiredSlot(s, product=MTDEW, sale_price="2.50", fill_to=10) for s in ("16", "17", "18")),
+                 slots=varied())
+        [warning] = doubles(p)
+        self.assertIn("slots 16, 17 and 18 all get MTDEW-20OZ", warning)
+
+    def test_a_plan_of_distinct_drinks_gets_no_warning(self):
+        p = plan(DesiredSlot("16", product=MTDEW, sale_price="2.50", fill_to=10), slots=varied())
+        self.assertTrue(p.ok, p.refusals)
+        self.assertEqual(doubles(p), [])
+
+    def test_a_pooled_purchase_for_two_slots_is_warned_of_once(self):
+        # The day-one fill pools (vending.fill): one pack buys for both slots, and the warning still names them.
+        mtdew = [DesiredSlot(s, product=MTDEW, sale_price="2.50", fill_to=10) for s in ("16", "18")]
+        by_slot = {d.slot: d for d in mtdew}
+        pooled = DesiredState(tuple(by_slot.get(s, DesiredSlot(s, keep=True)) for s in TEST_SLOTS), pool=True)
+        p = plan_restock(current(slots=varied()), pooled, CONFIG, TUESDAY)
+        self.assertTrue(p.ok, p.refusals)
+        self.assertIsNotNone(p.note)
+        [warning] = doubles(p)
+        self.assertIn("slot 16 and slot 18 both get MTDEW-20OZ", warning)
+
+    def test_switching_away_from_a_duplicate_clears_the_warning(self):
+        both = varied(**{"15": SlotState("15", MTDEW, 250, 4, 50), "16": SlotState("16", MTDEW, 250, 4, 50)})
+        self.assertEqual(len(doubles(plan(restock_15(), slots=both))), 1)
+        p = plan(DesiredSlot("16", product=PICKLE, sale_price="3.00", fill_to=6), slots=both)
+        self.assertTrue(p.ok, p.refusals)
+        self.assertEqual(doubles(p), [])
+
+    def test_slots_no_receipt_describes_are_not_counted(self):
+        unknown = {s: SlotState(s, None, 200, 0, None, contents_known=False) for s in ("25", "26")}
+        p = plan(DesiredSlot("16", product=MTDEW, sale_price="2.50", fill_to=10), slots=varied(**unknown))
+        self.assertEqual(doubles(p), [])
+
+    def test_two_skus_of_one_product_are_one_drink(self):
+        # Red Bull Sugarfree got a second SKU from our request 1 (analysis/dayone/round7/build_catalog7.py): the
+        # catalog's two SKUs are one product, recorded in config product_aliases, so two slots of it are a duplicate.
+        old = "MTDEW-20OZ-OLDSKU"
+        state = varied(**{"16": SlotState("16", old, 250, 4, 50)})
+        aliased = replace(CONFIG, product_aliases={old: MTDEW})
+        p = plan(restock_15(), slots=state, config=aliased)
+        self.assertTrue(p.ok, p.refusals)
+        [warning] = doubles(p)
+        self.assertIn("slot 15 and slot 16 both get MTDEW-20OZ", warning)
+        self.assertIn(old, warning)
+        # Without the alias they are two products, as before.
+        self.assertEqual(doubles(plan(restock_15(), slots=state)), [])
+
+    def test_the_wildcard_is_left_to_its_own_rules(self):
+        # The wildcard's product is in no other slot, which _check_wildcard refuses or warns of itself.
+        state = varied(**{"16": SlotState("16", PICKLE, 300, 5, 250), "17": SlotState("17", PICKLE, 600, 2, 250)})
+        p = wild(restock_15(), slots=state)
+        self.assertEqual(doubles(p), [])
+        # With no wildcard set, the same two slots are just two regular slots of one drink.
+        self.assertEqual(len(doubles(plan(restock_15(), slots=state))), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
