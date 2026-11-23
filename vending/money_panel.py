@@ -36,14 +36,15 @@ import psycopg
 from vending import config, ledger
 from vending.slots import SlotsNotRecorded
 
-# Proposed in #113 ("Opening capital plan"), not yet agreed: how the $600 is split. The first fill's line is
-# $400 since 22 Nov (Kevin, #230), up from #113's $366.
+# How the $600 is split (docs/opening-capital-plan.md, first proposed in #113). The first fill's line is $400
+# since 22 Nov (Kevin, #230), up from #113's $366, so the safety margin, the residual, is $73. The lines must
+# add up to the $600.
 PROPOSED_SPLIT: tuple[tuple[str, int], ...] = (
     ("First fill (most-we-pay)", 40_000),
     ("Midweek visits (2 x $25)", 5_000),
     ("Model spend (9 weeks x $1)", 900),
     ("Product-switch reserve", 6_800),
-    ("Safety margin", 10_700),
+    ("Safety margin", 7_300),
 )
 MODEL_BUDGET_CENTS = 900
 VISIT_BUDGET_CENTS = 5_000
