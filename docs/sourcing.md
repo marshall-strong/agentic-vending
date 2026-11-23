@@ -169,25 +169,43 @@ drinks as above, as with catalog requests. The agent's topic is `docs/agent/pric
   is limited (`allowed_domains`) to that store's own site: `amazon.com`, `bjs.com`, `costco.com`
   or `walmart.com`. So it can't read the other team's dashboard or repo, the Interloper or any
   other seller.
-- **Checked in code.** The page must be on the store's site and one the search returned (a link
-  the model made up is refused), an Amazon page must name its listing (`/dp/ASIN`), the pack must
-  be 1-60 and the price at most $200 a pack and $10 a unit.
+- **Checked in code.** The lookup names its pack size. The cited link must be exactly one the
+  search returned (only the case of the scheme and host and a trailing slash may differ), and the
+  stored link is the search result's, not the model's text. It must be on the store's own domain
+  or its `www.` host, with no port, and be the store's product page: Amazon `/dp/ASIN` or
+  `/gp/product/ASIN`, Walmart `/ip/...`, Costco `....product.....html`, BJs `/product/...`. The
+  pack must be the one asked for, the price at most $200 a pack and $10 a unit, and the price per
+  unit within half and twice the price the table already has for the drink (the row it refreshes,
+  else the primary, else the alternate). A refusal tells the agent only a code and a fixed message
+  (`price_search.REASONS`); `action_log` keeps the whole report.
 - **Stored.** A row for the same drink, store and pack (for Amazon, the same listing) gets the new
-  price, dated when it was found, `checked_by` `agent-search`, and a note naming the page. Its max
+  price, dated when it was written, `checked_by` `agent-search`, and a note naming the page. Its max
   stays; a price above it is not stored (`over_max`), and a person decides. With no such row, it
   becomes the primary if the drink has none, else the alternate if that is missing, unpriced or
-  stale. A person's fresh rows are never replaced. A new row's max is the price plus 25%, rounded
-  up to 50 cents (`price_search.agent_max`). `action_log` keeps the change, as for `set`.
-- **It counts as checked.** An agent-found price clears the planner's and the fill's checked-price
-  gates (`no_checked_price`, `stale_price`) like a person's, and goes `STALE` after 7 days. The
-  wider max is the margin for a search being a little off: the worker never pays more than the
-  max. The next receipt replaces it. This is the default for the team to review on #202.
-- **Caps.** `price_search_searches_per_run` (default 4) searches a run, at most 2 a lookup, and
-  `price_search_daily_cap_cents` (default 100, $1.00) a day for all lookups, inside the model caps
-  (`model_run_cap_cents`, `model_daily_cap_cents`). Set them with `python -m vending.config set`;
-  `price_search_searches_per_run 0` turns the tool off.
+  stale. A person's fresh rows are never replaced. A new row's max is the price plus 25%, to the
+  cent (`price_search.agent_max`: $27.48 gets $34.35); a new row whose max would put the slot's
+  floor above the price ceiling is not stored (`over_ceiling`). A row someone changed while the
+  search ran is left alone (`changed_meanwhile`). `action_log` keeps the change, as for `set`.
+- **Checked, or a candidate.** A price that passed the per-unit check clears the planner's and the
+  fill's checked-price gates (`no_checked_price`, `stale_price`) like a person's, and goes `STALE`
+  after 7 days. With no price to check it against, it is stored as an **unchecked candidate**: no
+  expected price, the found price in its note, so the fill refuses it until a person sets it. The
+  max is the margin for a search being a little off: the worker never pays more than the max. The
+  next receipt replaces it. This is the default for the team to review on #202.
+- **Caps.** `price_search_searches_per_run` (default and most 4) searches a run, every search tried
+  counted, at most 2 a lookup, and `price_search_daily_cap_cents` (default and most 100, $1.00) an
+  Eastern day for all lookups, inside the model caps (`model_run_cap_cents`,
+  `model_daily_cap_cents`). Set them lower with `python -m vending.config set`;
+  `price_search_searches_per_run 0` turns the tool off. Each lookup reserves its worst case (the
+  fee for its searches, its output and 25,000 tokens of results per search, about $0.41) under the
+  harness's lock, in the same transaction that reads the day's lookup spend, on the reservation's
+  Eastern day; one that doesn't fit is refused before anything is sent. So reservations never pass
+  $1.00. Billed spend can: the API doesn't bound a result's tokens, so a lookup can bill more than
+  its worst case. The harness records what it billed, and no further lookup runs that Eastern day:
+  **a day's lookups bill at most $1.00 plus one lookup's excess** (assumption A27).
 - **Spend.** Each lookup is one `model_calls` row labelled `price_search SKU STORE`, its cost the
-  tokens plus $0.01 a search (Anthropic's price, $10 per 1,000), and in a live run a ledger
+  tokens plus $0.01 a billed search (`web_search_requests`: Anthropic's price, $10 per 1,000;
+  a search that errored isn't billed), and in a live run a ledger
   `tokens` entry, like every model call.
 
 `python -m vending.sourcing` shows such a row as `by the agent (found by the agent with a web

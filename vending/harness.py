@@ -60,8 +60,10 @@ worst case reads the prompt once more for each search, plus
 `SEARCH_RESULT_TOKENS` of results for each search so far, plus the searches'
 fee; its cost adds `usage.server_tool_use.web_search_requests` at the fee.
 `SEARCH_RESULT_TOKENS` is our allowance, not a documented figure: if a call
-bills more than its worst case, the harness logs a warning and records what
-was billed.
+bills more than its worst case, the harness logs a warning, records what was
+billed and marks the row, and a `Budget` over such calls leaves nothing for the
+rest of that Eastern day. The fee is `web_search_requests` (an errored search
+isn't billed); a call kept at its worst case already holds every search's fee.
 
 Not priced here, so refused: every other server tool (the web search with
 dynamic filtering, `web_search_20260209` and later, which runs code; web
@@ -351,6 +353,25 @@ class Call:
 
 
 @dataclass(frozen=True)
+class Budget:
+    """A daily cap of its own for the calls whose `model_calls.label` starts with `prefix` (`vending.price_search`).
+
+    Read under the reservation lock with the other caps, on the reservation's Eastern day: what those calls billed,
+    and the worst case still held for any that haven't settled. If one of them billed more than its worst case
+    that day, nothing is left: the worst case is an allowance, not a limit the API promises
+    (`SEARCH_RESULT_TOKENS`), so after a miss the day's budget stops rather than trust it again."""
+    prefix: str
+    daily_usd: Decimal
+
+    def left(self, conn: psycopg.Connection, now: datetime) -> Decimal:
+        spent, missed = conn.execute(
+            "select coalesce(sum(cost_usd), 0), coalesce(bool_or(status = 'ok' and cost_usd > worst_case_usd), false)"
+            " from model_calls where left(label, %s) = %s and at >= %s",
+            (len(self.prefix), self.prefix, day_start(now))).fetchone()
+        return Decimal(0) if missed else self.daily_usd - Decimal(spent)
+
+
+@dataclass(frozen=True)
 class _Reserved:
     max_tokens: int
     worst: Decimal
@@ -433,12 +454,13 @@ class Harness:
             raise done["error"]
         return done["response"]
 
-    def call(self, request: dict, *, label: str = "", cap_usd: Decimal | None = None) -> Any:
+    def call(self, request: dict, *, label: str = "", daily_budget: Budget | None = None) -> Any:
         """Send `request` (a `messages.create` body) under the caps and record its cost. Returns the response."""
-        return self.call_detailed(request, label=label, cap_usd=cap_usd).response
+        return self.call_detailed(request, label=label, daily_budget=daily_budget).response
 
-    def call_detailed(self, request: dict, *, label: str = "", cap_usd: Decimal | None = None) -> Call:
-        """`cap_usd`: one more cap for this call alone (a caller's own budget), under the run and daily caps."""
+    def call_detailed(self, request: dict, *, label: str = "", daily_budget: Budget | None = None) -> Call:
+        """`daily_budget`: one more daily cap, for the calls whose label starts with its prefix (`Budget`), checked
+        and reserved under the same lock as the run and daily caps."""
         import anthropic
 
         searches = _refuse_unpriced(request, self.prices)
@@ -466,7 +488,9 @@ class Harness:
 
         reference = f"{self.purpose}{' ' + label if label else ''}"
         reserving = time.monotonic()
-        held = self._reserve(model, effort, counted, wanted, floor, caches, label, reference, searches, cap_usd)
+        if daily_budget is not None and not label.startswith(daily_budget.prefix):
+            raise HarnessError(f"a call under the {daily_budget.prefix!r} budget must have a label starting with it")
+        held = self._reserve(model, effort, counted, wanted, floor, caches, label, reference, searches, daily_budget)
         self.spent += held.worst
         self.reserved += 1
 
@@ -514,15 +538,16 @@ class Harness:
             paid = cost_usd(answered_by if answered_by in self.prices.models else model, usage, self.prices,
                             us_only=us_only)
             note = ""
-            if answered_by not in self.prices.models:
+            # Anthropic bills a search per `web_search_requests`; a search that came back as an error isn't counted.
+            searched = _n(getattr(getattr(usage, "server_tool_use", None), "web_search_requests", 0))
+            if answered_by not in self.prices.models:       # the worst case already holds every search's fee
                 note, paid = f" (answered by unpriced {answered_by}; kept at worst case)", worst
                 log.error("model call answered by %s, which has no price; kept at its worst case", answered_by)
-            searched = _n(getattr(getattr(usage, "server_tool_use", None), "web_search_requests", 0))
-            if searched and searches:
+            elif searched and searches:
                 fee = searched * self.prices.web_search_usd
                 paid += fee
                 note += f" ({searched} web search{'es' if searched != 1 else ''}, ${fee:.2f})"
-            elif searched:
+            if searched and not searches:
                 note += " (server tool use not priced)"
                 log.error("model call used server tools, which aren't priced: %s", usage.server_tool_use)
             tier = getattr(usage, "service_tier", None)
@@ -548,8 +573,11 @@ class Harness:
         return call
 
     def _reserve(self, model: str, effort: str | None, counted: int, wanted: int, floor: int, caches: str | None,
-                 label: str, reference: str, searches: int = 0, cap_usd: Decimal | None = None) -> _Reserved:
-        """Fit max_tokens under the caps and write the worst case, under a short lock."""
+                 label: str, reference: str, searches: int = 0, budget: Budget | None = None) -> _Reserved:
+        """Fit max_tokens under the caps and write the worst case, under a short lock.
+
+        Every cap is read and the worst case written in one transaction under `LOCK_KEY`, so two calls can't both
+        fit in the same room. Each day is the Eastern day of `now`, the reservation's own time."""
         try:
             with self.connect() as conn, conn.transaction():
                 conn.execute(f"set local lock_timeout = '{LOCK_TIMEOUT}'")
@@ -558,7 +586,9 @@ class Harness:
                     raise NotHeld(f"not sent: {why}. Nothing was reserved or spent.")
                 now = self.now() if self.now else ledger.db_now(conn)
                 left_today = self.daily_cap - spent_since(conn, day_start(now), self.purpose)
-                allowed = min(self.run_cap - self.spent, left_today, *([cap_usd] if cap_usd is not None else []))
+                left_budget = budget.left(conn, now) if budget is not None else None
+                allowed = min(self.run_cap - self.spent, left_today,
+                              *([left_budget] if left_budget is not None else []))
                 room = allowed - worst_case_usd(model, counted, 0, self.prices, caches=caches, searches=searches)
                 r = self.prices.rates(model, tokens_in(counted, searches))
                 per_token = r.output * self.prices.us_only_multiplier / MILLION
@@ -567,7 +597,8 @@ class Harness:
                     raise CapReached(
                         f"not sent: ${max(allowed, Decimal(0)):.4f} is left (run cap ${self.run_cap:.2f}; "
                         f"${max(left_today, Decimal(0)):.4f} of today's {self.purpose} cap, ${self.daily_cap:.2f}"
-                        + (f"; ${max(cap_usd, Decimal(0)):.4f} of the caller's own cap" if cap_usd is not None else "")
+                        + (f"; ${max(left_budget, Decimal(0)):.4f} of today's {budget.prefix.strip()} cap, "
+                           f"${budget.daily_usd:.2f}" if budget is not None and left_budget is not None else "")
                         + "), "
                         f"and this {counted}-token request needs room for at least {floor} output tokens. "
                         "Nothing was spent.")

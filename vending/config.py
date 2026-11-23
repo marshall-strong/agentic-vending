@@ -147,11 +147,11 @@ KNOWN: dict[str, Setting] = {
     "model_test_daily_cap_cents": Setting("most test calls (replays, sweeps) may spend in one Eastern day "
                                           "(default 2000)", lambda v: _whole(v, 1, 60000, "cents")),
     "price_search_searches_per_run": Setting("web searches one live agent run may make to look up pack prices; "
-                                             "0 turns the lookup off (default 4)",
-                                             lambda v: _whole(v, 0, 20, "searches")),
+                                             "0 turns the lookup off (default and most 4)",
+                                             lambda v: _whole(v, 0, 4, "searches")),
     "price_search_daily_cap_cents": Setting("most the agent's price lookups may spend in one Eastern day, searches "
-                                            "and tokens, inside the model caps (default 100)",
-                                            lambda v: _whole(v, 0, 2000, "cents")),
+                                            "and tokens, inside the model caps (default and most 100)",
+                                            lambda v: _whole(v, 0, 100, "cents")),
 }
 
 
