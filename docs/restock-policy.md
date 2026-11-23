@@ -24,7 +24,7 @@ The project brief asks for a "documented restock and dispatch policy, with the d
 | Open requests | One at a time today; David may lift this | `docs/process-map.md`; #106 row 12 |
 | Column capacity | Varies by package size | [Column capacity](capacity.md) |
 | Sales tax inside the shelf price | 8% | `vending/pricing.py`, config `tax_percent` |
-| Competition start | Thu 3 Dec (David's 20 Nov email also says 1 or 2 Dec; asked, A24). Staff empty the machine and fill all 20 slots to capacity from our $600 on Mon 30 Nov (David to confirm the $600 part; whether a slot may take fewer units is still asked, #102). The ledger opening is recorded before that fill. | #106 rows 2 and 3; #107; `planning/2026-11-20-david-update.md` |
+| Competition start | Thu 3 Dec, 00:00 ET (settled, A24; the 20 Nov email's "1 or 2 Dec" is when stocking is finished). Staff empty the machine and fill all 20 slots to capacity from our $600 on Mon 30 Nov (David to confirm the $600 part; whether a slot may take fewer units is still asked, #102). The ledger opening is recorded before that fill. | #106 rows 2 and 3; #107; `planning/2026-11-20-david-update.md` |
 | Run length | to the end of run week 9 | `docs/agent/rules-card.md` |
 
 **Sales rates.** Units per class day while the slot held stock, by segment of our 20 slots (`analysis/REPORT.md`, "Our slots"):

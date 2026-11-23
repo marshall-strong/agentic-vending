@@ -1,6 +1,6 @@
 """The Key dates panel (`vending.key_dates`): the dates, their statuses and where they show."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html import escape
 
 import pytest
@@ -61,9 +61,9 @@ def test_the_dates_are_in_one_place_and_reuse_the_start():
 def test_each_date_shows_its_day_and_counts_down_before_the_start():
     r = rows(et(11, 20))
     assert [x["when"] for x in r.values()] == [
-        "Wed 25 Nov", "Sun 29 Nov, 23:59", "Mon 30 Nov", "Tue 1 to Thu 3 Dec", "Thu 3 Dec, 23:59", "Sat 5 Dec, 23:59"]
+        "Wed 25 Nov", "Sun 29 Nov, 23:59", "Mon 30 Nov", "Thu 3 Dec", "Thu 3 Dec, 23:59", "Sat 5 Dec, 23:59"]
     assert r["stocking"]["countdown"] == "in 10 days" and r["first_tax"]["countdown"] == "in 15 days"
-    assert r["opening"]["unconfirmed"] and not r["catalog"]["unconfirmed"]
+    assert not any(x["unconfirmed"] for x in r.values())      # the start is settled: Thu 3 Dec
     assert not any(x["passed"] for x in r.values())
     # Days are Eastern calendar days: late on the 24th, the 25th is tomorrow.
     assert rows(et(11, 24, 23, 30))["catalog"]["checks"][0]["pill"] == "due tomorrow"
@@ -245,14 +245,21 @@ def test_a_snapshot_from_before_the_panel_draws_no_section():
     assert key_dates.html(None) == ""
 
 
-def test_the_section_marks_each_status_and_the_unconfirmed_day():
+def test_the_section_marks_each_status_and_an_unconfirmed_day():
     f = facts(opening=et(11, 28), plan=PLAN)
-    page = key_dates.html({"ok": True, "data": key_dates.build(et(11, 29), f, counts(pending=1), LOCK)})
+    built = key_dates.build(et(11, 29), f, counts(pending=1), LOCK)
+    page = key_dates.html({"ok": True, "data": built})
     assert page.startswith('<section id="dates"')
     assert '<span class="pill ok">done</span> <b>Ledger opening recorded</b>' in page
     assert '<span class="pill info">due today</span> <b>Fill request sent</b>' in page
-    assert '<span class="pill warn">unconfirmed</span>' in page
     assert 'class="kd-row kd-past"' in page     # 25 Nov has passed
+    assert "unconfirmed" not in page            # every date in DATES is settled
+    # A day that isn't confirmed still shows its range and the pill.
+    maybe = key_dates.KeyDate("maybe", key_dates.OPENING.day, "A day not yet confirmed", "test",
+                              earliest=key_dates.OPENING.day - timedelta(days=2))
+    built["rows"].append(key_dates._row(maybe, et(11, 29), {"facts": f, "catalog_counts": None, "lock": LOCK}))
+    page = key_dates.html({"ok": True, "data": built})
+    assert "<b>Tue 1 to Thu 3 Dec</b>" in page and '<span class="pill warn">unconfirmed</span>' in page
 
 
 # --- In the dashboard ---------------------------------------------------------------------------
