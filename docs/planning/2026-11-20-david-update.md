@@ -9,7 +9,7 @@ David emailed both teams on 20 Nov. The facts below come from that email. Times 
 | 20 Nov | **The slot redraw has happened.** Slots will not change during the quarter | Expected 18 to 19 Nov (17 Nov notes, row 3) |
 | Mon 30 Nov | Staff empty the machine, buy and stock our initial requests, and reset the interval counters. The lifetime counters keep their counts; they can't be reset | Confirms the day. The counter reset is new |
 | 30 Nov to 2 Dec | **The machine does not operate until 3 Dec, "to provide a clean start"** | New |
-| "1 or 2 Dec" | **"First day of operation", "depending on the machine getting stocked"** | **Contradicts the line above.** See the questions |
+| "1 or 2 Dec" | **"First day of operation", "depending on the machine getting stocked"** | When stocking is finished, not the start. The competition starts Thu 3 Dec, 00:00 (section 5) |
 | Thu 3 Dec, 23:59 | The purchase request for the first restock is due | As on 17 Nov |
 | Fri 4 Dec | First official restock | As on 17 Nov |
 | Sat 5 Dec, 23:59 | First sales tax calculation | New |
@@ -60,13 +60,16 @@ The 30 Nov stocking is our visit, so set `VISIT_POLL_DATES=2026-11-30` on the Co
 
 ### 5. When the machine opens
 
-The email says both "will not operate until 3 Dec" and "1 or 2 Dec (depending on the machine getting stocked) – first day of operation". Our code takes 3 Dec 00:00 as the start (`vending/start.py`, `START`; `SLOTS_LOCK_AT`). We keep it until David answers.
+**Settled: the competition starts Thu 3 Dec, 00:00 ET** (Kevin, 22 Nov). This is our code's start (`vending/start.py`, `START`; `SLOTS_LOCK_AT`), and assumption A24 is Confirmed.
 
-If the machine opens on 1 or 2 Dec:
+For the record, the email says both "will not operate until 3 Dec" and "1 or 2 Dec (depending on the machine getting stocked) – first day of operation". The "1 or 2 Dec" is when stocking is finished, not the start. Every other source gives 3 Dec:
 
-- `START` in `vending/start.py` is a constant, not a setting, so a code change is needed. It sets the catalog weekly limits (`MACHINE_LIVE`), the first class day (`vending/class_days.py`) and the latest fall cut.
-- `SLOTS_LOCK_AT` is a setting. Set it to that day's 00:00 Eastern on the Container App, and on any laptop that runs `record` (`docs/deploy.md`).
-- Sales from 1 to 2 Dec still count in the ledger. It counts from the opening entry, not from `START`.
+- David on 12 Nov (`2026-11-12-david-answers.md`, row 2): the machine goes live with our products Thu 3 Dec, the first day of Winter Quarter.
+- David on 17 Nov, in writing (`2026-11-17-david-answers.md`): Thu 3 Dec, the machine goes live.
+- This email: the machine "does not operate until 3 Dec", to provide a clean start.
+- The official calendar: Winter Quarter starts Thu 3 Dec.
+
+Sales before 3 Dec, if any, still count in the ledger. It counts from the opening entry, not from `START`.
 
 ### 6. The first restock
 
@@ -76,9 +79,9 @@ Unchanged: a valid request received by 23:59 Thu 3 Dec is filled on Fri 4 Dec. A
 
 | Setting or rule | Value now | Keep? |
 |---|---|---|
-| `SLOTS_LOCK_AT` (`vending/slots.py`) | 3 Dec 00:00 ET | **Keep.** The redraw has happened and David says it is final. A person runs `record` now, and the first check after the lock confirms it. Move it only if David says the machine opens on 1 or 2 Dec. Moving it earlier, before the fill, would add nothing: no change is expected, and `record` before the lock is still the person's step |
+| `SLOTS_LOCK_AT` (`vending/slots.py`) | 3 Dec 00:00 ET | **Keep.** The redraw has happened and David says it is final. A person runs `record` now, and the first check after the lock confirms it. Moving it earlier, before the fill, would add nothing: no change is expected, and `record` before the lock is still the person's step |
 | Ledger opening (`python -m vending.ledger open`, no default date; `--at` defaults to now) | Recorded by a person | **Record it by 23:59 Sun 29 Nov,** when the fill request goes in, as the 17 Nov notes say. Staff buy and stock on Mon 30 Nov, so the fill's receipt is dated 30 Nov. An opening after that would leave the fill out of the books. Nothing in the new dates moves this |
-| `START` (`vending/start.py`) | 3 Dec 00:00 ET, a constant | Keep until David answers question 1 |
+| `START` (`vending/start.py`) | 3 Dec 00:00 ET, a constant | **Keep.** The start is settled (section 5) |
 | `FALL_CUTOFF` | 18 Nov 00:00 ET | Keep. It is well before the 30 Nov stocking |
 | Simulator `DAY_ONE_FILL` (`vending/simulate/world.py`) | Wed 2 Dec 15:00 | Should be Mon 30 Nov. A code change for later |
 
@@ -101,11 +104,11 @@ A read-only check of main at `9a1eb8b`, 20 Nov.
 
 ## Questions for David
 
-1. **Opening day.** The email says the machine won't operate until 3 Dec, and also that 1 or 2 Dec is the first day of operation. Which is it? If it depends on stocking, when will we know?
-2. **Interval counters.** After the 30 Nov reset, will the interval counters be reset again during the quarter (at each restock, say)? We don't use them, but the door counter's since-reset count is in every poll.
+1. **Interval counters.** After the 30 Nov reset, will the interval counters be reset again during the quarter (at each restock, say)? We don't use them, but the door counter's since-reset count is in every poll.
 
 ## Settled without asking
 
+- **Opening day: Thu 3 Dec, 00:00.** The email's "1 or 2 Dec" is when stocking is finished; the machine "will not operate until 3 Dec". David's 12 and 17 Nov answers and the calendar agree (section 5; Kevin, 22 Nov).
 - **Tax owed accrues with each sale.** Saturday 23:59 is when the week's tax is calculated and rounded, not when it starts to count (Kevin, 20 Nov).
 - **Model spend is in `cash`.** The course has our Anthropic API key and sees our model spend itself, so the cash we send has it taken out, as our ledger does (Kevin, 20 Nov).
 - **The check's day.** The route's own spec says one check per team per day, midnight to midnight Eastern, and a request refused before the check (bad body, unknown poll, poll not yet in the books) doesn't use it up.
