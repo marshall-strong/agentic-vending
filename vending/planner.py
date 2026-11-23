@@ -1253,9 +1253,29 @@ def _pool_note(lines: tuple[Line, ...]) -> str:
     return " ".join(["Units to load per slot.", *parts])
 
 
+def packs_for(units: int, units_per_pack: int) -> int:
+    """Whole packs covering `units`; the rest goes to the closet."""
+    return round_up_to_step(Fraction(units), units_per_pack) // units_per_pack
+
+
+def pack_usable(units_per_pack: int, units: int) -> bool:
+    """Whether a pack size can buy `units` on one purchase line: a size the purchase API takes, and at most
+    `MAX_PACKS` packs (`packs_for`). Extras go to the closet at cost, so a bigger pack is still usable."""
+    return 1 <= units_per_pack <= MAX_UNITS_PER_PACK and packs_for(units, units_per_pack) <= MAX_PACKS
+
+
+def cutoff_deadline(visit: date, cutoff: Cutoff, zone: str | tzinfo = "America/New_York") -> datetime:
+    """The end of the last minute to order from a store for a stocking on `visit`.
+
+    The cutoffs are for a Friday visit (in-store Thursday 23:59, Amazon Wednesday 23:59). Another visit day
+    keeps the same lead time: for Mon 30 Nov, in-store Sun 29 Nov and Amazon Sat 28 Nov."""
+    day = visit - timedelta(days=(_FRIDAY - cutoff.weekday) % 7)
+    return datetime.combine(day, cutoff.at, _tz(zone)) + timedelta(seconds=59)
+
+
 def _size(option: _Option, short: int, extra: int) -> PlannedPurchase:
     """Whole packs covering the shortfall plus extras; the rest goes to the closet."""
-    packs = round_up_to_step(Fraction(short + extra), option.units_per_pack) // option.units_per_pack
+    packs = packs_for(short + extra, option.units_per_pack)
     expected = option.max_cents if option.expected_cents is None else option.expected_cents
     return PlannedPurchase(option.store, option.url, option.units_per_pack, packs,
                            option.max_cents, expected, option.pack_description,
@@ -1313,6 +1333,7 @@ def _cash_short(slots: list[_Slot], cost: Cost, short_cents: int) -> str:
 # --- Step 7 helpers ----------------------------------------------------------
 
 _WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+_FRIDAY = 4
 
 
 def _tz(zone: str | tzinfo) -> tzinfo:

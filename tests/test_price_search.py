@@ -763,7 +763,8 @@ def test_the_command_refuses_a_cap_past_its_hard_limit_or_a_borrowed_name(connec
     assert price_search.HARD_CLI_CAP_CENTS == 1000 and price_search.DEFAULT_CLI_CAP_CENTS == 500
 
 
-# The picked plan's drinks, for the day-one fill (#234).
+# The picked plan's drinks, for the day-one fill (#234), one store at a time (`--first-usable`; comparing every
+# store is the default now and is tested in `test_price_compare`).
 
 def picked_plan(conn):
     from psycopg.types.json import Jsonb
@@ -789,13 +790,13 @@ def test_plan_mode_looks_up_each_drink_the_fill_would_refuse(connect, capsys):
             sku="PICKLE", rank="primary", store="Amazon", units_per_pack=24, expected_cents=1800, max_cents=2100,
             url=PICKLE_URL, pack_description=None, checked_at=BEFORE - timedelta(days=17), checked_by="Kevin"),
             now=BEFORE)
-    assert command(connect, Client(), "--plan", "picked", "--by", "Kevin", "--dry-run", when=BEFORE) == 0
+    assert command(connect, Client(), "--plan", "picked", "--first-usable", "--by", "Kevin", "--dry-run", when=BEFORE) == 0
     out = capsys.readouterr().out
     assert "COKE20: Amazon, 12 a pack (no sourcing row)" in out
     assert "PICKLE: Amazon, 24 a pack (primary checked 2026-11-15, stale)" in out
     client = Client(at_store("Amazon", report={"pack": 12, "price": "12.37"}),
                     searched(urls=(PICKLE_URL,), report=found(url=PICKLE_URL, price="18.49")))
-    assert command(connect, client, "--plan", "picked", "--by", "Kevin", when=BEFORE) == 0
+    assert command(connect, client, "--plan", "picked", "--first-usable", "--by", "Kevin", when=BEFORE) == 0
     assert [b["messages"][0]["content"].split("catalog SKU ")[1].split(".")[0] for b in client.sent] == \
         ["COKE20", "PICKLE"]
     with connect() as conn:
@@ -803,7 +804,7 @@ def test_plan_mode_looks_up_each_drink_the_fill_would_refuse(connect, capsys):
     assert (coke.expected_cents, coke.units_per_pack, coke.checked_at) == (1237, 12, BEFORE)
     assert (pickle.expected_cents, pickle.max_cents, pickle.checked_at) == (1849, 2100, BEFORE)
     again = Client()
-    assert command(connect, again, "--plan", "picked", "--by", "Kevin", when=BEFORE) == 0
+    assert command(connect, again, "--plan", "picked", "--first-usable", "--by", "Kevin", when=BEFORE) == 0
     assert again.sent == [] and "Every drink in the picked plan has a fresh checked price" in capsys.readouterr().out
 
 
@@ -818,13 +819,13 @@ def test_plan_mode_looks_up_a_stale_alternate_too(connect, capsys):
         sourcing.set_option(conn, sourcing.Option(
             sku="COKE20", rank="alternate", store="Walmart", units_per_pack=12, expected_cents=None, max_cents=1500,
             url=None, pack_description=None, checked_at=BEFORE, checked_by="Kevin"), now=BEFORE)
-    assert command(connect, Client(), "--plan", "picked", "--by", "Kevin", "--dry-run", when=BEFORE) == 0
+    assert command(connect, Client(), "--plan", "picked", "--first-usable", "--by", "Kevin", "--dry-run", when=BEFORE) == 0
     out = capsys.readouterr().out
     assert "COKE20: Walmart, 12 a pack (alternate has no checked price)" in out and "PICKLE" not in out
 
 
 def test_plan_mode_needs_a_picked_plan(connect, capsys):
-    assert command(connect, Client(), "--plan", "picked", "--by", "Kevin", when=BEFORE) == 1
+    assert command(connect, Client(), "--plan", "picked", "--first-usable", "--by", "Kevin", when=BEFORE) == 1
     assert "No first-fill plan is picked" in capsys.readouterr().err
 
 
@@ -838,7 +839,7 @@ def test_plan_mode_replaces_a_stale_primary_with_the_listing_it_finds(connect, c
                 expected_cents=1800, max_cents=2100, url=url, pack_description=None,
                 checked_at=BEFORE - timedelta(days=(0 if url is None else 17)), checked_by="Kevin"), now=BEFORE)
     client = Client(searched(report=found(price="18.49")))
-    assert command(connect, client, "--plan", "picked", "--by", "Kevin", when=BEFORE) == 0
+    assert command(connect, client, "--plan", "picked", "--first-usable", "--by", "Kevin", when=BEFORE) == 0
     out = capsys.readouterr().out
     assert "PICKLE: price from Amazon: replaced primary" in out and "would still refuse" not in out
 
@@ -855,6 +856,6 @@ def test_plan_mode_names_what_the_fill_would_still_refuse(connect, capsys):
                 checked_at=BEFORE - timedelta(days=(0 if url is None else 17)), checked_by="Kevin"), now=BEFORE)
     client = Client(searched(report={"found": False, "price": "", "units_per_pack": 0, "pack_description": "",
                                      "url": "", "note": "no listing"}))
-    assert command(connect, client, "--plan", "picked", "--by", "Kevin", "--no-fallback", when=BEFORE) == 1
+    assert command(connect, client, "--plan", "picked", "--first-usable", "--by", "Kevin", "--no-fallback", when=BEFORE) == 1
     out = capsys.readouterr().out
     assert "The fill would still refuse:" in out and "PICKLE: Amazon, 24 a pack (primary checked 2026-11-15" in out

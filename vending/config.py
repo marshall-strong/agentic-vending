@@ -98,6 +98,17 @@ def _schedule_mode(value: Any) -> str | None:
     return None
 
 
+def _priced_model(value: Any) -> str | None:
+    """A model `vending/model_prices.json` prices, so the harness can reserve its worst case."""
+    from vending.harness import PRICES_FILE, load_prices      # here: the harness imports this module
+
+    models = sorted(load_prices().models)
+    if not isinstance(value, str) or value not in models:
+        return (f"must be a model {PRICES_FILE.name} prices, in quotes, one of {', '.join(models)}; "
+                f"not {json.dumps(value)}")
+    return None
+
+
 # Set once, never changed: the wildcard is a fixed slot.
 WRITE_ONCE = frozenset({"wildcard_slot"})
 
@@ -181,6 +192,9 @@ KNOWN: dict[str, Setting] = {
     "price_search_daily_cap_cents": Setting("most the agent's price lookups may spend in one Eastern day, searches "
                                             "and tokens, inside the model caps (default and most 100)",
                                             lambda v: _whole(v, 0, 100, "cents")),
+    "price_search_model": Setting("the model the price lookups run on, the agent's tool and python -m "
+                                  "vending.price_search alike; --model overrides it (default: the agent's model)",
+                                  _priced_model),
 }
 
 
