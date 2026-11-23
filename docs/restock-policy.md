@@ -169,7 +169,7 @@ The team's 12 Nov decision (PR #100, agreed, not yet merged):
 
 **Spendable** = balance less sales tax owed (`get_account_balance`). The planner refuses orders above spendable (`insufficient_balance`); the floor is stricter.
 
-**Condition on the capital plan:** at least $53 spendable after the day-one fill. Its caps leave $157 ($600 − $360 for 19 regular slots − $82 for the wildcard − $1). Then sales refill the account (about 23.3 × 5 = 117 units a week; cash depends on prices).
+**Condition on the capital plan:** at least $53 spendable after the day-one fill. Its $400 fill cap for all 20 slots leaves $199 ($600 − $400 − $1); the picked plan, round 7b, at its most ($399) leaves $200. Then sales refill the account (about 23.3 × 5 = 117 units a week; cash depends on prices).
 
 ## Agent follow-ups (separate PR, after #99 and #100)
 
