@@ -353,7 +353,8 @@ the database turn it on (`off`, `dry-run` or `live`; the lower runs). [`docs/dep
 - **Seeing it.** `python -m vending.price_schedule` shows the settings, the week's spend and the latest runs:
   cost, drinks looked up, prices changed, drinks without a usable price. `/health` shows the last run as
   `price_check`. The dashboard's Needs attention shows the last run when it ended `partial` (a drink got no
-  usable price), `failed`, `halted` or `missed`.
+  usable price), `failed`, `halted` or `missed`, and its Price checks panel lists the last 8 runs and each plan
+  drink's prices by store ([`dashboard.md`](dashboard.md#what-it-shows)).
 
 ## What reads it
 

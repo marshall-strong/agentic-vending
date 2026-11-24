@@ -193,9 +193,9 @@
      "max_cents": 2050,
      "pack_description": null,
      "checked_at": {
-      "$datetime": "2026-12-04T16:00:00+00:00"
+      "$datetime": "2026-12-08T17:18:00+00:00"
      },
-     "checked_by": "demo"
+     "checked_by": "agent-search"
     },
     {
      "rank": "alternate",
@@ -205,9 +205,9 @@
      "max_cents": 3600,
      "pack_description": null,
      "checked_at": {
-      "$datetime": "2026-12-04T16:00:00+00:00"
+      "$datetime": "2026-12-08T17:18:00+00:00"
      },
-     "checked_by": "demo"
+     "checked_by": "agent-search"
     }
    ],
    "COCA-ZERO_SUG-20BOT": [
@@ -247,9 +247,9 @@
      "max_cents": 1750,
      "pack_description": null,
      "checked_at": {
-      "$datetime": "2026-12-04T16:00:00+00:00"
+      "$datetime": "2026-12-08T17:18:00+00:00"
      },
-     "checked_by": "demo"
+     "checked_by": "agent-search"
     }
    ],
    "MONSTER-ORIGINAL-16CAN": [
@@ -289,9 +289,9 @@
      "max_cents": 1900,
      "pack_description": null,
      "checked_at": {
-      "$datetime": "2026-12-04T16:00:00+00:00"
+      "$datetime": "2026-12-08T17:18:00+00:00"
      },
-     "checked_by": "demo"
+     "checked_by": "agent-search"
     }
    ],
    "PREMIER-CHOCOLAT-11CAR": [
@@ -317,7 +317,7 @@
      "max_cents": 1350,
      "pack_description": null,
      "checked_at": {
-      "$datetime": "2026-12-04T16:00:00+00:00"
+      "$datetime": "2026-11-30T15:00:00+00:00"
      },
      "checked_by": "demo"
     }
@@ -327,13 +327,13 @@
      "rank": "primary",
      "store": "Walmart",
      "units_per_pack": 12,
-     "expected_cents": 2040,
+     "expected_cents": 2190,
      "max_cents": 2350,
      "pack_description": null,
      "checked_at": {
-      "$datetime": "2026-12-04T16:00:00+00:00"
+      "$datetime": "2026-12-08T17:10:00+00:00"
      },
-     "checked_by": "demo"
+     "checked_by": "agent-search"
     }
    ],
    "SNAPPLE-ORIGINAL-16BOT": [

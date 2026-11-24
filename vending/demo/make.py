@@ -411,9 +411,21 @@ def seed_steps(conn, ids: dict[str, int]) -> None:
              "empty or nearly again, and Pepsi ran out on Sunday. Their price is too low for the demand, and a "
              "quarter more should still clear them.", False),
             (2, _utc(7, 14, 5), "tool_call", "get_sales_history", '{"slot": "31"}', False),
-            (2, _utc(7, 14, 5), "tool_result", "get_sales_history", "7 sold by Sunday night, empty since", False),
+            (2, _utc(7, 14, 5), "tool_result", "get_sales_history",
+             '{"data": [{"slot": "31", "price": "2.50", "units_sold_in_window": 7, "stock_on_hand": 0}]}', False),
+            (2, _utc(7, 14, 6), "tool_call", "get_sales_history", '{"slot": "37"}', False),
+            (2, _utc(7, 14, 6), "tool_result", "get_sales_history",
+             '{"data": [{"slot": "37", "price": "3.00", "units_sold_in_window": 24, "stock_on_hand": 0}]}', False),
             (3, _utc(7, 14, 7), "thinking", None, "vitaminwater sold 1 since Thursday. GORGIE was approved in "
              "November; try it there. Snapple sold 1, so pull it and swap a new product in next week.", False),
+            (3, _utc(7, 14, 7), "tool_call", "get_sales_history", '{"slot": "28"}', False),
+            (3, _utc(7, 14, 7), "tool_result", "get_sales_history",
+             '{"data": [{"slot": "28", "price": "2.50", "units_sold_in_window": 1, "stock_on_hand": 6}]}', False),
+            (3, _utc(7, 14, 7), "tool_call", "find_pack_price",
+             '{"sku": "GORGIE-ORIGINAL-20BOT", "store": "Walmart", "units_per_pack": 12}', False),
+            (3, _utc(7, 14, 7), "tool_result", "find_pack_price",
+             '{"success": true, "store": "Walmart", "units_per_pack": 12, "price_per_pack": "15.00", "stock": "in_stock"}',
+             False),
             (3, _utc(7, 14, 8), "tool_call", "preview_desired_state", '{"slots": 20}', False),
             (3, _utc(7, 14, 8), "tool_result", "preview_desired_state", "most we pay $173.40, 0 refusals", False),
             (4, _utc(7, 14, 10), "tool_call", "submit_desired_state", '{"slots": 20}', False),
@@ -577,6 +589,8 @@ def seed(conn) -> None:
     ids = seed_runs(conn)
     seed_steps(conn, ids)
     seed_counts(conn)
+    seed_sourcing(conn)
+    seed_price_checks(conn)
     seed_midweek_wake(conn)
     seed_visits(conn)
     config.set_halted(conn, False, "kevin")
@@ -584,22 +598,21 @@ def seed(conn) -> None:
     seed_actions(conn)
 
 
-# The Products page (#55): its extra seed goes in after the dashboard's snapshot, so the dashboard's file
-# doesn't change with it. The two day-one products that found no seller have no sourcing row (the page
-# flags them), Snapple's price is stale, GORGIE is sourced but not in the day-one plan, and Coca-Cola has
-# an alternate.
+# Sourcing and the day-one plan go in with the dashboard's seed, so the price-check panel and the plan history
+# see them; the Products page reads the same rows. The two day-one products that found no seller have no sourcing
+# row (both pages flag them), Snapple's and Recess's prices are stale, GORGIE is sourced but not in the day-one
+# plan, and Coca-Cola has an alternate.
 UNSOURCED = ("TOPOCHICO-ORIGINAL-16BOT", "MOUNTAIN-BAJA_BLA-20BOT")
-STALE_SOURCING = {"SNAPPLE-ORIGINAL-16BOT": _utc(25, 17, month=11)}
+STALE_SOURCING = {"SNAPPLE-ORIGINAL-16BOT": _utc(25, 17, month=11), "RECESS-LIME-12CAN": _utc(30, 15, month=11)}
 CATALOG_SYNCED = _utc(9, 14, 5)
 
 
-def seed_products(conn) -> None:
-    """The catalog's last sync, our sourcing rows and the picked day-one plan, for the Products page."""
+def seed_sourcing(conn) -> None:
+    """Our sourcing rows and the picked day-one plan."""
     from psycopg.types.json import Jsonb
 
     from vending.sourcing import default_max
 
-    conn.execute("insert into catalog_syncs (synced_at, product_count) values (%s, %s)", (CATALOG_SYNCED, len(PRODUCTS)))
     rows = [(sku, "primary", "Walmart", units, _cents(price), default_max(_cents(price)),
              STALE_SOURCING.get(sku, _utc(4, 16)))
             for sku, (_, _, _, _, units, price) in PRODUCTS.items() if sku not in UNSOURCED]
@@ -615,6 +628,72 @@ def seed_products(conn) -> None:
                  (_utc(28, 15, month=11), Jsonb({"day_one": day_one}), list(SELECTIONS)))
 
 
+# The weekly price checks: a dry run on Tue 1 Dec, then the first live one on Tue 8 Dec (12:00 Eastern), on Haiku
+# with the Sonnet check. (sku, store, kind, minutes after noon, units, price in cents or None, outcome, model).
+CHEAP, CHECKER = "claude-haiku-5-5", "claude-sonnet-5-5"
+PRICE_CHECK_DUE = (_utc(1, 17), _utc(8, 17))
+LOOKUPS = (
+    ("COCA-ORIGINAL-20BOT", "Walmart", "search", 2, 12, 1740, "found", CHEAP),
+    ("COCA-ORIGINAL-20BOT", "Costco", "search", 3, 24, 3149, "found", CHEAP),
+    ("COCA-ORIGINAL-20BOT", "Amazon", "search", 4, None, None, "not_found", CHEAP),
+    ("PEPSI-ORIGINAL-20BOT", "Walmart", "listing", 6, 12, 1620, "found", CHEAP),
+    ("REDBULL-ORIGINAL-8_4CAN", "Walmart", "listing", 8, 12, 2190, "found", CHEAP),
+    ("REDBULL-ORIGINAL-8_4CAN", "Walmart", "check", 9, 12, 2190, "found", CHECKER),
+    ("MONSTER-ORIGINAL-16CAN", "Walmart", "listing", 11, 12, 2340, "found", CHEAP),
+    ("MONSTER-ORIGINAL-16CAN", "Walmart", "check", 12, 12, 2110, "check_disagrees", CHECKER),
+    ("PREMIER-CHOCOLAT-11CAR", "Walmart", "listing", 14, 12, 3720, "found", CHEAP),
+    ("PREMIER-CHOCOLAT-11CAR", "Walmart", "check", 15, 12, 3720, "found", CHECKER),
+    ("GORGIE-ORIGINAL-20BOT", "Walmart", "listing", 17, 12, 1500, "found", CHEAP),
+    ("TOPOCHICO-ORIGINAL-16BOT", "Amazon", "search", 20, None, None, "not_found", CHEAP),
+    ("TOPOCHICO-ORIGINAL-16BOT", "Walmart", "search", 21, None, None, "not_found", CHEAP),
+    ("TOPOCHICO-ORIGINAL-16BOT", "Costco", "search", 22, None, None, "not_found", CHEAP),
+    ("TOPOCHICO-ORIGINAL-16BOT", "BJs", "search", 23, None, None, "not_found", CHEAP),
+    ("MOUNTAIN-BAJA_BLA-20BOT", "Walmart", "search", 26, None, None, "not_found", CHEAP),
+    ("MOUNTAIN-BAJA_BLA-20BOT", "Amazon", "search", 27, 12, 1890, "out_of_stock", CHEAP),
+)
+# The readings before them: a person's lookups on Tue 1 Dec, on Sonnet.
+EARLIER_LOOKUPS = (("REDBULL-ORIGINAL-8_4CAN", 2040), ("MONSTER-ORIGINAL-16CAN", 2100),
+                   ("PREMIER-CHOCOLAT-11CAR", 3120), ("COCA-ORIGINAL-20BOT", 1740))
+
+
+def seed_price_checks(conn) -> None:
+    """The weekly price checks, their lookups and the sourcing rows the live one refreshed."""
+    from vending import config, price_schedule
+
+    config.set_value(conn, price_schedule.DB_MODE_KEY, "live", "kevin")
+    rows = [(_utc(1, 18) + timedelta(minutes=n), sku, "Walmart", "search", 12, 12, 12, cents, "found", CHECKER,
+             Decimal("0.0400"), "kevin") for n, (sku, cents) in enumerate(EARLIER_LOOKUPS)]
+    due = PRICE_CHECK_DUE[1]
+    for sku, store, kind, minutes, units, cents, outcome, model in LOOKUPS:
+        cost = Decimal("0.0400") if model == CHECKER else Decimal("0.0150")
+        rows.append((due + timedelta(minutes=minutes), sku, store, kind, 12, 12, units, cents, outcome, model, cost,
+                     price_schedule.BY))
+    with conn.cursor() as cur:
+        cur.executemany(
+            "insert into price_lookups (at, sku, store, kind, asked_min, asked_max, units_per_pack, price_cents, outcome,"
+            " model, cost_usd, by) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)", rows)
+    spent = sum(r[10] for r in rows if r[11] == price_schedule.BY)
+    # What the live check stored: Red Bull's confirmed price (Premier's was over its max, Monster's not confirmed).
+    conn.execute("update sourcing_options set expected_cents = 2190, checked_at = %s, checked_by = 'agent-search',"
+                 " note = 'weekly price check' where sku = 'REDBULL-ORIGINAL-8_4CAN' and rank = 'primary'",
+                 (due + timedelta(minutes=10),))
+    conn.execute("update sourcing_options set checked_at = %s, checked_by = 'agent-search', note = 'weekly price check'"
+                 " where sku in ('COCA-ORIGINAL-20BOT', 'PEPSI-ORIGINAL-20BOT', 'GORGIE-ORIGINAL-20BOT')",
+                 (due + timedelta(minutes=18),))
+    conn.execute(
+        "insert into price_check_runs (due_at, latest_at, mode, compare, claimed_at, finished_at, outcome, drinks,"
+        " changed, failures, cost_usd) values (%s, %s, 'dry-run', true, %s, %s, 'done', 18, 0, 0, 0),"
+        " (%s, %s, 'live', true, %s, %s, 'partial', 9, 1, 2, %s)",
+        (PRICE_CHECK_DUE[0], PRICE_CHECK_DUE[0] + timedelta(hours=8), PRICE_CHECK_DUE[0],
+         PRICE_CHECK_DUE[0] + timedelta(minutes=2), due, due + timedelta(hours=8), due, due + timedelta(minutes=30),
+         spent))
+
+
+def seed_products(conn) -> None:
+    """The catalog's last sync, for the Products page (its sourcing and plan went in with the dashboard's seed)."""
+    conn.execute("insert into catalog_syncs (synced_at, product_count) values (%s, %s)", (CATALOG_SYNCED, len(PRODUCTS)))
+
+
 # --- Making the file --------------------------------------------------------------------------------------
 
 def sync_round() -> dict:
@@ -624,6 +703,8 @@ def sync_round() -> dict:
     start = _utc(9, 14, 0)
     return {"status": "ok", "started_at": _utc(2, 15, 30).isoformat(), "rounds": 162,
             "last_round_at": start.isoformat(), "next_round_at": _utc(9, 15, 0).isoformat(),
+            "price_check": {"mode": "live", "next_at": _utc(15, 17).isoformat(), "problem": None,
+                            "last": {"due_at": PRICE_CHECK_DUE[1].isoformat(), "mode": "live", "outcome": "partial"}},
             "results": [{"job": job, "started_at": start.isoformat(), "seconds": seconds, "exit_code": 0, "outcome": "ok"}
                         for job, seconds in jobs]}
 
