@@ -79,6 +79,10 @@ both settings say `live`, from the competition's start, and after its checks bef
 dry run. Like the visit reads, a scheduled run is not a job of the round and never fails it. `/health` and `/`
 then also show that, this worker's `AGENT_SCHEDULE_MODE`, the next time and the last scheduled run's outcome.
 
+The weekly price check (`vending.price_schedule`) runs the same way: only when `PRICE_CHECK_MODE` and the
+database's `price_check_mode` both turn it on, at `PRICE_CHECK_SCHEDULE` (default Tuesday 12:00-20:00 ET), in its
+own thread, never a job of the round. `/health` shows its mode, next time and last run as `price_check`.
+
 `GET /dashboard/demo/simulations` shows simulated seasons from committed files
 (`vending.simulate.demo`), behind the same password. It never opens a database
 connection, and every page of it says it is simulated.
@@ -178,6 +182,8 @@ class State:
     results: list[JobResult] = field(default_factory=list)
     # The scheduled agent runs (`vending.agent_schedule`): anything with `public()`, or None when they're off.
     schedule: object | None = None
+    # The weekly price check (`vending.price_schedule`): the same, or None when it is off.
+    price_checks: object | None = None
 
     @property
     def healthy(self) -> bool:
@@ -197,6 +203,11 @@ class State:
                 shown["agent_schedule"] = self.schedule.public()
             except Exception:       # noqa: BLE001 - /health must answer whatever the schedule's state
                 shown["agent_schedule"] = {"mode": "unknown", "next_at": None, "last": None}
+        if self.price_checks is not None:
+            try:
+                shown["price_check"] = self.price_checks.public()
+            except Exception:       # noqa: BLE001 - /health must answer whatever the check's state
+                shown["price_check"] = {"mode": "unknown", "next_at": None, "last": None}
         return shown
 
 
@@ -757,7 +768,7 @@ def wait_or_wake(event: threading.Event, seconds: float) -> bool:
 def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
          sleep: Callable[[float], None] | None = None, log: Callable[[str], None] = print,
          reads=None, clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc), scheduler=None,
-         wait: Callable[[threading.Event, float], bool] | None = None) -> int:
+         wait: Callable[[threading.Event, float], bool] | None = None, price_checks=None) -> int:
     """`reads` is the visit reader (`vending.visit_polls.Reader`) and `scheduler` the scheduled agent runs
     (`vending.agent_schedule.Scheduler`). Left out, the real worker, started with no `jobs`, builds each from
     the settings; a test that passes `jobs` gets neither, so it can't read the machine or start the agent.
@@ -803,12 +814,18 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
         from vending import agent_schedule
 
         scheduler = agent_schedule.default_scheduler(log)
+    if price_checks is None and jobs is None and not args.once:
+        from vending import price_schedule
+
+        price_checks = price_schedule.default_checks(log)
+    # The weekly price check (`vending.price_schedule`): it runs in its own thread, like a scheduled agent run.
+    prices = price_checks if hasattr(price_checks, "tick") else None
     # `Invalid` only reports a wrong setting on /health; it has no times to run.
     ticks = scheduler if hasattr(scheduler, "tick") else None
     # Set when a scheduled run's thread ends, to wake the loop before the next sync (`Scheduler.run_ended`).
     ended = getattr(ticks, "run_ended", None)
     jobs = default_jobs() if jobs is None else jobs
-    state = State(schedule=scheduler)
+    state = State(schedule=scheduler, price_checks=price_checks)
     unrecorded: list = []                 # failed rounds waiting for the database (`record_failed_round`)
     running: dict[str, threading.Thread] = {}
     server = serve_health(state, args.port) if args.port and not args.once else None
@@ -838,6 +855,8 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
                 wake = due if reads is None else min(due, reads.next_due(now))
                 if ticks is not None:
                     wake = min(wake, ticks.next_due(now))
+                if prices is not None:
+                    wake = min(wake, prices.next_due(now))
                 # Never negative: a wake time already past (a supervisor's deadline crossed during a long
                 # round) means now.
                 seconds = max(0.0, (wake - now).total_seconds())
@@ -857,6 +876,8 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
                 # A scheduled agent run starts in its own thread, so this returns in a moment.
                 if ticks is not None and ticks.next_due(now := clock()) <= now:
                     ticks.tick(now)
+                if prices is not None and prices.next_due(now := clock()) <= now:
+                    prices.tick(now)
                 now = clock()
     except (KeyboardInterrupt, Stopped):
         log("stopping")

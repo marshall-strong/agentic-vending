@@ -665,10 +665,12 @@ class PriceSearch:
 
     def __init__(self, harness: Harness, connect: Callable[[], psycopg.Connection], *, model: str,
                  now: Callable[[], datetime] | None = None, person: str | None = None, model_fixed: bool = False,
-                 max_age: timedelta | None = None, bench: bool = False, full: bool = False):
+                 max_age: timedelta | None = None, bench: bool = False, full: bool = False,
+                 label: str | None = None):
         self.harness, self.connect, self.model, self.person = harness, connect, model, person
         self.model_fixed, self.max_age, self.bench, self.full = model_fixed, max_age, bench, full
-        self.label = LABEL if person is None else BENCH_LABEL if bench else CLI_LABEL
+        # The weekly price check passes its own (`vending.price_schedule.LABEL`), so its weekly cap can read it.
+        self.label = label or (LABEL if person is None else BENCH_LABEL if bench else CLI_LABEL)
         self.now = now          # None: the database clock
         self.searches = 0       # web searches this run has tried (or may have, when a call failed after sending)
 
@@ -1403,22 +1405,55 @@ def _compared(c: Comparison, stored: bool) -> list[str]:
     return lines
 
 
+@dataclass
+class CheckResult:
+    """What one price check did: `main`'s exit code, the drinks it looked up, the drinks whose sourcing rows changed,
+    the drinks that got no usable price, and its spend."""
+    exit_code: int
+    drinks: int = 0
+    changed: int = 0
+    failures: int = 0
+    cost_usd: Decimal = Decimal(0)
+
+
 def check_prices(*, by: str, max_age_hours: float, connect: Callable[[], psycopg.Connection] | None = None,
                  client: Any = None, now: Callable[[], datetime] | None = None, max_usd: str | None = None,
-                 model: str | None = None) -> int:
-    """The weekly price check, for a scheduled job to call: our slots' current and planned drinks, compared at
-    every store, re-pricing anything checked more than `max_age_hours` ago. Same as
-    `python -m vending.price_search --plan ours --max-age HOURS --by NAME`; returns its exit code."""
+                 model: str | None = None, compare: bool = True, dry_run: bool = False,
+                 label: str | None = None) -> CheckResult:
+    """The weekly price check (`vending.price_schedule` runs it): our slots' current and planned drinks, re-pricing
+    anything checked more than `max_age_hours` ago, with the price memory. `compare`: at every store, as
+    `python -m vending.price_search --plan ours --max-age HOURS --by NAME`; else each drink's primary store only
+    (`--recheck`). `dry_run` lists what it would look up and spends nothing. `label` names its `model_calls`."""
+    from vending import db
+
+    connect = retrying(connect or db.connect)
     argv = ["--plan", "ours", "--max-age", f"{max_age_hours:g}", "--by", by]
     argv += ["--max-usd", max_usd] if max_usd else []
     argv += ["--model", model] if model else []
-    return main(argv, client=client, connect=connect, now=now)
+    argv += [] if compare else ["--recheck"]
+    argv += ["--dry-run"] if dry_run else []
+
+    def prices() -> dict[tuple[str, str], tuple]:
+        with connect() as conn:
+            return {(o.sku, o.rank): (o.store, o.units_per_pack, o.expected_cents) for o in sourcing.options(conn)}
+
+    before = prices()
+    report: dict = {}
+    code = main(argv, client=client, connect=connect, now=now, report=report, label=label)
+    after = prices()
+    changed = {key[0] for key in before.keys() | after.keys() if before.get(key) != after.get(key)}
+    return CheckResult(code, report.get("drinks", 0), len(changed), report.get("failures", 0),
+                       report.get("spent", Decimal(0)))
 
 
 def main(argv: list[str] | None = None, *, client: Any = None,
-         connect: Callable[[], psycopg.Connection] | None = None, now: Callable[[], datetime] | None = None) -> int:
+         connect: Callable[[], psycopg.Connection] | None = None, now: Callable[[], datetime] | None = None,
+         report: dict | None = None, label: str | None = None) -> int:
     """`python -m vending.price_search`. Exit 0 when every lookup stored a price (or none was needed), 1 when
-    one didn't, 2 when the command was refused before any lookup."""
+    one didn't, 2 when the command was refused before any lookup. `report`, if given, gets `drinks` (looked up),
+    `failures` (drinks with no usable price) and `spent`; `label` names the lookups' `model_calls`
+    (`check_prices`)."""
+    report = {} if report is None else report
     import argparse
     import sys
 
@@ -1455,6 +1490,9 @@ def main(argv: list[str] | None = None, *, client: Any = None,
     parser.add_argument("--full", action="store_true",
                         help="ignore the price memory: search stores that lately had no listing, search openly instead "
                              "of re-checking known listings, and look up drinks a recent receipt priced")
+    parser.add_argument("--recheck", action="store_true",
+                        help="with --plan: look up each drink at its primary store and pack only (usually one search on "
+                             "the listing we have); a drink with no primary is compared")
     parser.add_argument("--history", action="store_true",
                         help="with a SKU: show its latest lookups, newest first; searches and spends nothing")
     args = parser.parse_args(argv)
@@ -1489,6 +1527,8 @@ def main(argv: list[str] | None = None, *, client: Any = None,
         compare = args.compare or (args.plan is not None and not args.first_usable)
         if (args.no_store or args.json) and not compare:
             raise ValueError("--no-store and --json go with --compare")
+        if args.recheck and (args.plan is None or not compare or args.no_store):
+            raise ValueError("--recheck goes with --plan, and not with --first-usable or --no-store")
     except ValueError as error:
         print(error, file=sys.stderr)
         return 2
@@ -1554,10 +1594,12 @@ def main(argv: list[str] | None = None, *, client: Any = None,
     if compare:
         for sku, o in receipts.items():
             print(f"  {sku}: priced from a receipt on {sourcing.day(o.checked_at)}; no lookup")
+        report.update(drinks=len(todo), failures=0, spent=Decimal(0))
         if not todo:
             print("Every drink has a fresh checked price; nothing to look up.")
         else:
-            print(f"{len(todo)} drink{'s' if len(todo) != 1 else ''} to compare at every store"
+            print(f"{len(todo)} drink{'s' if len(todo) != 1 else ''} to "
+                  + ("re-check at its primary store" if args.recheck else "compare at every store")
                   + (" (search only: nothing will be stored)" if args.no_store else "") + ":")
             for d in todo:
                 print(f"  {d.sku}: {d.units} units a fill, packs of {d.smallest_pack} to {planner.MAX_UNITS_PER_PACK}"
@@ -1587,19 +1629,32 @@ def main(argv: list[str] | None = None, *, client: Any = None,
         client = client or model_client()
     except NoModelKey as error:
         print(error, file=sys.stderr)
+        report["failures"] = len(todo) if compare else len(needs)
         return 2
     live = start.on_or_after_start(at) and not args.no_store
     with connect() as conn:
         model = args.model or configured_model(conn, DEFAULT_MODEL)
     harness = Harness(client, connect, purpose="live" if live else "test", run_cap_usd=cap, now=now, by=by)
     searcher = PriceSearch(harness, connect, model=model, now=now, person=by, model_fixed=True, max_age=max_age,
-                           bench=args.no_store, full=args.full)
+                           bench=args.no_store, full=args.full, label=label)
     missed = bool(skipped)
+    failures = 0
     if compare:
         results: list[Comparison] = []
         try:
             for d in todo:
                 try:
+                    primary = rows.get((d.sku, "primary"))
+                    if args.recheck and primary is not None:
+                        out = searcher.find({"sku": d.sku, "store": primary.store,
+                                             "units_per_pack": primary.units_per_pack})
+                        print(_line(d.sku, primary.units_per_pack, out))
+                        if not out.ok and out.code != "fresh_price":
+                            missed, failures = True, failures + 1
+                        if out.code in STOP_RUN:
+                            print("Stopped: no more lookups this run.")
+                            break
+                        continue
                     c = searcher.compare(d, store=not args.no_store)
                 except psycopg.Error as error:
                     # One drink that can't reach the database, after `retrying`, doesn't end the run (23 Nov).
@@ -1608,12 +1663,13 @@ def main(argv: list[str] | None = None, *, client: Any = None,
                                               code="db_error"))
                     print(f"  {d.sku}: the database failed ({type(error).__name__}: {error}); nothing more for "
                           "this drink, going on to the next.")
-                    missed = True
+                    missed, failures = True, failures + 1
                     continue
                 results.append(c)
                 for line in _compared(c, stored=not args.no_store):
                     print(line)
                 missed = missed or c.code is not None
+                failures += c.code is not None
                 if c.stopped:
                     print("Stopped: no more lookups this run.")
                     break
@@ -1635,17 +1691,18 @@ def main(argv: list[str] | None = None, *, client: Any = None,
             except psycopg.Error as error:
                 print(f"  {n.sku}: the database failed ({type(error).__name__}: {error}); nothing more for this "
                       "drink, going on to the next.")
-                missed = True
+                missed, failures = True, failures + 1
                 continue
             for out in tried:
                 print(_line(n.sku, n.units_per_pack, out))
             last = tried[-1]
             if not last.ok and not (last.code == "fresh_price" and len(tried) == 1):
-                missed = True
+                missed, failures = True, failures + 1
             if last.code in ("halted", "search_cap"):
                 print("Stopped: no more lookups this run.")
                 break
-    if pick is not None and not args.no_store:
+    report.update(drinks=len(todo) if compare else len(needs), failures=failures, spent=harness.spent)
+    if pick is not None and not args.no_store and args.plan == "picked":
         # A price can land in the alternate while a stale primary stays: say what the fill would still refuse.
         with connect() as conn:
             left, _ = plan_needs(conn, pick.round, now() if now else ledger.db_now(conn))

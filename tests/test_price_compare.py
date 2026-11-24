@@ -206,7 +206,7 @@ def test_the_weekly_check_compares_our_current_and_planned_drinks(connect, monke
     monkeypatch.setattr(price_search, "current_drinks", lambda conn, ours, now: {SKU: 7})
     client = Client(offer("Amazon", 24, "27.48"), failing("Walmart"), failing("Costco"), failing("BJs"))
     assert price_search.check_prices(by="weekly check", max_age_hours=24, connect=connect, client=client,
-                                     now=lambda: LIVE) == 0
+                                     now=lambda: LIVE).exit_code == 0
     assert len(client.sent) == 4 and all(SKU in b["messages"][0]["content"] for b in client.sent)
     with connect() as conn:
         assert row(conn).expected_cents == 2748
