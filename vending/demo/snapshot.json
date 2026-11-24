@@ -489,6 +489,7 @@
     "request_id": null,
     "team_update": null,
     "notes": null,
+    "scheduled": null,
     "steps": [
      {
       "turn": 1,
@@ -549,6 +550,7 @@
     "request_id": "pr-002",
     "team_update": "Next Friday's order: three prices up, one down, one swap, one lane pulled for a swap to come. Selections 55 and 58 get another try at a seller. Coca-Cola and Mountain Dew refill from the closet; Red Bull, Diet Coke, bubly Strawberry and the protein shake are bought, since the closet can't fill them.",
     "notes": "Pepsi sold out on Sunday: if it sells out again at $2.75, price it at $3.00. Check whether GORGIE outsells vitaminwater, and pick the product for 44.",
+    "scheduled": null,
     "steps": [
      {
       "turn": 1,
@@ -702,6 +704,7 @@
     "request_id": null,
     "team_update": null,
     "notes": null,
+    "scheduled": null,
     "steps": [],
     "has_plan": false,
     "compared": false,
@@ -726,6 +729,7 @@
     "request_id": "pr-003",
     "team_update": "Midweek visit requested: Coca-Cola, Mountain Dew and Red Bull to be topped up to full.",
     "notes": "Check on Monday whether the three lanes sold enough to pay for the visit.",
+    "scheduled": null,
     "steps": [],
     "has_plan": true,
     "compared": true,
@@ -750,6 +754,7 @@
     "request_id": null,
     "team_update": null,
     "notes": null,
+    "scheduled": null,
     "steps": [
      {
       "turn": 1,
@@ -796,6 +801,7 @@
     "request_id": "pr-001",
     "team_update": "First fill is ordered: 18 of the 20 selections have a seller. Two selections found none.",
     "notes": "Selections 55 and 58 had no seller on day one. Try them again next Friday.",
+    "scheduled": null,
     "steps": [
      {
       "turn": 1,

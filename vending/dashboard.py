@@ -404,6 +404,10 @@ def _runs(conn: psycopg.Connection, now: datetime, tags: dict | None = None,
     rows = _rows(conn, sql.SQL("""
         select r.id, r.started_at, r.finished_at, r.mode, r.model, r.status, {detail}, r.cost_usd,
                r.request_id, r.team_update, r.notes, r.plan,
+               -- The scheduled time that started it: weekly or midweek (`agent_schedule.kind`, migration 035;
+               -- read through jsonb so a database without 035 still reads, as weekly), or none for a run by hand.
+               (select coalesce(to_jsonb(s) ->> 'kind', 'weekly') from agent_schedule s
+                 where s.run_id = r.id limit 1) as scheduled,
                (select p.plan from agent_runs p
                  where p.mode = r.mode and p.plan is not null
                    and (p.started_at, p.id) < (r.started_at, r.id)
@@ -901,7 +905,8 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
 MEANT_LIVE_SKIP = ("s.outcome = 'skipped' and (s.detail like 'Run as a dry run, not live:%%'"
                    " or (s.mode = 'live' and s.started_at is null))")
 LIVE_MISSED_ROW = "s.outcome = 'missed' and s.detail like 'LIVE RUN MISSED:%%'"
-SCHEDULED_COLUMNS = ("s.due_at, s.mode, s.claimed_at, s.outcome, s.run_id, r.status as agent_status,"
+SCHEDULED_COLUMNS = ("s.due_at, s.latest_at, s.kind, s.mode, s.claimed_at, s.outcome, s.run_id,"
+                     " r.status as agent_status,"
                      " coalesce(r.request_id, (select p.request_id from purchase_submissions p"
                      "  where p.schedule_due = s.due_at and p.status = 'accepted' order by p.id desc limit 1))"
                      " as request_id,"
@@ -1337,15 +1342,45 @@ def _run_alert(run: dict, status: dict) -> tuple[str, datetime, str]:
     return "run_halted", at, f"Run #{run['id']} ended halted. {switch}"
 
 
-def _missed_scheduled_run(snap: dict) -> dict | None:
-    """A missed scheduled run would become a banner alert here, and there is none yet.
+# A scheduled row whose agent ran to an end: a later one of these clears an older missed time from the banner.
+RAN_OUTCOMES = ("submitted", "skipped", "halted", "failed")
 
-    Scheduled runs are recorded in `agent_schedule` (#224, `vending.agent_schedule`), and a missed
-    one already shows in Needs attention (`_scheduled_runs`). Wiring it onto the banner is a
-    follow-up: return `{'kind': 'missed_run', 'at': ..., 'text': ...}` here for a run that never
-    started. Until then this returns None and the banner says nothing about missed runs.
-    """
-    return None
+
+def _missed_scheduled_run(snap: dict) -> dict | None:
+    """The banner line for the newest scheduled or midweek time that was due and never ran by its latest start
+    (`agent_schedule.outcome = 'missed'`, from the scheduled runs' panel: the newest row and the last week's
+    problems). Live period only, as the run lines: its time must be at or after the ledger's opening. It clears
+    once a later run has finished: a newer scheduled row whose agent run ended, or a live agent run (by hand too)
+    that started after the missed time and finished. Plain words only, never the row's detail."""
+    opened = snap.get("opened_at")
+    panel = snap.get("scheduled_runs")
+    data = panel.get("data") if isinstance(panel, dict) and panel.get("ok") else None
+    if opened is None or not isinstance(data, dict):
+        return None
+    rows = [r for r in [data.get("latest"), *(data.get("incidents") or [])]
+            if isinstance(r, dict) and isinstance(r.get("due_at"), datetime)]
+    missed = [r for r in rows if r.get("outcome") == "missed" and r["due_at"] >= opened]
+    if not missed:
+        return None
+    row = max(missed, key=lambda r: r["due_at"])
+    if any(r["due_at"] > row["due_at"] and r.get("outcome") in RAN_OUTCOMES and r.get("run_id") is not None
+           for r in rows):
+        return None
+    done = (snap.get("status") or {}).get("last_finished")
+    if isinstance(done, dict) and isinstance(done.get("started_at"), datetime) and done["started_at"] > row["due_at"]:
+        return None
+    midweek = row.get("kind") == agent_schedule.MIDWEEK
+    due = _eastern(row["due_at"])
+    what = (f"The midweek run requested {due:%a %d %b}, {due.hour % 12 or 12}:{due:%M %p} ET" if midweek
+            else f"The scheduled run due {due:%a %d %b}, {due.hour % 12 or 12}:{due:%M %p} ET")
+    latest = row.get("latest_at")
+    if isinstance(latest, datetime):
+        last = _eastern(latest)
+        by = f" by its latest start, {last:%a %d %b}, {last.hour % 12 or 12}:{last:%M %p} ET"
+    else:
+        by = " in its window"
+    return {"kind": "missed_run", "at": row["due_at"],
+            "text": f"{what} never started{by}. `python -m vending.agent_schedule` says why."}
 
 
 def outage_alerts(syncs: dict | None) -> list[dict]:
@@ -1425,13 +1460,16 @@ def _scheduled_line(row: dict, now: datetime) -> tuple[str, str] | None:
     if outcome != "running" and row.get("agent_status") == "running":
         level, what = "bad", (f"ended {outcome}, but its agent run still says running in agent_runs: its ending "
                               "couldn't be recorded there. Record it by hand once you know how it ended")
+    midweek = row.get("kind") == agent_schedule.MIDWEEK
     try:
         due = _eastern(row["due_at"])
-        when = f" due {due:%a %d %b}, {due.hour % 12 or 12}:{due:%M %p} ET"
+        when = f" {'requested' if midweek else 'due'} {due:%a %d %b}, {due.hour % 12 or 12}:{due:%M %p} ET"
     except (KeyError, TypeError, ValueError, AttributeError):
         when = ""
     kind = {"dry-run": "dry run", "live": "live run"}.get(row.get("mode"), "run")
     run = f" (agent run {int(row['run_id'])})" if isinstance(row.get("run_id"), int) else ""
+    if midweek and what == SCHEDULED["submitted"][1]:
+        what = "submitted a midweek visit request"
     sent = ""
     request, submission, unsettled = row.get("request_id"), row.get("submission"), row.get("unsettled") or []
     if request:
@@ -1445,7 +1483,7 @@ def _scheduled_line(row: dict, now: datetime) -> tuple[str, str] | None:
     elif outcome != "running":
         sent = " Nothing sent."
     see = "" if outcome in ("running", "submitted") else " `python -m vending.agent_schedule` says why."
-    return level, f"The scheduled {kind}{when} {what}{run}.{sent}{see}"
+    return level, f"The {'midweek' if midweek else 'scheduled'} {kind}{when} {what}{run}.{sent}{see}"
 
 
 # The worker's weekly price check (`vending.price_schedule`): its newest row, read from the table. No `detail`: a
@@ -2431,6 +2469,8 @@ def _runs_html(panel: dict, now: datetime) -> str:
         end = r["finished_at"] or now
         meta = [_e(r["mode"]), _e(r["model"] or "model not recorded"),
                 ("ran " if r["finished_at"] else "running ") + _span(end - r["started_at"])]
+        if r.get("scheduled"):      # started by the worker: a weekly time, or a midweek wake-up (#219)
+            meta.insert(1, "midweek run" if r["scheduled"] == agent_schedule.MIDWEEK else "scheduled run")
         if r["cost_usd"] is not None:
             meta.append(_money(r["cost_usd"]))
         if r["request_id"]:
