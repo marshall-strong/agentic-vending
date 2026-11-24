@@ -31,12 +31,14 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 import sys
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from vending import planner
@@ -59,6 +61,8 @@ MAX_ROUNDING_CENTS = 50
 EASTERN = ZoneInfo("America/New_York")
 CSV_COLUMNS = ("sku", "rank", "store", "units_per_pack", "price", "max", "url", "pack_description",
                "checked", "note")
+# An Amazon product page's path, which names its listing by ASIN: /dp/B0..., /Name/dp/B0..., /gp/product/B0...
+_AMAZON_PRODUCT = re.compile(r"(?:/[^/]+)?/(?:dp|gp/product)/([A-Z0-9]{10})(?:/.*)?", re.IGNORECASE)
 
 
 class SourcingError(ValueError):
@@ -114,6 +118,23 @@ def day(moment: datetime) -> str:
     """The Eastern date of `moment`, like 2026-11-27. Connections return UTC, so 11:30 PM ET would read as the
     next day without this."""
     return f"{moment.astimezone(EASTERN):%Y-%m-%d}"
+
+
+def plain_link(store: str, url: str | None) -> str | None:
+    """An Amazon product link as we store and send it: `https://www.amazon.com/dp/<ASIN>`, with no slug, query,
+    `ref=` path or affiliate tag (a search once cited one with someone else's `tag=`). Any other link, or an Amazon
+    link that isn't a product page, is left as it is. Migration 033 cleaned the links stored before this."""
+    if store != planner.AMAZON or not url:
+        return url
+    try:
+        parts = urlsplit(url.strip())
+        host = (parts.hostname or "").lower()
+    except ValueError:
+        return url
+    found = _AMAZON_PRODUCT.fullmatch(parts.path)
+    if parts.scheme.lower() not in ("http", "https") or not (host == "amazon.com" or host.endswith(".amazon.com"))             or found is None:
+        return url
+    return f"https://www.amazon.com/dp/{found.group(1).upper()}"
 
 
 def default_max(expected_cents: int) -> int:
@@ -226,8 +247,10 @@ def to_planner(rows: list[Option]) -> tuple[planner.Sourcing, ...]:
 
 
 def set_option(conn: psycopg.Connection, o: Option, now: datetime | None = None) -> str:
-    """Add or replace one row, logged with what it replaced. Returns "added" or "replaced"."""
+    """Add or replace one row, logged with what it replaced. Returns "added" or "replaced". An Amazon link is
+    stored plain (`plain_link`)."""
     now = now or datetime.now(timezone.utc)
+    o = replace(o, url=plain_link(o.store, o.url))
     found = problems(o, now)
     if found:
         raise SourcingError(f"{o.sku} {o.rank}: " + "; ".join(found))

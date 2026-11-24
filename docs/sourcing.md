@@ -22,6 +22,10 @@ python -m vending.sourcing set COCA-ORIGINAL-20BOT --store Amazon --pack 24 --pr
 - `--checked 2026-11-11` if you saw the price on an earlier day. The default is now.
 - `--alternate` sets the alternate instead. A product needs a primary first.
 - Setting a row again replaces it. `action_log` keeps the values it replaced and your name.
+- An Amazon product link is stored plain, `https://www.amazon.com/dp/<ASIN>`, with no name in the path, no
+  query, no `ref=` path and no affiliate tag (`sourcing.plain_link`). That is the link the worker gets.
+  Migration 033 cleaned the links stored before, and logged each change (`sourcing.plain_link` in
+  `action_log`).
 
 The command refuses anything the purchase API would refuse (an unknown store, an Amazon row
 without an Amazon link, a pack outside 1-60, a max under the price or over $200) and any SKU
@@ -175,8 +179,9 @@ Anthropic's web search tool, and records what it found here. The agent's topic i
   search returned (only the case of the scheme and host and a trailing slash may differ), and the
   stored link is the search result's, not the model's text. It must be on the store's own domain
   or its `www.` host, with no port, and be the store's product page: Amazon `/dp/ASIN` or
-  `/gp/product/ASIN`. Amazon's `us.amazon.com` and `smile.amazon.com` count as its own site, and
-  such a link is stored on `www.amazon.com` with the same ASIN. Walmart `/ip/...`, Costco
+  `/gp/product/ASIN`. Amazon's `us.amazon.com` and `smile.amazon.com` count as its own site. An
+  Amazon link is stored plain, `https://www.amazon.com/dp/<ASIN>` (a search once cited one with
+  someone else's affiliate tag), but only after the cited link matched a search result. Walmart `/ip/...`, Costco
   `....product.....html`, BJs `/product/...`. The pack must be the one asked for (with
   `--compare`, one the slots can use), the price at most $200 a pack and $10 a unit, and the price per
   unit within half and twice the price the table already has for the drink (the row it refreshes,
@@ -284,6 +289,43 @@ python -m vending.price_search SKU --store Amazon --pack 24 --by NAME     # one 
   $0.22 on Sonnet and $0.03 on Haiku, so comparing four stores reserves up to about $1.68, $0.88 and
   $0.12 a drink. The first real run (23 Nov, Opus) billed about $0.10 a lookup.
 - It needs `VENDING_ANTHROPIC_API_KEY`. `--dry-run` needs no key and spends nothing.
+- **A database timeout doesn't end a run.** Each connection is tried 3 times, 1 and 2 seconds apart. A drink
+  that still can't reach the database is skipped (`db_error`) and the run goes on with the next drink.
+  The `--json` file is saved however the run ends. (On 23 Nov one Azure Postgres timeout ended a Haiku
+  run at drink 9 and lost its results.)
+
+## The price memory
+
+Weekly price checks are worth the spend, and should spend as little as they can (Kevin, 23 Nov). So
+every lookup is remembered, and the next run uses what it learned. The agent's tool and the command
+both do this.
+
+- **Every lookup is logged** in `price_lookups` (migration 032): the drink, the store, the packs asked
+  for, what the page showed (pack, price, link, stock), the outcome (`found`, `not_found`,
+  `out_of_stock`, `check_disagrees` or another refusal code), the model, the cost, the time and who ran
+  it. `--no-store` runs are logged too, marked as search only. See a drink's latest lookups with
+  `python -m vending.price_search SKU --history`.
+- **Known dead ends are skipped.** A store whose open search found no listing for a drink, in the packs
+  asked for, is skipped for 21 days (`price_dead_end_days`; 0 turns it off): "skipped: not carried,
+  checked DATE". A later find there in those packs ends it. The agent's tool says `not_carried`.
+- **Known listings are re-checked.** When a row at that store has the product's link, the lookup asks for
+  that exact listing (the link, and the ASIN for Amazon) with one search. If that gives no usable price,
+  it searches the store as usual. With `--compare` this means a store we already buy from is re-checked
+  on its listing; another pack size there is found only with `--full`.
+- **Receipts first.** With `--plan`, a drink a fulfilled receipt priced within `--max-age` (else 7 days)
+  needs no web lookup: "priced from a receipt on DATE; no lookup".
+- **A better model checks a cheaper model's find.** When the lookup model is cheaper than
+  `price_check_model` (default `claude-sonnet-5-5`), a find that is the first price for that drink, store
+  and pack, or more than `price_check_percent` (default 5) from the stored one, gets one check before it
+  is stored: the check model re-reads that listing with one search. It is stored, at the check's price,
+  only when both name the same listing and pack and agree within 2%. Otherwise nothing is stored from
+  that store (`check_disagrees`). With no row for that store and pack, the stored price is the newest one a
+  check confirmed (or the check model found) in the last 28 days (`confirmed_price`), so a store whose price lost
+  the comparison isn't checked again every week. A cheap model's unchecked find never counts. A find so far off
+  that it would be refused anyway (`implausible_price`) isn't checked. Nothing is checked in a `--no-store` run. Why: in the 23 Nov benchmark Haiku priced 19
+  of 20 drinks for $1.69 against Sonnet's 16 for $4.86, but misread a few prices (Celsius Arctic, Celsius
+  Kiwi, Snapple Kiwi, and Red Bull Yellow at the Original's price).
+- **`--full`** ignores the dead ends, the listing re-checks and receipts first: it searches every store openly. The check still applies.
 
 ## What reads it
 

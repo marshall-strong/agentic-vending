@@ -9,6 +9,7 @@ or as a person.
     python -m vending.price_search SKU --pack 24 --compare --by NAME                    # one drink, every store
     python -m vending.price_search --plan picked --compare --no-store --model M --json out.json --by NAME
     python -m vending.price_search SKU --store Amazon --pack 24 --by NAME [--no-fallback] [--max-usd 5.00]
+    python -m vending.price_search SKU --history                                        # its latest lookups
 
 Receipts keep the prices of drinks we already buy fresh (`vending.receipt_prices`). A drink we have never
 bought, or one whose price is over a week old (`sourcing.STALE_AFTER`), has no checked price, and nobody is
@@ -69,12 +70,25 @@ worst case. The harness records what was billed and marks the row ("billed more 
 then on `Budget` leaves nothing for the rest of that Eastern day. **So a day's lookups bill at most $1 plus one
 lookup's overshoot**, and the overshoot's only ceiling is the model's context window, read up to three times.
 
+**The price memory** (Kevin, 23 Nov: weekly checks are essential spend, so make them cheap; `docs/sourcing.md`).
+Every request that went out is a row in `price_lookups` (`remember`, migration 032), `--no-store` runs too, marked
+as such; `--history` prints them. A store whose open search found no listing for the drink, in the packs asked for,
+is skipped for `price_dead_end_days` (`dead_ends`, `not_carried`). A row with the store's link is re-checked on that
+listing with one search (`_find_at`), then searched openly if that fails. With `--plan`, a drink a receipt priced
+within the max age needs no lookup (`receipt_priced`). A find by a model cheaper than `price_check_model` that is the
+first price for that drink, store and pack, or more than `price_check_percent` from the stored one, is re-read by
+the check model on that listing (`_verified`) and stored at the check's price only if the two agree within
+`CHECK_AGREE_PERCENT`; else `check_disagrees`. `--full` skips the memory (not the check). Each connection is tried
+`CONNECT_TRIES` times (`retrying`); a drink that still can't reach the database is skipped (`db_error`) and the
+`--json` file is saved however the run ends.
+
 **Guardrails, checked in code on what the model reports and the search returned:**
 
 - the store is one the purchase API accepts (`planner.STORES`), and the pack size is named; else refused before
   a search;
 - the cited page is one of the pages the searches returned, exactly: only the case of the scheme and host and a
-  trailing slash may differ. The stored link is the search result's, never the model's text;
+  trailing slash may differ. The stored link is the search result's, never the model's text, and an Amazon one is
+  stored plain, `https://www.amazon.com/dp/<ASIN>` (`sourcing.plain_link`: no ref path, query or affiliate tag);
 - that page is on the store's own domain or its `www.` host (for Amazon also `OTHER_HOSTS`, stored on `www.`),
   with no port or login part, and is the store's
   product page (`product_page`: Amazon `/dp/ASIN` or `/gp/product/ASIN`, Walmart `/ip/...`, Costco
@@ -118,7 +132,9 @@ is spent.
 from __future__ import annotations
 
 import json
+import logging
 import re
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
@@ -136,6 +152,8 @@ from vending.harness import (SEARCH_TOOL_TYPE, Abandoned, Budget, CapReached, Ha
 from vending.pricing import Refusal, pack_floor_cents
 from vending.receipt_prices import listing
 from vending.write_gate import Refused, log, run_write
+
+logger = logging.getLogger(__name__)
 
 TOOL_NAME = "find_pack_price"
 LABEL = "price_search"              # the model_calls label every lookup starts with (its daily budget reads it)
@@ -171,7 +189,20 @@ assert set(STORE_ORDER) == planner.STORES
 # no listing, no product page, another pack, out of stock, a price we can't use there.
 FALLBACK_ON = frozenset({"not_searched", "no_report", "not_found", "unsourced_url", "off_store_source",
                          "not_a_product_page", "bad_report", "pack_mismatch", "out_of_stock", "implausible_price",
-                         "over_ceiling"})
+                         "over_ceiling", "not_carried", "check_disagrees"})
+
+# The price memory (Kevin, 23 Nov: weekly checks are essential spend, so make them cheap). Every lookup is a row in
+# `price_lookups` (migration 032, `remember`).
+DEFAULT_DEAD_END_DAYS = 21          # a store with no listing for a drink is skipped this long (`price_dead_end_days`)
+LISTING_SEARCHES = 1                # `max_uses` to re-check a listing we already have a link for
+DEFAULT_CHECK_MODEL = "claude-sonnet-5-5"       # checks a cheaper model's find (`price_check_model`)
+DEFAULT_CHECK_PERCENT = 5           # a find within this of the stored price needs no check (`price_check_percent`)
+CHECK_AGREE_PERCENT = 2             # the check stores its price only within this of the find
+CHECK_SEARCHES = 1                  # `max_uses` for the check: it names the listing
+CONFIRMED_FOR = timedelta(days=28)  # a price a check (or the check model itself) found counts as stored this long
+CONNECT_TRIES = 3                   # a database connection that fails is tried this many times in all
+CONNECT_BACKOFF = 1.0               # seconds before the second try; twice that before the third
+_sleep = time.sleep
 
 # `python -m vending.price_search`: a person runs the same lookup, before the start too (the day-one fill, #234).
 CLI_LABEL = "price_search_cli"      # not "price_search ": the live agent's $1 a day doesn't count these
@@ -219,6 +250,12 @@ REASONS = {
     "past_cutoff": "That store's cutoff for the next visit has passed, so it can't supply it. Not searched.",
     "no_usable_price": "No store gave a usable price: in a pack the slots can use, not out of stock, before its "
                        "cutoff. Nothing was stored.",
+    # The price memory.
+    "not_carried": "Not carried: a search of that store found no listing for this drink and pack within the last few "
+                   "weeks. Try another store. Nothing was searched.",
+    "check_disagrees": "A second model's check of this listing didn't confirm the price. Nothing was stored from this "
+                       "store.",
+    "db_error": "The database couldn't be reached for this drink, after retries. Nothing more was done for it.",
 }
 
 TOOL = {
@@ -281,11 +318,13 @@ class Recorded(BaseModel):
 
 @dataclass
 class _Stop(Exception):
-    """A lookup that ends without a stored price. `detail` is for the log only; the agent gets `REASONS[code]`.
-    `logged`: `run_write` has already logged it."""
+    """A lookup that ends without a stored price. `detail` is for the log only; the agent gets `REASONS[code]`, and
+    `reply`: our own facts only (the day a dead end was found), never the model's words. `logged`: `run_write` has
+    already logged it."""
     code: str
     detail: str
     logged: bool = False
+    reply: dict = field(default_factory=dict)
 
 
 def offered(*, live: bool, now: datetime) -> bool:
@@ -316,11 +355,14 @@ def on_store(url: str, store: str) -> bool:
 
 def stored_link(url: str, store: str) -> str:
     """The link to store for a page `on_store`: on one of `OTHER_HOSTS`, the same link on the `www.` host (for
-    Amazon the same ASIN); else the search result's link as it is."""
+    Amazon the same ASIN); an Amazon product page as `https://www.amazon.com/dp/<ASIN>` (`sourcing.plain_link`);
+    else the search result's link as it is."""
     parts = urlsplit(url)
-    if (parts.hostname or "").lower() not in OTHER_HOSTS.get(store, ()):
-        return url
-    return urlunsplit((parts.scheme.lower(), "www." + STORE_DOMAINS[store], parts.path, parts.query, parts.fragment))
+    if (parts.hostname or "").lower() in OTHER_HOSTS.get(store, ()):
+        url = urlunsplit((parts.scheme.lower(), "www." + STORE_DOMAINS[store], parts.path, parts.query,
+                          parts.fragment))
+    # An Amazon product page is stored plain, `https://www.amazon.com/dp/<ASIN>`: no query, ref path or affiliate tag.
+    return sourcing.plain_link(store, url) or url
 
 
 def product_page(url: str, store: str) -> bool:
@@ -376,6 +418,132 @@ def _setting(conn: psycopg.Connection, key: str, default: int, most: int) -> int
     if isinstance(value, bool) or not isinstance(value, int):
         return 0
     return max(0, min(value, most))
+
+
+# --- The price memory ----------------------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Memory:
+    """The price memory's settings for one lookup."""
+    dead_end_days: int
+    check_model: str
+    check_percent: int
+
+    @classmethod
+    def read(cls, conn: psycopg.Connection) -> Memory:
+        model = config.get_value(conn, "price_check_model", None)
+        return cls(_setting(conn, "price_dead_end_days", DEFAULT_DEAD_END_DAYS, 365),
+                   model.strip() if isinstance(model, str) and model.strip() else DEFAULT_CHECK_MODEL,
+                   _setting(conn, "price_check_percent", DEFAULT_CHECK_PERCENT, 100))
+
+
+def remember(conn: psycopg.Connection, *, sku: str, store: str, kind: str, asked: tuple[int, int], outcome: str,
+             model: str, cost: Decimal, by: str, no_store: bool, at: datetime, seen: dict | None = None,
+             searches: Any = None, detail: str | None = None) -> None:
+    """Log one lookup in `price_lookups`: what was asked, what the store's page showed (`seen`, as far as the report
+    got), the outcome, the model and the cost."""
+    seen = seen or {}
+    conn.execute(
+        "insert into price_lookups (at, sku, store, kind, asked_min, asked_max, units_per_pack, price_cents, url,"
+        " stock, outcome, model, cost_usd, searches, no_store, by, detail)"
+        " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        (at, sku, store, kind, asked[0], asked[1], seen.get("units"), seen.get("price"), seen.get("url"),
+         seen.get("stock"), outcome, model, cost, searches if isinstance(searches, int) else None, no_store, by,
+         (detail or "")[:500] or None))
+
+
+def confirmed_price(conn: psycopg.Connection, sku: str, store: str, units: int, url: str | None, now: datetime,
+                    trusted: Callable[[str], bool]) -> int | None:
+    """The newest price for this drink, store and pack (for Amazon, the same listing) that a lookup log row vouches
+    for, from the last `CONFIRMED_FOR`: a check that agreed, or a find by a model `trusted` says needs no check. So
+    what each check learns is kept, even for a store whose price lost the comparison and has no sourcing row. A
+    cheaper model's unchecked find never counts."""
+    rows = conn.execute(
+        "select price_cents, url, model from price_lookups where sku = %s and store = %s and units_per_pack = %s"
+        " and outcome = 'found' and price_cents is not null and at > %s and at <= %s order by at desc, id desc"
+        " limit 50", (sku, store, units, now - CONFIRMED_FOR, now)).fetchall()
+    for price, link, model in rows:
+        if trusted(model) and (store != planner.AMAZON or same_listing(store, link, url)):
+            return price
+    return None
+
+
+def dead_ends(conn: psycopg.Connection, sku: str, asked: tuple[int, int], now: datetime,
+              days: int) -> dict[str, datetime]:
+    """The stores whose open search found no listing of `sku` (`not_found`) in the last `days`, for a range of packs
+    that covers `asked`, with no find there since in a pack that range covers. Each with when it was searched."""
+    if days <= 0:
+        return {}
+    rows = conn.execute(
+        "select n.store, max(n.at) from price_lookups n"
+        " where n.sku = %s and n.kind = 'search' and n.outcome = 'not_found'"
+        " and n.asked_min <= %s and n.asked_max >= %s and n.at > %s"
+        " and not exists (select 1 from price_lookups f where f.sku = n.sku and f.store = n.store"
+        "                 and f.outcome = 'found' and f.id > n.id"
+        "                 and f.units_per_pack between n.asked_min and n.asked_max)"
+        " group by n.store", (sku, asked[0], asked[1], now - timedelta(days=days))).fetchall()
+    return dict(rows)
+
+
+def history(conn: psycopg.Connection, sku: str, limit: int = 30) -> list[str]:
+    """A drink's latest lookups, newest first, one line each."""
+    rows = conn.execute(
+        "select at, store, kind, model, outcome, price_cents, units_per_pack, stock, url, cost_usd, no_store, by"
+        " from price_lookups where sku = %s order by at desc, id desc limit %s", (sku, limit)).fetchall()
+    lines = []
+    for at, store, kind, model, outcome, price, units, stock, url, cost, no_store, by in rows:
+        seen = (f"  ${price / 100:.2f} for {units}" if price is not None and units else "") \
+            + (f", {stock.replace('_', ' ')}" if stock else "") + (f"  {url}" if url else "")
+        lines.append(f"  {at.astimezone(start.EASTERN):%Y-%m-%d %H:%M}  {store:7}  {kind:7}  {outcome:15}  {model}"
+                     f"{seen}  (${cost:.4f}, by {by}{', search only' if no_store else ''})")
+    return lines
+
+
+def retrying(connect: Callable[[], psycopg.Connection]) -> Callable[[], psycopg.Connection]:
+    """`connect`, tried `CONNECT_TRIES` times in all with a short wait between, so one database timeout (an Azure
+    Postgres connection timed out on 23 Nov and ended a run) doesn't end a run."""
+    def opened() -> psycopg.Connection:
+        for n in range(1, CONNECT_TRIES + 1):
+            try:
+                return connect()
+            except psycopg.OperationalError as error:
+                if n == CONNECT_TRIES:
+                    raise
+                logger.warning("database connection failed (%s); trying again (%d of %d)", error, n + 1,
+                               CONNECT_TRIES)
+                _sleep(CONNECT_BACKOFF * n)
+        raise AssertionError("unreachable")
+    return opened
+
+
+def receipt_priced(rows: list[sourcing.Option], now: datetime, max_age: timedelta | None) -> sourcing.Option | None:
+    """The newest of a drink's rows priced from a fulfilled receipt (`vending.receipt_prices`) within `max_age`
+    (else the 7-day rule): that drink needs no web lookup. None if there is none."""
+    within = max_age or sourcing.STALE_AFTER
+    priced = [o for o in rows if o.from_receipt and o.expected_cents is not None and now - o.checked_at <= within]
+    return max(priced, key=lambda o: o.checked_at, default=None)
+
+
+def same_listing(store: str, a: str | None, b: str | None) -> bool:
+    """Two links to one listing: for Amazon the same ASIN; else the same page (scheme, host and path; Walmart's item
+    number, the path's last part)."""
+    if not a or not b:
+        return False
+    if store == planner.AMAZON:
+        return listing(a) == listing(b)
+    x, y = _normal(a), _normal(b)
+    if x is None or y is None:
+        return False
+    if store == "Walmart":
+        return x[2].rsplit("/", 1)[-1] == y[2].rsplit("/", 1)[-1] and x[1].removeprefix("www.") == \
+            y[1].removeprefix("www.")
+    return x[:3] == y[:3]
+
+
+def _match(rows: Any, store: str, found: dict) -> sourcing.Option | None:
+    """The row a find would refresh: same store and pack, and for Amazon the same listing."""
+    return next((o for o in rows if o is not None and o.store == store and o.units_per_pack == found["units"]
+                 and (store != planner.AMAZON or listing(o.url) == listing(found["url"]))), None)
 
 
 @dataclass(frozen=True)
@@ -472,7 +640,7 @@ class Comparison:
             stores.append({"store": o.store, "code": o.code, "price": r.get("price"),
                            "units_per_pack": r.get("units_per_pack"), "per_unit": r.get("per_unit"),
                            "stock": r.get("stock"), "url": r.get("url"), "pack_description": r.get("pack_description"),
-                           "source": r.get("source"),
+                           "source": r.get("source"), "checked": r.get("checked"),
                            "cost_usd": f"{o.cost_usd:.4f}"})
         return {"sku": self.drink.sku, "units": self.drink.units, "smallest_pack": self.drink.smallest_pack,
                 "plan_pack": self.drink.pack, "code": self.code, "cost_usd": f"{self.cost_usd:.4f}", "stores": stores,
@@ -490,13 +658,16 @@ class PriceSearch:
 
     `model` is the fallback: each lookup runs on the `price_search_model` setting if it is set
     (`configured_model`), unless `model_fixed` (the command's `--model`). `max_age`: a price checked longer ago
-    than this is looked up again even if it is still fresh by the 7-day rule (`sourcing.STALE_AFTER`)."""
+    than this is looked up again even if it is still fresh by the 7-day rule (`sourcing.STALE_AFTER`).
+
+    `full`: ignore the price memory: search a store that didn't carry the drink lately, and search openly instead of
+    re-checking a listing we have a link for."""
 
     def __init__(self, harness: Harness, connect: Callable[[], psycopg.Connection], *, model: str,
                  now: Callable[[], datetime] | None = None, person: str | None = None, model_fixed: bool = False,
-                 max_age: timedelta | None = None, bench: bool = False):
+                 max_age: timedelta | None = None, bench: bool = False, full: bool = False):
         self.harness, self.connect, self.model, self.person = harness, connect, model, person
-        self.model_fixed, self.max_age = model_fixed, max_age
+        self.model_fixed, self.max_age, self.bench, self.full = model_fixed, max_age, bench, full
         self.label = LABEL if person is None else BENCH_LABEL if bench else CLI_LABEL
         self.now = now          # None: the database clock
         self.searches = 0       # web searches this run has tried (or may have, when a call failed after sending)
@@ -523,7 +694,8 @@ class PriceSearch:
             if not stop.logged:
                 self._log(arguments, "refused", f"{stop.code}: {stop.detail}")
             return Outcome(str(arguments.get("store")), stop.code,
-                           {"refused": stop.code, "message": REASONS[stop.code]}, self.harness.spent - before)
+                           {"refused": stop.code, "message": REASONS[stop.code], **stop.reply},
+                           self.harness.spent - before)
         return Outcome(reply["store"], None, reply, self.harness.spent - before)
 
     def with_fallback(self, sku: str, store: str, units_per_pack: int, *, fallback: bool = True) -> list[Outcome]:
@@ -562,9 +734,74 @@ class PriceSearch:
                 if o.store == store and o.units_per_pack == wanted and self.fresh(o, now) \
                         and not (o.rank == "alternate" and stale_head):
                     raise _Stop("fresh_price", f"{o.rank} checked {sourcing.day(o.checked_at)}: {sourcing.describe(o)}")
+            memory = Memory.read(conn)
+            dead = None if self.full else dead_ends(conn, sku, (wanted, wanted), now, memory.dead_end_days).get(store)
+            if dead is not None:
+                raise _Stop("not_carried", f"no listing found {sourcing.day(dead)}",
+                            reply={"checked": sourcing.day(dead)})
             limit, budget = self._limits(conn)
-        found = self._search(sku, store, product, model, {wanted}, f"a pack of {wanted}", limit, budget)
+        known = None if self.full else next(
+            (o for o in before.values() if o.store == store and o.units_per_pack == wanted and o.url), None)
+        found = self._find_at(sku, store, product, model, {wanted}, f"a pack of {wanted}", limit, budget, known)
+        found = self._verified(sku, store, product, model, found, before, memory, limit, budget)
         return self._record(arguments, sku, store, found, before, found["cost"], found["billed"])
+
+    def _find_at(self, sku: str, store: str, product: tuple, model: str, packs: Any, asked: str, limit: int,
+                 budget: Budget | None, known: sourcing.Option | None) -> dict:
+        """With `known` (a row at this store with its product link), re-check that listing with one search first
+        (Kevin, 23 Nov); if that gives no usable price, search the store openly."""
+        if known is not None:
+            try:
+                return self._search(sku, store, product, model, {known.units_per_pack},
+                                    f"the pack of {known.units_per_pack} on that listing", limit, budget,
+                                    kind="listing", uses=LISTING_SEARCHES, link=known.url)
+            except _Stop as stop:
+                if stop.code not in FALLBACK_ON:
+                    raise
+                self._log({"sku": sku, "store": store, "listing": known.url}, "refused",
+                          f"re-checking the listing: {stop.code}: {stop.detail}; searching the store instead")
+        return self._search(sku, store, product, model, packs, asked, limit, budget)
+
+    def _needs_check(self, model: str, check: str) -> bool:
+        """A find by a model cheaper than the check model gets a check (`_verified`). A dearer or the same model
+        doesn't: a cheaper model never second-guesses a better one."""
+        if model == check:
+            return False
+        try:
+            return self.harness.prices.rates(model, 0).input < self.harness.prices.rates(check, 0).input
+        except Exception:       # an unpriced model: check, and let the harness refuse what it can't price
+            return True
+
+    def _verified(self, sku: str, store: str, product: tuple, model: str, found: dict,
+                  rows: dict[str, sourcing.Option], memory: Memory, limit: int, budget: Budget | None) -> dict:
+        """A cheaper model's find, checked by `memory.check_model` before it is stored (Kevin, 23 Nov: Haiku
+        misread a few prices in the benchmark). No check when the find is within `memory.check_percent` of the
+        stored price for that drink, store and pack (`_match`; with no row, the newest `confirmed_price` in the
+        lookup log), or when it is far enough off that storing will refuse it anyway (`PLAUSIBLE`). Otherwise one check lookup of that listing and pack: the find is stored, at the
+        check's price, only if the two agree within `CHECK_AGREE_PERCENT`; else `check_disagrees`."""
+        if self.bench or not self._needs_check(model, memory.check_model):
+            return found
+        match = _match(rows.values(), store, found)
+        stored = match.expected_cents if match is not None else None
+        if stored is None:
+            try:
+                with self.connect() as conn:
+                    stored = confirmed_price(conn, sku, store, found["units"], found["url"], self._now(conn),
+                                             lambda m: not self._needs_check(m, memory.check_model))
+            except psycopg.Error as error:      # no memory to read: the find gets its check
+                logger.error("couldn't read the confirmed prices of %s at %s: %s", sku, store, error)
+        if stored is not None and abs(found["price"] - stored) * 100 <= memory.check_percent * stored:
+            return found
+        known = next((o for o in (match, rows.get("primary"), rows.get("alternate"))
+                      if o is not None and o.expected_cents is not None), None)
+        if known is not None and not PLAUSIBLE[0] <= Fraction(found["price"], found["units"]) / _per_unit(known) \
+                <= PLAUSIBLE[1]:
+            return found
+        checked = self._search(sku, store, product, memory.check_model, {found["units"]},
+                               f"the pack of {found['units']} on that listing", limit, budget, kind="check",
+                               uses=CHECK_SEARCHES, link=found["url"], against=found)
+        return {**found, "price": checked["price"], "stock": checked["stock"], "checked_with": memory.check_model,
+                "cost": found["cost"] + checked["cost"]}
 
     def _open(self, conn: psycopg.Connection, sku: str) -> tuple[datetime, tuple, str]:
         """(now, the catalog's name and size, the model) for a lookup that may start; else `_Stop`."""
@@ -589,14 +826,59 @@ class PriceSearch:
         return limit, budget
 
     def _search(self, sku: str, store: str, product: tuple, model: str, packs: Any, asked: str, limit: int,
-                budget: Budget | None) -> dict:
+                budget: Budget | None, *, kind: str = "search", uses: int = SEARCHES_PER_LOOKUP,
+                link: str | None = None, against: dict | None = None) -> dict:
         """One search request at `store` for a pack in `packs`, checked (`_checked`): the fields to store, plus
-        `cost` (the harness's settled cost) and `billed` (searches billed)."""
+        `cost` (the harness's settled cost) and `billed` (searches billed). Every request that went out is logged in
+        `price_lookups` (`remember`), with its `kind`: `search`, `listing` (a re-check of `link`) or `check` (a
+        check of `against`, a cheaper model's find: any answer that doesn't agree is `check_disagrees`)."""
         left = limit - self.searches
         if left <= 0:
             raise _Stop("search_cap", f"this run has tried {self.searches} of {limit} searches")
-        uses = min(SEARCHES_PER_LOOKUP, left)
-        request = self._request(sku, store, product, uses, model, asked)
+        uses = min(uses, left)
+        before = self.harness.spent
+        sent: dict = {}
+        seen: dict = {}
+        try:
+            found = self._ask(sku, store, product, model, packs, asked, uses, budget, link, sent, seen)
+            if against is not None:
+                self._agrees(store, found, against)
+        except _Stop as stop:
+            if not sent:
+                raise
+            if kind == "check" and stop.code not in STOP_RUN:
+                stop = _Stop("check_disagrees", f"the check found {stop.code}: {stop.detail}")
+            self._remember(sku, store, kind, packs, stop.code, model, self.harness.spent - before, seen,
+                           sent.get("billed"), stop.detail)
+            raise stop from None
+        self._remember(sku, store, kind, packs, "found", model, self.harness.spent - before, seen, found["billed"],
+                       None)
+        return found
+
+    def _agrees(self, store: str, checked: dict, found: dict) -> None:
+        """The check's answer is the same listing and pack, at a price within `CHECK_AGREE_PERCENT` of the find."""
+        if not same_listing(store, checked["url"], found["url"]) or checked["units"] != found["units"] \
+                or abs(checked["price"] - found["price"]) * 100 > CHECK_AGREE_PERCENT * found["price"]:
+            raise _Stop("check_disagrees", f"the find said ${found['price'] / 100:.2f} for {found['units']} at "
+                                           f"{found['url']}; the check said ${checked['price'] / 100:.2f} for "
+                                           f"{checked['units']} at {checked['url']}")
+
+    def _remember(self, sku: str, store: str, kind: str, packs: Any, outcome: str, model: str, cost: Decimal,
+                  seen: dict, billed: Any, detail: str | None) -> None:
+        """`remember`, on its own connection. A log that can't be written never stops the lookup: it is logged."""
+        try:
+            with self.connect() as conn:
+                remember(conn, sku=sku, store=store, kind=kind, asked=(min(packs), max(packs)), outcome=outcome,
+                         model=model, cost=cost, by=self.person or AGENT_BY, no_store=self.bench,
+                         at=self._now(conn), seen=seen, searches=billed, detail=detail)
+        except psycopg.Error as error:
+            logger.error("couldn't log the %s lookup of %s at %s (%s): %s", kind, sku, store, outcome, error)
+
+    def _ask(self, sku: str, store: str, product: tuple, model: str, packs: Any, asked: str, uses: int,
+             budget: Budget | None, link: str | None, sent: dict, seen: dict) -> dict:
+        """Send one search request and check its report. Sets `sent["at"]` once the request may have gone out, and
+        fills `seen` with what the report showed as far as the checks got."""
+        request = self._request(sku, store, product, uses, model, asked, link)
         try:
             call = self.harness.call_detailed(request, label=f"{self.label} {sku} {store}", daily_budget=budget)
         except CapReached as error:
@@ -605,10 +887,13 @@ class PriceSearch:
             raise _Stop("not_searched", str(error)) from None
         except (Abandoned, HarnessError) as error:      # it may have run: count its searches
             self.searches += uses
+            sent["at"] = True
             raise _Stop("not_searched", str(error)) from None
+        sent["at"] = True
         response = call.response
         content = list(getattr(response, "content", None) or [])
         billed = getattr(getattr(response.usage, "server_tool_use", None), "web_search_requests", None)
+        sent["billed"] = billed
         tried = sum(1 for b in content if getattr(b, "type", None) == "server_tool_use"
                     and getattr(b, "name", None) == "web_search")
         self.searches += max(tried, int(billed or 0)) if (tried or billed is not None) else uses
@@ -623,11 +908,20 @@ class PriceSearch:
             raise _Stop("no_report", "the search ended without a report." + spent)
         if not report.get("found"):
             raise _Stop("not_found", f"report: {json.dumps(report)[:400]}" + spent)
-        found = self._checked(report, store, packs, pages, spent)
+        found = self._checked(report, store, packs, pages, spent, seen)
         return {**found, "cost": call.cost_usd, "billed": billed}
 
-    def _request(self, sku: str, store: str, product: tuple, uses: int, model: str, asked: str) -> dict:
+    def _request(self, sku: str, store: str, product: tuple, uses: int, model: str, asked: str,
+                 link: str | None = None) -> dict:
         name, size = product
+        if link:
+            named = listing(link)
+            asin = f" (ASIN {named[1]})" if named and named[0] == "asin" else ""
+            task = (f"Re-check this exact listing on the store's own site: {link}{asin}. Find today's price of "
+                    f"{asked} on that product page, then call report_price. If the search doesn't return that page, "
+                    "report found false.")
+        else:
+            task = f"Find today's price of {asked} on the store's own product page, then call report_price."
         return {
             "model": model, "max_tokens": MAX_TOKENS, "system": SYSTEM,
             "output_config": {"effort": "low"},
@@ -637,13 +931,15 @@ class PriceSearch:
             "tool_choice": {"type": "auto"},
             "messages": [{"role": "user", "content": (
                 f"Product: {name}{f' ({size})' if size else ''}, catalog SKU {sku}.\n"
-                f"Store: {store} ({STORE_DOMAINS[store]}).\n"
-                f"Find today's price of {asked} on the store's own product page, then call report_price.")}],
+                f"Store: {store} ({STORE_DOMAINS[store]}).\n" + task)}],
         }
 
-    def _checked(self, report: dict, store: str, packs: Any, pages: list[str], spent: str) -> dict:
+    def _checked(self, report: dict, store: str, packs: Any, pages: list[str], spent: str,
+                 seen: dict | None = None) -> dict:
         """The report, checked against the guardrails, as the fields to store. The link is the search result's,
-        on the store's `www.` host when it came from one of its `OTHER_HOSTS` (`stored_link`)."""
+        on the store's `www.` host when it came from one of its `OTHER_HOSTS`, and plain for Amazon
+        (`stored_link`). `seen` gets each field once it passes its own check, for the lookup log."""
+        seen = {} if seen is None else seen
         detail = f"report: {json.dumps(report)[:400]}." + spent
         url = returned(str(report.get("url") or ""), pages)
         if url is None:
@@ -652,6 +948,7 @@ class PriceSearch:
             raise _Stop("off_store_source", detail)
         if not product_page(url, store):
             raise _Stop("not_a_product_page", detail)
+        seen["url"] = stored_link(url, store)
         try:
             price = sourcing.cents(str(report.get("price") or ""), "price")
         except sourcing.SourcingError:
@@ -659,6 +956,11 @@ class PriceSearch:
         units = report.get("units_per_pack")
         if isinstance(units, bool) or not isinstance(units, int) or not 1 <= units <= planner.MAX_UNITS_PER_PACK:
             raise _Stop("bad_report", detail)
+        seen["units"] = units
+        if price <= planner.MAX_PRICE_PER_PACK_CENTS:
+            seen["price"] = price
+        if report.get("stock") in sourcing.STOCK:
+            seen["stock"] = report["stock"]
         if units not in packs:
             raise _Stop("pack_mismatch", detail)
         if price > planner.MAX_PRICE_PER_PACK_CENTS or price > units * MOST_PER_UNIT_CENTS:
@@ -686,9 +988,7 @@ class PriceSearch:
                 refuse("changed_meanwhile", f"{sku}'s rows changed while the search ran")
             now = self._now(conn)
             outcome["at"] = now
-            match = next((o for o in rows.values() if o is not None and o.store == store
-                          and o.units_per_pack == found["units"]
-                          and (store != planner.AMAZON or listing(o.url) == listing(found["url"]))), None)
+            match = _match(rows.values(), store, found)
             # The price we already have for this drink: the row this refreshes, else the primary, else the alternate.
             known = next((o for o in (match, rows["primary"], rows["alternate"])
                           if o is not None and o.expected_cents is not None), None)
@@ -699,7 +999,8 @@ class PriceSearch:
             shown = f"${found['price'] / 100:.2f} for {found['units']}"
             who = f", run by {self.person}" if self.person else ""
             first = "" if known is not None else ", the drink's first price"
-            note = f"found with a web search {sourcing.day(now)}{who}{first}: {found['url']}"[:500]
+            check = f", confirmed by {found['checked_with']}" if found.get("checked_with") else ""
+            note = f"found with a web search {sourcing.day(now)}{who}{first}{check}: {found['url']}"[:500]
             expected = found["price"]
             primary, alternate = rows["primary"], rows["alternate"]
             # A stale or unpriced primary blocks the fill however fresh the alternate is, so a fresh find goes to
@@ -793,6 +1094,9 @@ class PriceSearch:
                 now, product, model = self._open(conn, drink.sku)
                 before = {o.rank: o for o in sourcing.options_for(conn, [drink.sku])}
                 limit, budget = self._limits(conn)
+                memory = Memory.read(conn)
+                dead = {} if self.full or not store else dead_ends(
+                    conn, drink.sku, (lowest, planner.MAX_UNITS_PER_PACK), now, memory.dead_end_days)
                 try:
                     ceiling = planning._limit(conn, "price_ceiling_cents", planner.AGREED_CEILING_CENTS)
                 except planning.NotReady as error:
@@ -817,14 +1121,27 @@ class PriceSearch:
             if table:
                 comparison.outcomes.append(Outcome(at, "fresh_price", {**table[0].reply(), "from_table": True}))
                 continue
+            if at in dead:
+                checked = sourcing.day(dead[at])
+                comparison.outcomes.append(Outcome(at, "not_carried", {"refused": "not_carried", "checked": checked,
+                                                                       "message": REASONS["not_carried"]}))
+                continue
+            # A listing we have the link for (not fresh, or it would be in `kept`) is re-checked with one search.
+            known = None if self.full or not store else next(
+                (o for o in sorted(before.values(), key=lambda o: sourcing.RANKS.index(o.rank))
+                 if o.store == at and o.url and planner.pack_usable(o.units_per_pack, drink.units)), None)
             before_cost = self.harness.spent
             try:
-                found = self._search(drink.sku, at, product, model, packs, asked, limit, budget)
+                found = self._find_at(drink.sku, at, product, model, packs, asked, limit, budget, known)
                 candidate = self._candidate(drink.sku, at, found, before, tax, ceiling)
+                if store:
+                    checked_find = self._verified(drink.sku, at, product, model, found, before, memory, limit, budget)
+                    if checked_find is not found:     # stored at the check's price, so its own checks again
+                        candidate = self._candidate(drink.sku, at, checked_find, before, tax, ceiling)
             except _Stop as stop:
                 self._log({**arguments, "store": at}, "refused", f"{stop.code}: {stop.detail}")
                 comparison.outcomes.append(Outcome(at, stop.code, {"refused": stop.code,
-                                                                   "message": REASONS[stop.code]},
+                                                                   "message": REASONS[stop.code], **stop.reply},
                                                    self.harness.spent - before_cost))
                 if stop.code in STOP_RUN:
                     comparison.code, comparison.stopped = stop.code, True
@@ -847,9 +1164,7 @@ class PriceSearch:
                    ceiling: int) -> Candidate:
         """A find, checked against the table as `_record` checks one: the price band against the price we have, and
         the max it would get (the matching row's, else `agent_max`) against the row's max and the ceiling."""
-        rows = [o for o in before.values()]
-        match = next((o for o in rows if o.store == store and o.units_per_pack == found["units"]
-                      and (store != planner.AMAZON or listing(o.url) == listing(found["url"]))), None)
+        match = _match(before.values(), store, found)
         known = next((o for o in (match, before.get("primary"), before.get("alternate"))
                       if o is not None and o.expected_cents is not None), None)
         shown = f"${found['price'] / 100:.2f} for {found['units']}"
@@ -1051,6 +1366,8 @@ def _max_age(text: str | None) -> timedelta | None:
 
 
 def _line(sku: str, units: int, out: Outcome) -> str:
+    if out.code == "not_carried":
+        return f"  {sku} {units} a pack at {out.store}: skipped: not carried, checked {out.reply['checked']}, no search"
     if out.ok:
         r = out.reply
         return (f"  {sku}: price from {out.store}: {r['recorded']}, ${r['price']} for {r['units_per_pack']} "
@@ -1070,6 +1387,8 @@ def _compared(c: Comparison, stored: bool) -> list[str]:
                      if r.get("from_table") else f"{r['url']} (${o.cost_usd:.4f})")
             lines.append(f"    {o.store}: ${r['price']} for {r['units_per_pack']} (${r['per_unit']} a unit), "
                          f"{stock}, {where}")
+        elif o.code == "not_carried":
+            lines.append(f"    {o.store}: skipped: not carried, checked {r['checked']}, no search")
         else:
             lines.append(f"    {o.store}: {o.code}: {REASONS[o.code]} (${o.cost_usd:.4f})")
     for rank, pick in (("primary", c.primary), ("alternate", c.alternate)):
@@ -1116,7 +1435,7 @@ def main(argv: list[str] | None = None, *, client: Any = None,
     parser.add_argument("--store", choices=STORE_ORDER, default=STORE_ORDER[0],
                         help=f"the store to try first (default {STORE_ORDER[0]})")
     parser.add_argument("--pack", type=int, help="units per pack (required with a SKU)")
-    parser.add_argument("--by", required=True, help="your name, for the log")
+    parser.add_argument("--by", help="your name, for the log (not needed with --history)")
     parser.add_argument("--compare", action="store_true",
                         help="price every store and keep the cheapest usable pack per unit (the default with --plan)")
     parser.add_argument("--first-usable", action="store_true",
@@ -1133,9 +1452,27 @@ def main(argv: list[str] | None = None, *, client: Any = None,
     parser.add_argument("--model", default=None,
                         help="the model (default: the price_search_model setting, else the agent's)")
     parser.add_argument("--dry-run", action="store_true", help="list the lookups; search and spend nothing")
+    parser.add_argument("--full", action="store_true",
+                        help="ignore the price memory: search stores that lately had no listing, search openly instead "
+                             "of re-checking known listings, and look up drinks a recent receipt priced")
+    parser.add_argument("--history", action="store_true",
+                        help="with a SKU: show its latest lookups, newest first; searches and spends nothing")
     args = parser.parse_args(argv)
+    connect = retrying(connect or db.connect)
 
-    by = args.by.strip()
+    if args.history:
+        if args.sku is None:
+            print("--history needs a SKU", file=sys.stderr)
+            return 2
+        with connect() as conn:
+            lines = history(conn, args.sku.strip())
+        print(f"Latest price lookups for {args.sku.strip()}, newest first (times Eastern):" if lines
+              else f"No price lookups logged for {args.sku.strip()}.")
+        for line in lines:
+            print(line)
+        return 0
+
+    by = (args.by or "").strip()
     try:
         cap_cents = _cap_cents(args.max_usd)
         max_age = _max_age(args.max_age)
@@ -1156,7 +1493,6 @@ def main(argv: list[str] | None = None, *, client: Any = None,
         print(error, file=sys.stderr)
         return 2
     cap = Decimal(cap_cents) / 100
-    connect = connect or db.connect
 
     with connect() as conn:
         behind = db.pending(conn)
@@ -1166,6 +1502,7 @@ def main(argv: list[str] | None = None, *, client: Any = None,
             return 2
         at = now() if now else ledger.db_now(conn)
         skipped: list[str] = []
+        receipts: dict[str, sourcing.Option] = {}
         pick = None
         drinks: dict[str, Drink] = {}
         if args.plan:
@@ -1197,9 +1534,17 @@ def main(argv: list[str] | None = None, *, client: Any = None,
             rows = {(o.sku, o.rank): o for o in sourcing.options_for(conn, list(drinks))}
             why = {sku: [w for _, w in row_needs(rows.get((sku, "primary")), rows.get((sku, "alternate")), at,
                                                  max_age)] for sku in drinks}
+            # Receipts first: a drink a fulfilled receipt priced within the max age needs no web lookup.
+            if not (args.no_store or args.full or args.sku is not None):
+                for sku in drinks:
+                    held = [r for r in (rows.get((sku, "primary")), rows.get((sku, "alternate"))) if r is not None]
+                    paid = receipt_priced(held, at, max_age) if why[sku] else None
+                    if paid is not None:
+                        receipts[sku] = paid
             # A benchmark searches every drink; otherwise a drink whose rows need nothing is left alone. A SKU named
             # on its own is always compared.
-            todo = [d for sku, d in drinks.items() if args.no_store or args.sku is not None or why[sku]]
+            todo = [d for sku, d in drinks.items()
+                    if sku not in receipts and (args.no_store or args.sku is not None or why[sku])]
             needs = []
         elif args.plan:
             needs, skipped = plan_needs(conn, pick.round, at, max_age)
@@ -1207,6 +1552,8 @@ def main(argv: list[str] | None = None, *, client: Any = None,
             needs = [Need(args.sku.strip(), args.store, args.pack, "asked for")]
 
     if compare:
+        for sku, o in receipts.items():
+            print(f"  {sku}: priced from a receipt on {sourcing.day(o.checked_at)}; no lookup")
         if not todo:
             print("Every drink has a fresh checked price; nothing to look up.")
         else:
@@ -1246,32 +1593,50 @@ def main(argv: list[str] | None = None, *, client: Any = None,
         model = args.model or configured_model(conn, DEFAULT_MODEL)
     harness = Harness(client, connect, purpose="live" if live else "test", run_cap_usd=cap, now=now, by=by)
     searcher = PriceSearch(harness, connect, model=model, now=now, person=by, model_fixed=True, max_age=max_age,
-                           bench=args.no_store)
+                           bench=args.no_store, full=args.full)
     missed = bool(skipped)
     if compare:
-        results = []
-        for d in todo:
-            c = searcher.compare(d, store=not args.no_store)
-            results.append(c)
-            for line in _compared(c, stored=not args.no_store):
-                print(line)
-            missed = missed or c.code is not None
-            if c.stopped:
-                print("Stopped: no more lookups this run.")
-                break
-        if args.json:
-            doc = {"model": model, "stored": not args.no_store, "at": at.isoformat(),
-                   "visit": results[0].visit.isoformat() if results and results[0].visit else None,
-                   "max_usd": f"{cap:.2f}", "spent_usd": f"{harness.spent:.4f}",
-                   "drinks": [c.to_json() for c in results]}
-            with open(args.json, "w", encoding="utf-8") as f:
-                json.dump(doc, f, indent=2)
-            print(f"Saved what each store gave to {args.json}.")
+        results: list[Comparison] = []
+        try:
+            for d in todo:
+                try:
+                    c = searcher.compare(d, store=not args.no_store)
+                except psycopg.Error as error:
+                    # One drink that can't reach the database, after `retrying`, doesn't end the run (23 Nov).
+                    results.append(Comparison(d, [Outcome("-", "db_error", {"refused": "db_error",
+                                                                            "message": REASONS["db_error"]})],
+                                              code="db_error"))
+                    print(f"  {d.sku}: the database failed ({type(error).__name__}: {error}); nothing more for "
+                          "this drink, going on to the next.")
+                    missed = True
+                    continue
+                results.append(c)
+                for line in _compared(c, stored=not args.no_store):
+                    print(line)
+                missed = missed or c.code is not None
+                if c.stopped:
+                    print("Stopped: no more lookups this run.")
+                    break
+        finally:
+            if args.json:       # saved whatever happened, so a run that fails late keeps what it found
+                doc = {"model": model, "stored": not args.no_store, "at": at.isoformat(),
+                       "visit": next((c.visit.isoformat() for c in results if c.visit), None),
+                       "max_usd": f"{cap:.2f}", "spent_usd": f"{harness.spent:.4f}",
+                       "drinks": [c.to_json() for c in results]}
+                with open(args.json, "w", encoding="utf-8") as f:
+                    json.dump(doc, f, indent=2)
+                print(f"Saved what each store gave to {args.json}.")
         if args.no_store:
             print("Search only (--no-store): nothing was stored.")
     else:
         for n in needs:
-            tried = searcher.with_fallback(n.sku, n.store, n.units_per_pack, fallback=not args.no_fallback)
+            try:
+                tried = searcher.with_fallback(n.sku, n.store, n.units_per_pack, fallback=not args.no_fallback)
+            except psycopg.Error as error:
+                print(f"  {n.sku}: the database failed ({type(error).__name__}: {error}); nothing more for this "
+                      "drink, going on to the next.")
+                missed = True
+                continue
             for out in tried:
                 print(_line(n.sku, n.units_per_pack, out))
             last = tried[-1]
