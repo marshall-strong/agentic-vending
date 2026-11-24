@@ -95,8 +95,9 @@ GRADES = {
 
 # --- Report card -------------------------------------------------------------------------------
 
-def report_cards(conn: psycopg.Connection, now: datetime) -> dict:
-    """The report card panel's data: newest week first, at most `WEEKS_SHOWN`."""
+def report_cards(conn: psycopg.Connection, now: datetime, limit: int = WEEKS_SHOWN) -> dict:
+    """The report card panel's data: newest week first, at most `limit` (the current one counts). The
+    agent's briefing reads fewer than the page (`vending.briefing.RECORD_READ_WEEKS`)."""
     opened = ledger.opening(conn)
     if opened is None or now < opened.at:
         return {"opened": False}
@@ -106,7 +107,7 @@ def report_cards(conn: psycopg.Connection, now: datetime) -> dict:
         return {"opened": True, "assignment_missing": True, "weeks": []}
     first = ledger.week_of(opened.at.astimezone(EASTERN))
     current = ledger.week_of(now.astimezone(EASTERN))
-    starts = [current - WEEK * n for n in range(WEEKS_SHOWN) if current - WEEK * n >= first]
+    starts = [current - WEEK * n for n in range(limit) if current - WEEK * n >= first]
     reader = _Reader(conn, ours, now, opened.at, since=_start(starts[-1]) - PLAN_LOOKBACK)
     weeks = [_isolated_card(reader, week, opening_week=week == first, final=week < current) for week in starts]
     return {"opened": True, "weeks": weeks}
@@ -758,6 +759,11 @@ _KIND = {"refused": ("Refused", "warn"), "failed": ("Failed", "bad"), "halt_on":
          "sync_failed": ("Sync failed", "bad"),
          "books_outside": ("Books outside", "bad"), "check_unanswered": ("Check unanswered", "warn"),
          "check_unresolved": ("Check unresolved", "warn")}
+
+
+def kind_label(kind: str) -> str:
+    """An incident kind's fixed label, as the log shows it (the agent's briefing reads it too)."""
+    return _KIND.get(kind, (kind, "muted"))[0]
 
 
 def _pill(text: str, tone: str) -> str:
