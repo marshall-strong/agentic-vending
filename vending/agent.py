@@ -53,7 +53,9 @@ One run:
    succeeded (its request id is stored straight away, and the run stays `submitted` whatever
    stops it later), `skipped` when it decided not to (or it was a dry run), `failed` when it hit a cap,
    ran out of turns or broke. The stored plan is the desired state it previewed or sent, plus what
-   the dashboard shows beside it: the visit kind, the run's reason and each changed slot's reason.
+   the dashboard shows beside it: the visit kind, the run's reason and each changed slot's reason, and
+   the demand estimate it was made with (`forecast`: each slot's units per class day from
+   `get_machine_state`, read as the run ends), which the dashboard's forecast panel compares with what sold.
 5. Each step is recorded in `agent_steps` as it happens: the model's reasoning (a readable summary,
    asked for with `thinking: {display: "summarized"}`; the API never returns the raw chain of
    thought), any text, each tool call and each tool result. A step that can't be stored is reported
@@ -286,12 +288,14 @@ def _same_plan(a: Any, b: Any) -> bool:
         return False
 
 
-def recorded_plan(plan: dict | None, answer: dict | None) -> dict | None:
+def recorded_plan(plan: dict | None, answer: dict | None, forecast: dict | None = None) -> dict | None:
     """The plan as `agent_runs` stores it: the desired state, plus what the dashboard shows beside it.
 
     The dashboard reads the replayer's plan shape: a `visit`, a `reason` for the whole plan and a
     `reason` on each slot. The desired state carries none of those, so they are added here from
     the model's final answer. A run that never answered still stores its plan, without reasons.
+    `forecast` is the demand estimate the plan was made with (`demand_forecast`), stored as the plan's
+    `forecast` when there is one; the dashboard's forecast panel compares it with what sold.
     """
     if plan is None:
         return None
@@ -306,7 +310,39 @@ def recorded_plan(plan: dict | None, answer: dict | None) -> dict | None:
     recorded = {**plan, "slots": slots, "visit": "midweek" if plan.get("off_cycle") else "scheduled"}
     if answer.get("reason"):
         recorded["reason"] = answer["reason"]
+    if forecast:
+        recorded["forecast"] = forecast
     return recorded
+
+
+def demand_forecast(conn: psycopg.Connection, now: datetime | None = None) -> dict | None:
+    """The demand estimate the agent plans with, for the plan's record: each of our slots' units per class
+    day from `get_machine_state` (`vending.demand`: its own in-stock rate, or the fall prior for its price),
+    with where the rate came from. The briefing the run starts from carries the same figures. None when
+    the polls can't give it (no poll yet, no slot assignment). Reads only; no model call.
+
+    It is read when the run records its ending, a few minutes after the briefing, so a poll that came in
+    meanwhile can move a rate a little. Our slots only: `get_machine_state` reads the stored assignment."""
+    from vending.tools import machine_state
+
+    reply = machine_state.get_machine_state(conn, now)
+    if not reply.success or not reply.data:
+        return None
+    return {"source": "get_machine_state", "as_of": reply.as_of.isoformat() if reply.as_of else None,
+            "slots": [{"slot": s.slot, "units_per_class_day": s.units_per_class_day, "basis": s.rate_basis}
+                      for s in reply.data]}
+
+
+def _forecast(connect: Callable[[], psycopg.Connection]) -> dict | None:
+    """`demand_forecast`, or None if it can't be read: the forecast must never stop the run's record. Only
+    the error's class is printed, since a poll reader's error could carry poll bytes."""
+    try:
+        with connect() as conn:
+            return demand_forecast(conn)
+    except Exception as error:      # noqa: BLE001 - the plan is stored without it
+        print(f"the plan's demand forecast couldn't be read ({type(error).__name__}); stored without it",
+              file=sys.stderr, flush=True)
+        return None
 
 
 def last_notes(conn: psycopg.Connection, *, live: bool) -> str:
@@ -807,13 +843,14 @@ def _record_ending(connect: Callable[[], psycopg.Connection], run_id: int, out: 
     import time
 
     answer = out.answer or {}
+    forecast = _forecast(connect) if out.plan is not None else None
     error = None
     for wait in (0.0, *FINISH_RETRIES):
         if wait:
             time.sleep(wait)
         try:
             with connect() as conn:
-                agent_runs.finish(conn, run_id, out.status, plan=recorded_plan(out.plan, out.answer),
+                agent_runs.finish(conn, run_id, out.status, plan=recorded_plan(out.plan, out.answer, forecast),
                                   update=answer.get("update"),
                                   notes=answer.get("notes"), detail=out.detail,
                                   cost_usd=harness.spent if harness is not None else Decimal(0),

@@ -253,6 +253,10 @@ def _blank(week: date, final: bool) -> dict:
         "week": week.isoformat(), "ends": (week + timedelta(days=6)).isoformat(), "final": final,
         "grade": "unscored", "run_id": None, "planned_at": None, "checks": [], "outcome": None,
         "baseline": None, "comparison": None, "notes": [], "request": None, "polls": None,
+        # For the forecast panel (`vending.forecast_panel`): each of our slots' units sold this week and whether
+        # the receipts and polls say it was empty at the week's last poll (None: unknown), and the slots the
+        # visit swapped.
+        "by_slot": None, "swapped": [],
     }
 
 
@@ -274,6 +278,8 @@ def _card(reader: _Reader, week: date, *, opening_week: bool, final: bool) -> di
         this = None
     elif this is None:
         card["notes"].append("This week's sales can't be read from the polls yet.")
+    if this is not None and this.polls:
+        card["by_slot"] = _by_slot(reader, this)
     if match is None:
         card["grade"] = "no_plan"
         card["notes"].append("No submitted live plan matched this week's visit through its purchase request, "
@@ -289,6 +295,7 @@ def _card(reader: _Reader, week: date, *, opening_week: bool, final: bool) -> di
         card["notes"].append("Its purchase request was rejected, so the visit loaded nothing from it. "
                              "Only the hard checks are shown.")
     state, swapped = _state(reader, before, week, match)
+    card["swapped"] = list(swapped)
     problems = validate_plan(match.plan, reader.ours)
     if problems:
         card["checks"] = [{"name": "valid plan", "status": scoring.FAIL, "detail": " ".join(problems)}] + [
@@ -329,6 +336,23 @@ def _card(reader: _Reader, week: date, *, opening_week: bool, final: bool) -> di
         card["grade"] = "incomplete" if thin else card["comparison"]["result"]
     card["notes"] += reader.notes
     return _graded(card)
+
+
+def _by_slot(reader: _Reader, this: WeekState) -> dict[str, dict]:
+    """Each of our slots' units sold in the week (None: unknown, never 0), and its product (SKU) and whether
+    it was empty at the week's last poll, from the receipts' and polls' stock replay (None when the receipts
+    don't know it).
+    An empty slot sold all it had, so its demand may have been higher than its sales."""
+    held = reader.slots_at(this.polls[1] + timedelta(microseconds=1))
+    out = {}
+    for s in this.slots:
+        if s.slot not in reader.ours:
+            continue
+        count = held.get(s.slot)
+        most = None if count is None else (count.units if count.at_most is None else count.at_most)
+        out[s.slot] = {"sold": s.units_sold, "empty": None if count is None else most == 0,
+                       "product": count.product if count is not None else None}
+    return out
 
 
 def _thin(week: WeekState) -> bool:

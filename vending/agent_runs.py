@@ -42,6 +42,9 @@ SUBMITTED = "Submitted purchase request "
 AFTERWARDS = "; afterwards: "
 # Characters of one step kept. A tool reply can be tens of kilobytes; the start says what it was.
 MAX_STEP_TEXT = 4000
+# A tool call's arguments are kept longer: a `preview_desired_state` call is the whole draft plan (every slot,
+# and the sourcing with its links), which the live run page reads slot by slot (`vending.run_page`).
+MAX_CALL_TEXT = 16000
 
 
 def start(conn: psycopg.Connection, *, mode: str, model: str | None = None) -> int:
@@ -81,8 +84,9 @@ def step(conn: psycopg.Connection, run_id: int, turn: int, kind: str, content: s
         raise ValueError(f"kind must be one of {', '.join(STEP_KINDS)}, not {kind!r}")
     if (tool is None) != (kind in ("thinking", "text")):
         raise ValueError(f"a {kind} step {'names no' if kind in ('thinking', 'text') else 'needs a'} tool")
-    if len(content) > MAX_STEP_TEXT:
-        content = content[:MAX_STEP_TEXT] + f"\n... cut: {len(content):,} characters in all"
+    limit = MAX_CALL_TEXT if kind == "tool_call" else MAX_STEP_TEXT
+    if len(content) > limit:
+        content = content[:limit] + f"\n... cut: {len(content):,} characters in all"
     with conn.transaction():
         conn.execute("insert into agent_steps (run_id, turn, kind, tool, content, is_error)"
                      " values (%s, %s, %s, %s, %s, %s)", (run_id, turn, kind, tool, content, is_error))
