@@ -203,6 +203,15 @@ KNOWN: dict[str, Setting] = {
     "price_check_percent": Setting("a cheaper model's find this many percent or less from the stored price for that "
                                    "drink, store and pack is stored without a check (default 5)",
                                    lambda v: _whole(v, 0, 100, "percent")),
+    "price_check_mode": Setting("what the worker's weekly price check does: off, dry-run (lists what it would look "
+                                "up, spends nothing) or live; the lower of this and the container's "
+                                "PRICE_CHECK_MODE wins (default off)", _schedule_mode),
+    "price_check_weekly_cap_cents": Setting("most the weekly price check's lookups may spend in 7 days, searches and "
+                                            "tokens (default 300, most 1000)",
+                                            lambda v: _whole(v, 0, 1000, "cents")),
+    "price_compare_every_days": Setting("how often the weekly price check compares every store; in between it "
+                                        "re-checks each drink's primary store (default 14)",
+                                        lambda v: _whole(v, 1, 365, "days")),
     "price_dead_end_days": Setting("days a store that had no listing for a drink is skipped by price lookups; "
                                    "--full ignores it, 0 turns it off (default 21)",
                                    lambda v: _whole(v, 0, 365, "days")),

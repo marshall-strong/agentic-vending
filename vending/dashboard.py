@@ -77,7 +77,7 @@ from psycopg.types.json import set_json_loads
 
 from vending import (capacity, db, leaderboards, machine_art, midweek_wake, money_panel, plan_rounds, report_card,
                      settings, slot_counts, tracking, visits)
-from vending import agent_runs, agent_schedule, key_dates, pricing_panel, tracking_daily
+from vending import agent_runs, agent_schedule, key_dates, price_schedule, pricing_panel, tracking_daily
 from vending import stock as stock_mod
 from vending import planner
 from vending.planner import IN_STORE_CUTOFF
@@ -1026,6 +1026,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False,
         "catalog_counts": _catalog_counts(catalog),
         "midweek_wakeup": _panel(lambda: _guarded(conn, lambda: midweek_wake.current(conn, now))),
         "scheduled_runs": scheduled,
+        "price_checks": _panel(lambda: _isolated(conn, lambda: _price_checks(conn))),
         # Open purchase submissions: while any is left, no purchase request can be sent.
         "submissions": _panel(lambda: _rows(
             conn, "select id, at, status from purchase_submissions where status in ('sending', 'unknown')"
@@ -1150,6 +1151,8 @@ def attention(snap: dict) -> list[dict]:
         add("bad", failing)
     for scheduled in _scheduled_runs(snap.get("scheduled_runs"), snap.get("syncs"), now):
         add(*scheduled)
+    for line in _price_check_lines(snap.get("price_checks")):
+        add(*line)
 
     open_submissions = snap.get("submissions") or {"ok": True, "data": []}
     if open_submissions["ok"] and open_submissions["data"]:
@@ -1443,6 +1446,43 @@ def _scheduled_line(row: dict, now: datetime) -> tuple[str, str] | None:
         sent = " Nothing sent."
     see = "" if outcome in ("running", "submitted") else " `python -m vending.agent_schedule` says why."
     return level, f"The scheduled {kind}{when} {what}{run}.{sent}{see}"
+
+
+# The worker's weekly price check (`vending.price_schedule`): its newest row, read from the table. No `detail`: a
+# failed one's can hold an error.
+PRICE_CHECK_SQL = ("select due_at, mode, outcome, compare, drinks, changed, failures, cost_usd"
+                   " from price_check_runs order by due_at desc limit 1")
+
+
+def _price_checks(conn: psycopg.Connection) -> dict | None:
+    """The weekly price check's newest run, or None when there is none (or the table isn't there yet)."""
+    return _optional(conn, PRICE_CHECK_SQL)
+
+
+def _price_check_lines(panel: dict | None) -> list[tuple[str, str]]:
+    """Needs attention's line on the weekly price check: its last run, only when it ended partial, failed, halted
+    or missed, with what it did (cost, drinks looked up, prices changed, drinks without a usable price)."""
+    row = panel.get("data") if isinstance(panel, dict) and panel.get("ok") else None
+    if not isinstance(row, dict) or row.get("outcome") not in price_schedule.PROBLEMS:
+        return []
+    outcome = row["outcome"]
+    level = "warn" if outcome in ("partial", "halted") else "bad"
+    what = {"partial": "left some drinks without a usable price", "failed": "failed",
+            "halted": "didn't run: the halt switch was on", "missed": "was missed: no run started in its window"}[outcome]
+    try:
+        due = _eastern(row["due_at"])
+        when = f" due {due:%a %d %b}, {due.hour % 12 or 12}:{due:%M %p} ET"
+    except (KeyError, TypeError, ValueError, AttributeError):
+        when = ""
+    did = ""
+    if row.get("drinks") is not None:
+        cost = row.get("cost_usd")
+        did = (f" It {'compared every store' if row.get('compare') else 're-checked primary stores'}: "
+               f"{row['drinks']} drinks looked up, {row.get('changed') or 0} prices changed, "
+               f"{row.get('failures') or 0} without a usable price"
+               + (f", ${cost:.2f}" if cost is not None else "") + ".")
+    return [(level, f"The weekly price check{when} {what}.{did} `python -m vending.price_schedule` says why; "
+                    "`python -m vending.price_search SKU --history` shows a drink's lookups.")]
 
 
 SCHEDULE_UNAVAILABLE = ("Scheduled agent run status unavailable: the `agent_schedule` table couldn't be read "

@@ -194,6 +194,17 @@ Turn it off with one command,
 `python -m vending.config set agent_schedule_mode off --by <name>`: it applies from the next scheduled
 time. `python -m vending.config set agent_schedule_mode dry-run --by <name>` keeps the runs, as dry runs.
 The halt switch (`python -m vending.halt on --by <name>`) stops a run that has already started.
+
+**The weekly price check** (`vending/price_schedule.py`, #202) is off the same way, twice: the app's
+`PRICE_CHECK_MODE` env var and the database's `price_check_mode` (`off`, `dry-run` or `live`; the lower runs).
+It runs at `PRICE_CHECK_SCHEDULE` (default `tue 12:00-20:00` ET), before Wednesday's restock run, under its own
+weekly cap, `price_check_weekly_cap_cents` (default 300). It needs migrations 032 to 034 and the model key. To
+turn it on: `az containerapp update --name ai-group-2-vend --resource-group data_systems_resource_group
+--set-env-vars PRICE_CHECK_MODE=live`, then `python -m vending.config set price_check_mode live --by <name>`. To
+run it on Haiku with the Sonnet check: `python -m vending.config set price_search_model claude-haiku-5-5 --by
+<name>` (this also moves the agent's own lookups to Haiku; `price_check_model` stays Sonnet). `python -m
+vending.price_schedule` shows the settings and the latest runs. Turn it off with `python -m vending.config set
+price_check_mode off --by <name>`.
 The deploy of `c1505c2` on 11 Nov, from an older script, set `ANTHROPIC_API_KEY` in the container. `--set-env-vars` only
 adds, so the script now passes `--remove-env-vars` for it when the app still has it (the list is
 `$Retired`). The `anthropic-api-key` secret itself stays in the app, unused by any variable; to

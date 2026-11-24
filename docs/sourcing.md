@@ -262,8 +262,10 @@ python -m vending.price_search SKU --store Amazon --pack 24 --by NAME     # one 
 - **Which drinks.** `--plan picked`: each drink in the picked plan whose rows the fill would refuse (no
   row, or a primary or alternate with no checked price or one older than 7 days), plus, with
   `--max-age HOURS`, any with a row checked longer ago than that. `--plan ours` adds the drinks in our
-  slots now, from our receipts (`price_search.current_drinks`). The weekly check is
-  `price_search.check_prices(by=..., max_age_hours=N)`, the same as `--plan ours --max-age N`.
+  slots now, from our receipts (`price_search.current_drinks`). `--recheck` looks each drink up at its
+  primary store and pack only (a drink with no primary is compared). The weekly check is
+  `price_search.check_prices(...)`, the same as `--plan ours --max-age N` (with `--recheck` in the weeks
+  between comparisons); see [The weekly price check](#the-weekly-price-check).
   Afterwards the command lists anything the fill would still refuse and exits 1.
 - **`--first-usable`** keeps the old way for `--plan picked`: one store at a time, in the row's pack
   size, the next store only when one fails (Amazon, Walmart, Costco, BJs), and the first usable price
@@ -326,6 +328,32 @@ both do this.
   of 20 drinks for $1.69 against Sonnet's 16 for $4.86, but misread a few prices (Celsius Arctic, Celsius
   Kiwi, Snapple Kiwi, and Red Bull Yellow at the Original's price).
 - **`--full`** ignores the dead ends, the listing re-checks and receipts first: it searches every store openly. The check still applies.
+
+## The weekly price check
+
+The worker checks prices once a week by itself (`vending/price_schedule.py`), so they are fresh before
+Wednesday's restock run. It is off until both `PRICE_CHECK_MODE` on the container and `price_check_mode` in
+the database turn it on (`off`, `dry-run` or `live`; the lower runs). [`docs/deploy.md`](deploy.md) shows how.
+
+- **When.** `PRICE_CHECK_SCHEDULE`, default `tue 12:00-20:00` (Eastern), from `PRICE_CHECK_FROM` (default
+  2026-12-01). One row a time in `price_check_runs` (migration 034), so it runs once whatever restarts.
+- **What.** The drinks in our slots now and in the picked plan, each one whose price is older than 5 days
+  (`MAX_AGE_HOURS`, 120). A drink a receipt priced in that time is skipped. Every `price_compare_every_days`
+  (default 14) it compares every store; in the weeks between it re-checks each drink's primary store only.
+  The price memory applies throughout: dead ends, listing re-checks, and the check by `price_check_model`.
+- **The model.** The `price_search_model` setting. The cheap way is Haiku with the Sonnet check:
+  `python -m vending.config set price_search_model claude-haiku-5-5 --by NAME`. That setting also moves the
+  agent's own `find_pack_price` to Haiku, with the same check.
+- **Money.** Its own cap, `price_check_weekly_cap_cents` (default 300, at most 1000), over the 7 days before
+  a run, read from its `model_calls` (label `price_check`). A run's cap is what is left; with under $0.10
+  left it is `skipped`. It never uses the agent's $1.00 a day. Expected: about $0.20 to $0.45 a re-check
+  week and $1.00 to $1.50 a compare week on Haiku with the Sonnet check; the first compare, with an empty
+  memory, can reach the $3.00 cap (estimates from the 23 Nov benchmark).
+- **Stops.** The halt switch: a time due while halted is `halted`. `price_check_mode off` stops the next one.
+- **Seeing it.** `python -m vending.price_schedule` shows the settings, the week's spend and the latest runs:
+  cost, drinks looked up, prices changed, drinks without a usable price. `/health` shows the last run as
+  `price_check`. The dashboard's Needs attention shows the last run when it ended `partial` (a drink got no
+  usable price), `failed`, `halted` or `missed`.
 
 ## What reads it
 
