@@ -13,7 +13,7 @@ psycopg = pytest.importorskip("psycopg")
 pytest.importorskip("anthropic")
 
 from vending import config, planner, price_search, sourcing  # noqa: E402
-from tests.test_price_search import (BEFORE, LIVE, PAGES, SKU, URL, Client, at_store, command,  # noqa: E402,F401
+from tests.test_price_search import (BEFORE, LIVE, PAGES, PLAIN, SKU, URL, Client, at_store, command,  # noqa: E402,F401
                                      connect, failing, found, lookup, picked_plan, row, searched, searcher,
                                      set_row)
 
@@ -238,13 +238,13 @@ def test_the_lookup_model_setting_refuses_anything_unpriced(connect, value):
 def test_the_agents_tool_uses_the_lookup_model_setting(connect, model, cost):
     with connect() as conn:
         config.set_value(conn, "price_search_model", model, "test")
-    client = Client(searched(model=model))
+    client = Client(searched(model=model), searched(model=SONNET, searches=1))     # a Haiku find gets a check
     reply, failed = lookup(searcher(connect, client))          # the run's model is Opus
     assert not failed and client.sent[0]["model"] == model
     assert client.sent[0]["output_config"] == {"effort": "low"}
     assert client.sent[0]["tools"][0]["type"] == "web_search_20250305"
     with connect() as conn:
-        billed, used = conn.execute("select cost_usd, model from model_calls").fetchone()
+        billed, used = conn.execute("select cost_usd, model from model_calls order by id").fetchone()
     # 30,000 in and 400 out at the model's rates, plus 2 searches at $0.01.
     assert (billed, used) == (Decimal(cost), model)
 
@@ -252,7 +252,7 @@ def test_the_agents_tool_uses_the_lookup_model_setting(connect, model, cost):
 def test_the_command_uses_the_setting_and_model_overrides_it(connect):
     with connect() as conn:
         config.set_value(conn, "price_search_model", HAIKU, "test")
-    client = Client(searched(model=HAIKU))
+    client = Client(searched(model=HAIKU), searched(model=SONNET, searches=1))
     command(connect, client, SKU, "--pack", "24", "--by", "Kevin", "--no-fallback", when=BEFORE)
     assert client.sent[0]["model"] == HAIKU
     client = Client(at_store("Walmart", model=SONNET))
@@ -368,9 +368,9 @@ def test_amazons_regional_hosts_are_its_own_site_and_stored_as_www(connect, host
     page = f"https://{host}/Dr-Pepper-Soda-20-oz/dp/B07X1Y2Z3A"
     client = Client(searched(urls=(page,), report=found(url=page)))
     reply, failed = lookup(searcher(connect, client))
-    assert not failed and reply["url"] == URL
+    assert not failed and reply["url"] == PLAIN           # on www, and plain (#202)
     with connect() as conn:
-        assert row(conn).url == URL
+        assert row(conn).url == PLAIN
 
 
 @pytest.mark.parametrize("page", ["https://fresh.amazon.com/dp/B07X1Y2Z3A",

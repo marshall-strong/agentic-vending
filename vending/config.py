@@ -197,6 +197,15 @@ KNOWN: dict[str, Setting] = {
     "price_search_model": Setting("the model the price lookups run on, the agent's tool and python -m "
                                   "vending.price_search alike; --model overrides it (default: the agent's model)",
                                   _priced_model),
+    "price_check_model": Setting("the model that checks a cheaper lookup model's find before it is stored: one "
+                                 "re-check of that listing, stored only if the two agree within 2% (default "
+                                 "claude-sonnet-5-5)", _priced_model),
+    "price_check_percent": Setting("a cheaper model's find this many percent or less from the stored price for that "
+                                   "drink, store and pack is stored without a check (default 5)",
+                                   lambda v: _whole(v, 0, 100, "percent")),
+    "price_dead_end_days": Setting("days a store that had no listing for a drink is skipped by price lookups; "
+                                   "--full ignores it, 0 turns it off (default 21)",
+                                   lambda v: _whole(v, 0, 365, "days")),
 }
 
 

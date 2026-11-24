@@ -20,6 +20,7 @@ LIVE = datetime(2026, 12, 4, 15, 0, tzinfo=timezone.utc)        # Friday 10:00 E
 BEFORE = datetime(2026, 12, 2, 15, 0, tzinfo=timezone.utc)      # the day before the start
 SKU = "DRPEPPER-20BOT"
 URL = "https://www.amazon.com/Dr-Pepper-Soda-20-oz/dp/B07X1Y2Z3A"
+PLAIN = "https://www.amazon.com/dp/B07X1Y2Z3A"       # the same listing, as it is stored and sent (#202)
 # One product page per store, in each store's own shape.
 PAGES = {"Amazon": URL, "Walmart": "https://www.walmart.com/ip/Dr-Pepper-20-oz-24-pack/123456789",
          "Costco": "https://www.costco.com/dr-pepper-20-oz-24-pack.product.100123456.html",
@@ -161,16 +162,16 @@ def test_a_first_price_on_the_stores_product_page_counts_as_checked(connect):
     client = Client(searched())
     reply, failed = lookup(searcher(connect, client))
     assert not failed and reply["recorded"] == "added primary" and reply["checked"] is True
-    assert reply["price"] == "27.48" and reply["url"] == URL and reply["seen_at"] == LIVE.isoformat()
+    assert reply["price"] == "27.48" and reply["url"] == PLAIN and reply["seen_at"] == LIVE.isoformat()
     tool = client.sent[0]["tools"][0]
     assert tool == {"type": "web_search_20250305", "name": "web_search", "max_uses": 2,
                     "allowed_domains": ["amazon.com"]}
     with connect() as conn:
         o = row(conn)
-    assert (o.store, o.units_per_pack, o.expected_cents, o.url) == ("Amazon", 24, 2748, URL)
+    assert (o.store, o.units_per_pack, o.expected_cents, o.url) == ("Amazon", 24, 2748, PLAIN)
     assert o.checked_by == price_search.AGENT_BY and o.checked_at == LIVE and not o.is_stale(LIVE)
     assert o.max_cents == price_search.agent_max(2748) == 3435          # exactly the price + 25%
-    assert URL in o.note and "unchecked" not in o.note and "candidate" not in o.note
+    assert PLAIN in o.note and "unchecked" not in o.note and "candidate" not in o.note
 
 
 def test_a_first_price_past_the_per_pack_or_per_unit_limit_is_refused(connect):
@@ -294,7 +295,7 @@ def test_a_fresh_find_replaces_a_stale_primary_at_another_store(connect):
     assert not failed and reply["recorded"] == "replaced primary"
     with connect() as conn:
         o = row(conn)
-        assert (o.store, o.expected_cents, o.url, o.checked_at) == ("Amazon", 2748, URL, LIVE)
+        assert (o.store, o.expected_cents, o.url, o.checked_at) == ("Amazon", 2748, PLAIN, LIVE)
         assert not o.is_stale(LIVE) and row(conn, "alternate") is None
 
 
@@ -310,7 +311,7 @@ def test_a_stale_primary_is_replaced_when_the_find_is_the_alternates_listing(con
     assert "alternate was the same listing" in reply["recorded"]
     with connect() as conn:
         o = row(conn)
-        assert (o.url, o.expected_cents) == (URL, 2748) and not o.is_stale(LIVE)
+        assert (o.url, o.expected_cents) == (PLAIN, 2748) and not o.is_stale(LIVE)
         assert row(conn, "alternate") is None
 
 
@@ -380,9 +381,9 @@ def test_the_stored_link_is_the_search_results_not_the_models(connect):
     cited = "HTTPS://WWW.Amazon.com/Dr-Pepper-Soda-20-oz/dp/B07X1Y2Z3A/"
     client = Client(searched(urls=(URL,), report=found(url=cited)))
     reply, failed = lookup(searcher(connect, client))
-    assert not failed and reply["url"] == URL
+    assert not failed and reply["url"] == PLAIN
     with connect() as conn:
-        assert row(conn).url == URL and cited not in row(conn).note
+        assert row(conn).url == PLAIN and cited not in row(conn).note
 
 
 @pytest.mark.parametrize("store,page,code", [
@@ -637,7 +638,8 @@ def test_an_out_of_stock_pack_stores_no_price(connect):
     with connect() as conn:
         assert row(conn) is None
         set_row(conn, checked=LIVE - timedelta(days=10), price=2599, most=3000)
-    reply, failed = lookup(searcher(connect, Client(searched(report=found(stock="out_of_stock")))))
+    out = searched(report=found(stock="out_of_stock"))
+    reply, failed = lookup(searcher(connect, Client(out, out)))       # the listing re-check, then the open search
     assert failed and reply["refused"] == "out_of_stock"
     with connect() as conn:
         assert (row(conn).expected_cents, row(conn).checked_by, row(conn).stock) == (2599, "Kevin", None)
@@ -854,8 +856,9 @@ def test_plan_mode_names_what_the_fill_would_still_refuse(connect, capsys):
                 sku=sku, rank="primary", store="Costco" if url is None else "Amazon", units_per_pack=units,
                 expected_cents=1800, max_cents=2100, url=url, pack_description=None,
                 checked_at=BEFORE - timedelta(days=(0 if url is None else 17)), checked_by="Kevin"), now=BEFORE)
-    client = Client(searched(report={"found": False, "price": "", "units_per_pack": 0, "pack_description": "",
-                                     "url": "", "note": "no listing"}))
+    nothing = searched(report={"found": False, "price": "", "units_per_pack": 0, "pack_description": "",
+                               "url": "", "note": "no listing"})
+    client = Client(nothing, nothing)          # the listing re-check, then the open search
     assert command(connect, client, "--plan", "picked", "--first-usable", "--by", "Kevin", "--no-fallback", when=BEFORE) == 1
     out = capsys.readouterr().out
     assert "The fill would still refuse:" in out and "PICKLE: Amazon, 24 a pack (primary checked 2026-11-15" in out
