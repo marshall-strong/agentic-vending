@@ -22,11 +22,11 @@ from typing import Any
 import anyio
 import psycopg
 
-from vending import (agent, config, db, ledger, midweek_wake, sourcing, stock, submissions, sync_catalog, sync_history,
-                     sync_requests)
+from vending import (agent, config, db, ledger, midweek_wake, price_search, sourcing, stock, submissions, sync_catalog,
+                     sync_history, sync_requests)
 from vending import slots as slot_assignment
 from vending.harness import Harness
-from vending.simulate import world
+from vending.simulate import dbclock, world
 from vending.simulate.bridge import SimBridge, Worker
 from vending.simulate.clock import Clock, patched
 from vending.simulate.world import EASTERN, Calendar, Demand, Machine
@@ -58,8 +58,9 @@ WALL_STAMPED = (("polls", "synced_at"), ("config", "updated_at"), ("action_log",
 
 
 def wall_clock(conn: psycopg.Connection) -> datetime:
-    """The database's own clock, unpatched: what `default now()` stamps. Take it before a step."""
-    return conn.execute("select clock_timestamp()").fetchone()[0]
+    """The database's own clock, unpatched: what `default now()` stamps. Take it before a step. Always
+    `pg_catalog`'s: the season's own `clock_timestamp()` (`dbclock`) reads the simulated time."""
+    return conn.execute("select pg_catalog.clock_timestamp()").fetchone()[0]
 
 
 def restamp(conn: psycopg.Connection, at: datetime, since: datetime) -> None:
@@ -73,6 +74,31 @@ def restamp_all(conn: psycopg.Connection, at: datetime) -> None:
     """Move every wall-clock stamp to `at`. Only at setup, on a fresh database, where nothing is simulated yet."""
     for table, column in WALL_STAMPED:
         conn.execute(f"update {table} set {column} = %s where {column} is not null", (at,))
+
+
+# What a freshly migrated database holds before anything else is written: the migrations' own seed rows.
+SEEDED = {"schema_migrations": None, "agent_run_lease": None, "page_visit_totals": None, "config": ("halted",)}
+
+
+def not_fresh(conn: psycopg.Connection, schema: str) -> list[str]:
+    """The tables of `schema` holding rows a freshly migrated database wouldn't: the simulation's setup (and the
+    season's clock, `dbclock.install`, which repoints the column defaults) touches nothing else's data."""
+    from psycopg import sql
+
+    held = []
+    for (table,) in conn.execute("select tablename from pg_tables where schemaname = %s order by 1", (schema,)):
+        if table in SEEDED and SEEDED[table] is None:
+            continue
+        if table == "config":
+            extra = conn.execute(sql.SQL("select count(*) from {}.config where key <> all(%s)").format(
+                sql.Identifier(schema)), (list(SEEDED["config"]),)).fetchone()[0]
+            if extra:
+                held.append(table)
+            continue
+        if conn.execute(sql.SQL("select exists (select from {}.{})").format(
+                sql.Identifier(schema), sql.Identifier(table))).fetchone()[0]:
+            held.append(table)
+    return held
 
 
 SCRATCH_ONLY = "The simulation runs only against a scratch database on 127.0.0.1 or localhost."
@@ -139,6 +165,16 @@ class State:
     # Where a checkpoint taken mid-hour (after an agent run) stopped inside the hour starting at `poll_at`:
     # a resume sells, handles the rest of the hour's events and polls from here. None between hours.
     resume_at: datetime | None = None
+    # What starts the agent: "run-day" (one run a week at 19:00, `run_day`) or "live" (the worker's own
+    # scheduler, `vending.simulate.live`: AGENT_SCHEDULE, the midweek wake-ups, the run lease).
+    schedule: str = "run-day"
+    # Whether the season's database has the season's clock (`dbclock`); a checkpoint from before it has none.
+    db_clock: bool = True
+    # Drinks the world added for this season from an export (`vending.simulate.export`): Product fields,
+    # registered again on a resume.
+    products: list = field(default_factory=list)
+    # The live mode's record: the scheduler's log, rounds, tracking checks, price checks, dashboard checks.
+    live: dict = field(default_factory=dict)
 
     @property
     def assignment(self) -> tuple[str, ...]:
@@ -177,22 +213,40 @@ def read_assignment(path: Path) -> tuple[str, ...]:
     return tuple(slots)
 
 
+SCHEDULES = ("run-day", "live")
+
+
 def new_state(seed: int, decider: str, model: str, effort: str, check_ins: bool, run_day: int = 3,
-              assignment: tuple[str, ...] | list[str] = ()) -> State:
+              assignment: tuple[str, ...] | list[str] = (), schedule: str = "run-day",
+              catalog: list[dict] | None = None) -> State:
     """A season that hasn't started. `assignment` is our slots for it, from the server's answer, never a
-    list written in the code (`read_assignment`)."""
+    list written in the code (`read_assignment`). `schedule` "live" starts the clock at the day-one fill's
+    send (`live.FILL_AT`) and leaves the agent's runs to the worker's scheduler (`vending.simulate.live`).
+    `catalog`: the bridge's product list, when not the world's own."""
+    from vending.simulate import live
+
     check_decider(decider)
-    clock = Clock(world.SIM_START)
+    if schedule not in SCHEDULES:
+        raise ValueError(f"unknown schedule {schedule!r}: use one of {', '.join(SCHEDULES)}")
+    clock = Clock(live.FILL_AT if schedule == "live" else world.SIM_START)
     machine = Machine.empty(tuple(assignment))
-    bridge = SimBridge(machine, clock.now)
-    return State(seed, decider, model, effort, machine, bridge, clock,
-                 _weekly_events(Calendar(), check_ins, run_day), world.SIM_START + timedelta(minutes=5),
-                 run_day=run_day)
+    bridge = SimBridge(machine, clock.now, catalog=catalog)
+    events = live.events() if schedule == "live" else _weekly_events(Calendar(), check_ins, run_day)
+    return State(seed, decider, model, effort, machine, bridge, clock, events,
+                 world.SIM_START + timedelta(minutes=5), run_day=run_day, schedule=schedule)
+
+
+def set_clock(conn: psycopg.Connection, st: State, at: datetime) -> None:
+    """Move the season's clock, and the database's with it when it has one (`dbclock`: a database set up before
+    the clock existed has none, and its run-day season goes on as before)."""
+    st.clock.set(at)
+    if getattr(st, "db_clock", True):
+        dbclock.set(conn, st.clock.now())
 
 
 # --- setup ---------------------------------------------------------------------------------------------
 
-def setup(conn: psycopg.Connection, st: State, budget_usd: Decimal, run_cap_usd: Decimal) -> None:
+def setup(conn: psycopg.Connection, st: State, budget_usd: Decimal, run_cap_usd: Decimal, prices=None) -> None:
     """What a person does before the first run (docs/agent.md, "Before the first run"), on the scratch DB."""
     check_connected(conn)
     now = st.clock.now()
@@ -201,13 +255,26 @@ def setup(conn: psycopg.Connection, st: State, budget_usd: Decimal, run_cap_usd:
         raise SystemExit(f"migrate the scratch database first: {', '.join(behind)}")
     if conn.execute("select count(*) from agent_runs").fetchone()[0] or ledger.opening(conn) is not None:
         raise SystemExit("this database already holds a run; use a fresh scratch database (or --resume)")
+    schema = conn.execute("select current_schema()").fetchone()[0]
+    held = not_fresh(conn, schema)
+    if held:
+        raise SystemExit("the simulation writes only to a freshly migrated scratch database; this one already holds "
+                         f"rows in {', '.join(held)}")
+    dbclock.install(conn, schema)
+    dbclock.set(conn, now)
+    if st.schedule == "live" and not dbclock.reads_season_time(conn):
+        raise SystemExit("the live schedule needs the season's clock in the database: connect with "
+                         f"{dbclock.search_path(schema)!r} (dbclock.with_clock)")
     config.set_halted(conn, False, BY)
     slot_assignment.record(conn, st.bridge.slots(), now=now, by=BY)
     sync_catalog.sync(conn, st.bridge, now=now, log=lambda *_: None)
-    for path in SEED_SOURCING:
-        for o in sourcing.read_csv(path, BY, now):
-            if o.sku in world.BY_SKU:          # the two the loading chart can't size stay out (world.py)
-                sourcing.set_option(conn, o, now)
+    if prices is not None:
+        prices(conn, now)
+    else:
+        for path in SEED_SOURCING:
+            for o in sourcing.read_csv(path, BY, now):
+                if o.sku in world.BY_SKU:          # the two the loading chart can't size stay out (world.py)
+                    sourcing.set_option(conn, o, now)
     config.set_value(conn, "model_test_daily_cap_cents", int(budget_usd * 100), BY)
     config.set_value(conn, "model_run_cap_cents", int(run_cap_usd * 100), BY)
     restamp_all(conn, now)
@@ -292,6 +359,41 @@ def _visit_time(cal: Calendar, st: State, submitted: datetime, body: dict, reque
     return datetime.combine(day, world.VISIT_AT, EASTERN) + timedelta(minutes=r.randrange(0, 120))
 
 
+def deliveries(cal: Calendar, st: State, submitted: datetime, body: dict, request_id: str
+               ) -> tuple[datetime, set[int]]:
+    """The live schedule's delivery model: (the visit that stocks the request, its lines whose Amazon goods miss it).
+
+    The visit is the one the request is for: the day-one stocking (Mon 30 Nov, `key_dates.STOCKING`) for a request
+    sent before it, the Friday visit for a weekly one (a closed Friday moves to the next open weekday), one or two
+    open weekdays later for an off-cycle one. An Amazon line ordered past its cutoff for that visit
+    (`price_search.past_cutoff`: Sat 23:59 for the stocking, Wed 23:59 for a Friday) is late: its goods arrive after
+    the visit and wait for a later one (David, 17 Nov; `Worker.fulfil`'s `late`)."""
+    from vending import key_dates
+
+    r = world.rng(st.seed, "visit", request_id)
+    local = submitted.astimezone(EASTERN)
+    if body.get("off_cycle"):
+        day = local.date()
+        for _ in range(1 if r.random() < 0.6 else 2):
+            day = cal.next_open_weekday(day + timedelta(days=1))
+        when = datetime.combine(day, time(13), EASTERN) + timedelta(minutes=r.randrange(0, 240))
+    elif local.date() < key_dates.STOCKING.day or (local.date() == key_dates.STOCKING.day
+                                                   and local.time() < world.VISIT_AT):
+        when = datetime.combine(key_dates.STOCKING.day, world.VISIT_AT, EASTERN)
+    else:
+        day = local.date() + timedelta(days=(4 - local.weekday()) % 7)
+        if day == local.date() and local.time() >= world.VISIT_AT:
+            day += timedelta(days=7)
+        when = datetime.combine(cal.next_open_weekday(day), world.VISIT_AT, EASTERN) + timedelta(
+            minutes=r.randrange(0, 120))
+    visit = when.astimezone(EASTERN).date()
+    late = {i for i, line in enumerate(body.get("lines") or [])
+            if line.get("source") == "purchase"
+            and any((line.get(k) or {}).get("store") == "Amazon" for k in ("primary", "alternate"))
+            and price_search.past_cutoff("Amazon", visit, submitted)}
+    return when, late
+
+
 def _spent(conn: psycopg.Connection) -> Decimal:
     return Decimal(conn.execute("select coalesce(sum(cost_usd), 0) from model_calls").fetchone()[0])
 
@@ -334,7 +436,9 @@ def _drop_cached_connection(server) -> None:
 
 
 def run_agent(conn: psycopg.Connection, st: State, kind: str, budget: Decimal, run_cap: Decimal,
-              min_run: Decimal) -> dict:
+              min_run: Decimal, *, live: bool = True, authorize=None, occasion: str | None = None) -> dict:
+    """One agent run through `vending.agent.run`, as a person or the worker starts it. `live`, `authorize` and
+    `occasion` are what the worker's scheduler passes (`vending.agent_schedule.default_run_agent`)."""
     from vending import server
     from vending.simulate.scripted import Scripted
 
@@ -360,31 +464,45 @@ def run_agent(conn: psycopg.Connection, st: State, kind: str, budget: Decimal, r
     # The MCP server's tools read these module globals. Point them at this season for the run only, and
     # put them back after, so a second season in the same process (or anything after it) never gets
     # this season's bridge or a connection cached in its schema.
-    saved = agent.Harness, server.bridge, server.connect
+    # The agent's price lookup searches the stores' real sites and spends: never in a season (live.NOT_SIMULATED).
+    saved = agent.Harness, server.bridge, server.connect, price_search.offered
     _drop_cached_connection(server)
     agent.Harness, server.bridge, server.connect = TestHarness, (lambda: st.bridge), db.connect
+    price_search.offered = lambda **_: False
     try:
-        run_id, out = anyio.run(lambda: agent.run(live=True, model=st.model, effort=st.effort, client=client,
+        extra = {} if occasion is None else {"occasion": occasion}
+        run_id, out = anyio.run(lambda: agent.run(live=live, model=st.model, effort=st.effort, client=client,
                                                   now=st.clock.now, open_tools=_open_tools,
-                                                  connect=db.connect, bridge=lambda: st.bridge))
+                                                  connect=db.connect, bridge=lambda: st.bridge,
+                                                  authorize=authorize, **extra))
     finally:
-        agent.Harness, server.bridge, server.connect = saved
+        agent.Harness, server.bridge, server.connect, price_search.offered = saved
         _drop_cached_connection(server)
     settle_refused(conn, st.bridge.refused[refused_before:])
     at = st.clock.now()
     restamp(conn, at, since)
-    conn.execute("update agent_runs set finished_at = %s where id = %s", (at + timedelta(minutes=3), run_id))
-    record.update(run_id=run_id, status=out.status, detail=out.detail, request_id=out.request_id,
-                  tool_calls=out.tool_calls, turns=out.turn + 1, answer=out.answer,
+    if run_id is not None:
+        conn.execute("update agent_runs set finished_at = %s where id = %s", (at + timedelta(minutes=3), run_id))
+    record.update(mode="live" if live else "dry-run", run_id=run_id, status=out.status, detail=out.detail,
+                  request_id=out.request_id, tool_calls=out.tool_calls, turns=out.turn + 1, answer=out.answer,
                   cost_usd=str(_spent(conn) - spent), run_cap=str(cap))
     st.runs.append(record)
-    for request_id in sorted(set(st.bridge.requests) - requests_before):
-        filed = st.bridge.requests[request_id]
-        when = _visit_time(Calendar(), st, filed.submitted_at, filed.body, request_id)
-        st.events.append(Event(when, "visit", {"request_id": request_id}))
-        st.log.append({"at": at.isoformat(), "kind": "request_filed", "request_id": request_id,
-                       "off_cycle": bool(filed.body.get("off_cycle")), "visit_at": when.isoformat()})
+    schedule_visits(st, requests_before, at)
     return record
+
+
+def schedule_visits(st: State, before: set[str], at: datetime) -> None:
+    """A visit for each request the bridge filed since `before` (its request ids then)."""
+    for request_id in sorted(set(st.bridge.requests) - before):
+        filed = st.bridge.requests[request_id]
+        if getattr(st, "schedule", "run-day") == "live":
+            when, late = deliveries(Calendar(), st, filed.submitted_at, filed.body, request_id)
+        else:
+            when, late = _visit_time(Calendar(), st, filed.submitted_at, filed.body, request_id), set()
+        st.events.append(Event(when, "visit", {"request_id": request_id, "late": sorted(late)}))
+        st.log.append({"at": at.isoformat(), "kind": "request_filed", "request_id": request_id,
+                       "off_cycle": bool(filed.body.get("off_cycle")), "visit_at": when.isoformat(),
+                       "late_amazon_lines": len(late)})
 
 
 def settle_refused(conn: psycopg.Connection, refused: list[dict]) -> list[int]:
@@ -413,6 +531,8 @@ def handle(conn: psycopg.Connection, st: State, ev: Event, opts: dict) -> None:
     elif ev.kind == "sourcing_check":
         # The team re-checks its sourcing table each Wednesday at the shop's price that week (assumed).
         for o in sourcing.listed_options(conn):
+            if o.sku not in world.BY_SKU:       # a drink the world can't sell keeps its exported price
+                continue
             price = world.market_pack_cents(st.seed, o.sku, o.units_per_pack, o.store, now.astimezone(EASTERN).date())
             fresh = sourcing.Option(o.sku, o.rank, o.store, o.units_per_pack, price, sourcing.default_max(price),
                                     o.url, o.pack_description, now, BY, "weekly re-check (simulation)")
@@ -439,7 +559,8 @@ def handle(conn: psycopg.Connection, st: State, ev: Event, opts: dict) -> None:
         request_id = ev.data["request_id"]
         directive = conn.execute("select directive from purchase_submissions where request_id = %s",
                                  (request_id,)).fetchone()
-        events = Worker(st.seed).fulfil(st.bridge, request_id, now, directive[0] if directive else None)
+        events = Worker(st.seed).fulfil(st.bridge, request_id, now, directive[0] if directive else None,
+                                        late=set(ev.data.get("late") or ()))
         st.log.append({"at": now.isoformat(), "kind": "visit", "request_id": request_id, "lines": events,
                        "closet_after": dict(st.machine.closet)})
     else:
@@ -455,52 +576,106 @@ def save(st: State, path: Path) -> None:
 
 
 def load(path: Path) -> State:
+    import dataclasses
+
     st = pickle.loads(path.read_bytes())
+    # A checkpoint from before a field existed: the field's default.
+    for f in dataclasses.fields(State):
+        if not hasattr(st, f.name) and f.default_factory is not dataclasses.MISSING:
+            setattr(st, f.name, f.default_factory())
+        elif not hasattr(st, f.name) and f.default is not dataclasses.MISSING:
+            setattr(st, f.name, f.default)
     st.bridge.now = st.clock.now
+    world.register(getattr(st, "products", None) or [])
+    world.register_prices([tuple(r) for r in (getattr(st, "live", None) or {}).get("unit_prices", [])])
     return st
+
+
+# A scheduler that asks for the same moment this many times in a row is stuck: the season moves on a minute.
+SAME_MOMENT_TICKS = 3
 
 
 def run_season(conn: psycopg.Connection, st: State, opts: dict, checkpoint: Path, stop_at: datetime | None,
                say=print) -> State:
+    """The hours from `st.poll_at` to the end. In the live schedule (`st.schedule == "live"`) `opts["driver"]`
+    (`vending.simulate.live.Driver`) starts the runs: its `next_due` is asked between the hour's events, as the
+    worker's loop asks, and its `round` runs after each hourly poll, as the worker's round's jobs run."""
     cal, demand = Calendar(), Demand(opts.get("elasticity", 0.46), opts.get("facing_exponent", 0.5),
-                                         opts.get("interloper", 0.0))
+                                     opts.get("interloper", 0.0))
+    driver = opts.get("driver") if getattr(st, "schedule", "run-day") == "live" else None
     with patched(st.clock):
         t = st.poll_at
         cursor = getattr(st, "resume_at", None)       # a checkpoint from before this field has none
+        st.db_clock = dbclock.installed(conn)
+        if getattr(st, "schedule", "run-day") == "live" and not st.db_clock:
+            raise SystemExit("this live season's database has no season clock (dbclock); start it again")
+        if st.db_clock:
+            dbclock.set(conn, st.clock.now())
         while t < world.COMPETITION_END:
             if stop_at is not None and t >= stop_at:
                 say(f"stopped at {t.astimezone(EASTERN):%a %d %b %H:%M} ET; resume with --resume")
                 save(st, checkpoint)
                 return st
             nxt = t + timedelta(hours=1)
-            due = sorted((e for e in st.events if t <= e.at < nxt), key=lambda e: (e.at, e.kind))
             # Resuming mid-hour: what came before the cursor already happened (its events were handled and
             # removed before the checkpoint), so the hour goes on from there.
             a = cursor if cursor is not None and t <= cursor < nxt else t
             cursor = None
-            for ev in due:
+            same, last_tick, defer = 0, None, None
+            while True:
+                due = sorted((e for e in st.events if t <= e.at < nxt), key=lambda e: (e.at, e.kind))
+                ev = due[0] if due else None
+                tick_at = None
+                if driver is not None:
+                    tick_at = max(driver.next_due(st.clock.now()), st.clock.now(), a, defer or a)
+                    if tick_at >= nxt:
+                        tick_at = None
+                if ev is None and tick_at is None:
+                    break
                 runs_before = len(st.runs)
-                sell(st, cal, demand, a, ev.at)
-                a = ev.at
-                st.clock.set(ev.at)
-                st.events.remove(ev)
-                since = wall_clock(conn)
-                handle(conn, st, ev, opts)
-                restamp(conn, ev.at, since)
+                if ev is not None and (tick_at is None or ev.at <= tick_at):
+                    sell(st, cal, demand, a, ev.at)
+                    a = ev.at
+                    set_clock(conn, st, ev.at)
+                    st.events.remove(ev)
+                    since = wall_clock(conn)
+                    handle(conn, st, ev, opts)
+                    restamp(conn, ev.at, since)
+                    at = ev.at
+                else:
+                    same = same + 1 if tick_at == last_tick else 0
+                    last_tick = tick_at
+                    if same >= SAME_MOMENT_TICKS:
+                        # The scheduler keeps asking for this moment: hold its ticks back a minute and look again,
+                        # so an event before then still runs first.
+                        st.live.setdefault("stuck", []).append(tick_at.isoformat())
+                        defer, same = tick_at + timedelta(minutes=1), 0
+                        continue
+                    sell(st, cal, demand, a, tick_at)
+                    a = tick_at
+                    set_clock(conn, st, tick_at)
+                    since = wall_clock(conn)
+                    driver.tick(tick_at)
+                    restamp(conn, tick_at, since)
+                    at = tick_at
                 if len(st.runs) > runs_before:
                     r = st.runs[-1]
-                    say(f"{ev.at.astimezone(EASTERN):%a %d %b %H:%M} {r.get('kind')}: {r.get('status')}, "
-                        f"${r.get('cost_usd', '0')} ({r.get('detail', '')[:140]})")
-                    st.resume_at = ev.at     # the rest of this hour is still to come
+                    say(f"{at.astimezone(EASTERN):%a %d %b %H:%M} {r.get('kind')}: {r.get('status')}, "
+                        f"${r.get('cost_usd', '0')} ({(r.get('detail') or '')[:140]})")
+                    st.resume_at = at     # the rest of this hour is still to come
                     save(st, checkpoint)
             sell(st, cal, demand, a, nxt)
-            st.clock.set(nxt)
+            set_clock(conn, st, nxt)
             since = wall_clock(conn)
             poll(conn, st, nxt)
-            sync_requests.sync(conn, st.bridge, now=nxt, log=lambda *_: None)
+            synced = sync_requests.sync(conn, st.bridge, now=nxt, log=lambda *_: None)
             # The worker confirms the assignment every round (`vending.slots.check`); the first check from
             # the start confirms it for the competition, as live, so the tools go on reading our slots.
             slot_assignment.check(conn, st.bridge.slots(), now=nxt, by=BY)
+            if driver is not None:
+                # `sync_requests`' exit code, as the worker's round reads it (`vending.sync_requests.main`).
+                driver.round(nxt, {"slots_check": True, "sync_history": True,
+                                   "sync_requests": not (synced.failed or synced.skipped or synced.price_failures)})
             restamp(conn, nxt, since)
             st.poll_at, st.resume_at = nxt, None
             t = nxt

@@ -355,20 +355,27 @@ class Worker:
     - a store is out of a product on 3% of visits; each unit is broken on arrival with chance 0.5%;
     - loads what the directive says, never past what the column holds, and puts the rest in the closet;
     - pulls the old product to the closet only when a new one goes in;
-    - sets the slot's tag to the sale price of what it loaded; a slot it can't fill keeps its old price.
+    - sets the slot's tag to the sale price of what it loaded; a slot it can't fill keeps its old price;
+    - a line in `late` (an Amazon order past its cutoff for this visit) is bought from an in-store choice if the line
+      has one; else the Amazon order is paid but its goods aren't here yet, so they go to back stock and a later
+      visit loads them, and a back-stock line that would load from them waits too (David, 17 Nov: Amazon items
+      that haven't arrived are stocked at the next scheduled visit).
     """
     seed: int
 
-    def fulfil(self, bridge: SimBridge, request_id: str, at: datetime, directive: str | None) -> list[dict]:
+    def fulfil(self, bridge: SimBridge, request_id: str, at: datetime, directive: str | None,
+               late: set[int] | frozenset = frozenset()) -> list[dict]:
         r = bridge.requests[request_id]
         machine = bridge.machine
         loads = directive_loads(directive, machine.slots)
         lines, total = [], 0
         events = []
+        waiting: set[str] = set()       # products whose goods are on a late Amazon order
         for i, line in enumerate(r.body.get("lines") or []):
             slot = str(line["slot"])
             resolved = at + timedelta(minutes=2 * i)
-            receipt, paid, event = self._line(machine, request_id, i, slot, line, loads.get(slot), at, resolved)
+            receipt, paid, event = self._line(machine, request_id, i, slot, line, loads.get(slot), at, resolved,
+                                              late=i in late, waiting=waiting)
             total += paid
             events.append(event)
             lines.append({"line": i, "slot": slot, "source": line["source"], "primary": line.get("primary"),
@@ -378,7 +385,8 @@ class Worker:
         return events
 
     def _line(self, machine: Machine, request_id: str, i: int, slot: str, line: dict, load: int | None,
-              visit: datetime, resolved: datetime) -> tuple[dict, int, dict]:
+              visit: datetime, resolved: datetime, *, late: bool = False,
+              waiting: set[str] | None = None) -> tuple[dict, int, dict]:
         st = machine.slots[slot]
         r = world.rng(self.seed, "line", request_id, i)
         empty = {"packs_bought": 0, "units_per_pack": None, "units_bought": 0, "total_paid": "0.00",
@@ -389,6 +397,9 @@ class Worker:
         if line["source"] == "back_stock":
             choice = line["load"]
             sku, asked = choice["sku"], int(choice["units"])
+            if waiting and sku in waiting:
+                return ({**empty, "outcome": "unavailable", "sku": sku, "store": None},
+                        0, {**event, "outcome": "unavailable", "why": "waits for a late Amazon delivery"})
             have = machine.closet.get(sku, 0)
             pulled, pulled_sku = self._pull(machine, slot, sku) if have else (0, None)
             room = BY_SKU[sku].column - (st.units if st.sku == sku else 0)
@@ -403,10 +414,14 @@ class Worker:
                     0, {**event, "outcome": "loaded", "sku": sku, "units_loaded": taken, "price": choice["sale_price"],
                         "pulled": pulled})
         tried = []
-        for rank in ("primary", "alternate"):
+        ranks = ("primary", "alternate")
+        if late:        # the in-store choice first: the Amazon goods can't be here for this visit
+            ranks = tuple(sorted(ranks, key=lambda k: (line.get(k) or {}).get("store") == "Amazon"))
+        for rank in ranks:
             choice = line.get(rank)
             if not choice:
                 continue
+            arrives_late = late and choice.get("store") == "Amazon"
             sku, store, upp, packs = choice["sku"], choice["store"], int(choice["units_per_pack"]), int(choice["packs"])
             if sku not in BY_SKU:
                 tried.append(f"{rank}: {sku} unknown to the shops")
@@ -421,13 +436,21 @@ class Worker:
             bought = upp * packs
             lost = sum(r.random() < world.BREAKAGE for _ in range(bought))
             paid = price * packs
-            pulled, pulled_sku = self._pull(machine, slot, sku)
-            room = BY_SKU[sku].column - (st.units if st.sku == sku else 0)
-            want = load if load is not None else room
-            loaded = max(min(want, room, bought - lost), 0)
+            if arrives_late:
+                # Paid when ordered; the goods come after this visit, so none are loaded now (`waiting`).
+                if waiting is not None:
+                    waiting.add(sku)
+                pulled, pulled_sku, loaded = 0, None, 0
+            else:
+                pulled, pulled_sku = self._pull(machine, slot, sku)
+                room = BY_SKU[sku].column - (st.units if st.sku == sku else 0)
+                want = load if load is not None else room
+                loaded = max(min(want, room, bought - lost), 0)
             to_closet = bought - lost - loaded
             machine.closet[sku] = machine.closet.get(sku, 0) + to_closet
-            st.sku, st.units, st.price_cents = sku, (st.units if st.sku == sku else 0) + loaded, _cents(choice["sale_price"])
+            if not arrives_late:
+                st.sku, st.units, st.price_cents = (sku, (st.units if st.sku == sku else 0) + loaded,
+                                                    _cents(choice["sale_price"]))
             unit = Fraction(paid, bought) / 100
             receipt = {**empty, "outcome": rank, "sku": sku, "store": store, "packs_bought": packs,
                        "units_per_pack": upp, "units_bought": bought, "total_paid": _money(paid),
@@ -436,7 +459,9 @@ class Worker:
                        "units_to_back_stock": to_closet, "units_pulled": pulled, "pulled_sku": pulled_sku}
             return receipt, paid, {**event, "outcome": rank, "sku": sku, "store": store, "paid": _money(paid),
                                    "units_loaded": loaded, "to_closet": to_closet, "lost": lost,
-                                   "price": choice["sale_price"], "pulled": pulled, "tried": tried}
+                                   "price": choice["sale_price"], "pulled": pulled, "tried": tried,
+                                   **({"late": "Amazon past its cutoff: to back stock, loaded at a later visit"}
+                                      if arrives_late else {})}
         primary = line.get("primary") or {}
         return ({**empty, "outcome": "unavailable", "sku": primary.get("sku"), "store": primary.get("store")}, 0,
                 {**event, "outcome": "unavailable", "tried": tried})

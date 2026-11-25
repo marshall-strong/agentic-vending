@@ -387,6 +387,12 @@ def write(conn: psycopg.Connection, st, out: Path, opts: dict | None = None, nam
     data = build(conn, st)
     data["season"]["built"] = datetime.now(EASTERN).isoformat(timespec="minutes")
     data["season"]["assumptions"] = {k: (str(v) if isinstance(v, Decimal) else v) for k, v in (opts or {}).items()}
+    if getattr(st, "schedule", "run-day") == "live":
+        from vending.simulate import live
+        data["season"]["run_day"] = "live schedule"
+        data["season"]["rehearsal"] = live.summary(conn, st)
+        (out / "rehearsal.json").write_text(json.dumps(data["season"]["rehearsal"], indent=1, default=str),
+                                            encoding="utf-8")
     (out / "season.json").write_text(json.dumps(data["season"], indent=1, default=str), encoding="utf-8")
     (out / "weeks.json").write_text(json.dumps(data["weeks"], indent=1, default=str), encoding="utf-8")
     (out / "runs.json").write_text(json.dumps(data["runs"], indent=1, default=str), encoding="utf-8")
