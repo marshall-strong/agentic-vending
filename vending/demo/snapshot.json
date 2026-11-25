@@ -525,6 +525,41 @@
       "tool": "submit_desired_state",
       "content": "refused: a request for Friday is already pending (pr-002)",
       "is_error": true
+     },
+     {
+      "turn": 3,
+      "kind": "thinking",
+      "tool": null,
+      "content": "Friday's request is in. Red Bull is down to 2 with two class days to go: preview a midweek top-up to see what it costs.",
+      "is_error": false
+     },
+     {
+      "turn": 3,
+      "kind": "tool_call",
+      "tool": "preview_desired_state",
+      "content": "{\"desired\": {\"off_cycle\": true, \"slots\": [{\"slot\": \"11\", \"product\": \"COCA-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.75\"}, {\"slot\": \"13\", \"product\": \"COCA-DIET-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"16\", \"product\": \"COCA-ZERO_SUG-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"17\", \"product\": \"SPRITE-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"22\", \"product\": \"BUBLY-STRAWBER-12CAN\", \"fill_to\": 8, \"sale_price\": \"1.75\"}, {\"slot\": \"24\", \"product\": \"BUBLY-PARADISE-12CAN\", \"fill_to\": 8, \"sale_price\": \"1.50\"}, {\"slot\": \"25\", \"product\": \"TOPOCHICO-ORIGINAL-16BOT\", \"fill_to\": 7, \"sale_price\": \"2.75\"}, {\"slot\": \"28\", \"product\": \"GORGIE-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"31\", \"product\": \"PEPSI-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.75\"}, {\"slot\": \"33\", \"product\": \"MOUNTAIN-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"36\", \"product\": \"DRPEPPER-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"37\", \"product\": \"REDBULL-ORIGINAL-8_4CAN\", \"fill_to\": 11, \"sale_price\": \"3.00\"}, {\"slot\": \"41\", \"product\": \"MONSTER-ORIGINAL-16CAN\", \"fill_to\": 8, \"sale_price\": \"3.25\"}, {\"slot\": \"44\", \"product\": \"SNAPPLE-ORIGINAL-16BOT\", \"fill_to\": 0, \"sale_price\": \"2.50\"}, {\"slot\": \"46\", \"product\": \"PREMIER-CHOCOLAT-11CAR\", \"fill_to\": 9, \"sale_price\": \"4.00\"}, {\"slot\": \"47\", \"product\": \"RECESS-LIME-12CAN\", \"fill_to\": 8, \"sale_price\": \"2.25\"}, {\"slot\": \"52\", \"product\": \"MOUNTAIN-BAJA_BLA-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"54\", \"product\": \"COCA-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"55\", \"product\": \"TOPOCHICO-ORIGINAL-16BOT\", \"fill_to\": 7, \"sale_price\": \"2.75\"}, {\"slot\": \"58\", \"product\": \"MOUNTAIN-BAJA_BLA-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}]}}",
+      "is_error": false
+     },
+     {
+      "turn": 3,
+      "kind": "tool_result",
+      "tool": "preview_desired_state",
+      "content": "{\"ok\": true, \"plan_hash\": \"demo-1\", \"most_we_pay\": \"45.40\"}",
+      "is_error": false
+     },
+     {
+      "turn": 4,
+      "kind": "thinking",
+      "tool": null,
+      "content": "The visit costs $25 and Red Bull's two days make about $11. Try $3.25 instead, as Friday's plan does.",
+      "is_error": false
+     },
+     {
+      "turn": 4,
+      "kind": "tool_call",
+      "tool": "preview_desired_state",
+      "content": "{\"desired\": {\"off_cycle\": true, \"slots\": [{\"slot\": \"11\", \"product\": \"COCA-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.75\"}, {\"slot\": \"13\", \"product\": \"COCA-DIET-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"16\", \"product\": \"COCA-ZERO_SUG-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"17\", \"product\": \"SPRITE-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"22\", \"product\": \"BUBLY-STRAWBER-12CAN\", \"fill_to\": 8, \"sale_price\": \"1.75\"}, {\"slot\": \"24\", \"product\": \"BUBLY-PARADISE-12CAN\", \"fill_to\": 8, \"sale_price\": \"1.50\"}, {\"slot\": \"25\", \"product\": \"TOPOCHICO-ORIGINAL-16BOT\", \"fill_to\": 7, \"sale_price\": \"2.75\"}, {\"slot\": \"28\", \"product\": \"GORGIE-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"31\", \"product\": \"PEPSI-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.75\"}, {\"slot\": \"33\", \"product\": \"MOUNTAIN-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"36\", \"product\": \"DRPEPPER-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"37\", \"product\": \"REDBULL-ORIGINAL-8_4CAN\", \"fill_to\": 11, \"sale_price\": \"3.25\"}, {\"slot\": \"41\", \"product\": \"MONSTER-ORIGINAL-16CAN\", \"fill_to\": 8, \"sale_price\": \"3.25\"}, {\"slot\": \"44\", \"product\": \"SNAPPLE-ORIGINAL-16BOT\", \"fill_to\": 0, \"sale_price\": \"2.50\"}, {\"slot\": \"46\", \"product\": \"PREMIER-CHOCOLAT-11CAR\", \"fill_to\": 9, \"sale_price\": \"4.00\"}, {\"slot\": \"47\", \"product\": \"RECESS-LIME-12CAN\", \"fill_to\": 8, \"sale_price\": \"2.25\"}, {\"slot\": \"52\", \"product\": \"MOUNTAIN-BAJA_BLA-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"54\", \"product\": \"COCA-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"55\", \"product\": \"TOPOCHICO-ORIGINAL-16BOT\", \"fill_to\": 7, \"sale_price\": \"2.75\"}, {\"slot\": \"58\", \"product\": \"MOUNTAIN-BAJA_BLA-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}]}}",
+      "is_error": false
      }
     ],
     "has_plan": false,
@@ -871,7 +906,7 @@
   "ok": true,
   "data": [
    {
-    "id": 41,
+    "id": 42,
     "at": {
      "$datetime": "2026-12-09T14:53:00+00:00"
     },
@@ -884,7 +919,7 @@
     }
    },
    {
-    "id": 40,
+    "id": 41,
     "at": {
      "$datetime": "2026-12-09T14:52:00+00:00"
     },
@@ -895,7 +930,7 @@
     "arguments": {}
    },
    {
-    "id": 39,
+    "id": 40,
     "at": {
      "$datetime": "2026-12-09T14:51:00+00:00"
     },
@@ -906,7 +941,7 @@
     "arguments": {}
    },
    {
-    "id": 38,
+    "id": 39,
     "at": {
      "$datetime": "2026-12-08T16:00:00+00:00"
     },
@@ -917,7 +952,7 @@
     "arguments": {}
    },
    {
-    "id": 37,
+    "id": 38,
     "at": {
      "$datetime": "2026-12-07T14:11:00+00:00"
     },
@@ -930,7 +965,7 @@
     }
    },
    {
-    "id": 36,
+    "id": 37,
     "at": {
      "$datetime": "2026-12-07T14:09:00+00:00"
     },
@@ -943,7 +978,7 @@
     }
    },
    {
-    "id": 35,
+    "id": 36,
     "at": {
      "$datetime": "2026-12-07T14:08:00+00:00"
     },
@@ -956,7 +991,7 @@
     }
    },
    {
-    "id": 34,
+    "id": 35,
     "at": {
      "$datetime": "2026-12-07T14:07:00+00:00"
     },
@@ -967,7 +1002,7 @@
     "arguments": {}
    },
    {
-    "id": 33,
+    "id": 34,
     "at": {
      "$datetime": "2026-12-07T14:06:00+00:00"
     },
@@ -980,7 +1015,7 @@
     }
    },
    {
-    "id": 32,
+    "id": 33,
     "at": {
      "$datetime": "2026-12-07T14:05:00+00:00"
     },
@@ -993,7 +1028,7 @@
     }
    },
    {
-    "id": 31,
+    "id": 32,
     "at": {
      "$datetime": "2026-12-07T14:03:00+00:00"
     },
@@ -1004,7 +1039,7 @@
     "arguments": {}
    },
    {
-    "id": 30,
+    "id": 31,
     "at": {
      "$datetime": "2026-12-07T14:02:00+00:00"
     },
@@ -1015,7 +1050,7 @@
     "arguments": {}
    },
    {
-    "id": 29,
+    "id": 30,
     "at": {
      "$datetime": "2026-12-07T14:01:00+00:00"
     },
@@ -1026,7 +1061,7 @@
     "arguments": {}
    },
    {
-    "id": 28,
+    "id": 29,
     "at": {
      "$datetime": "2026-12-05T14:09:00+00:00"
     },
@@ -1040,7 +1075,7 @@
     }
    },
    {
-    "id": 27,
+    "id": 28,
     "at": {
      "$datetime": "2026-12-05T14:07:00+00:00"
     },
@@ -1054,7 +1089,7 @@
     }
    },
    {
-    "id": 26,
+    "id": 27,
     "at": {
      "$datetime": "2026-12-05T14:05:00+00:00"
     },
@@ -1067,7 +1102,7 @@
     }
    },
    {
-    "id": 25,
+    "id": 26,
     "at": {
      "$datetime": "2026-12-05T14:04:00+00:00"
     },
@@ -1080,7 +1115,7 @@
     }
    },
    {
-    "id": 24,
+    "id": 25,
     "at": {
      "$datetime": "2026-12-05T14:03:00+00:00"
     },
@@ -1093,7 +1128,7 @@
     }
    },
    {
-    "id": 23,
+    "id": 24,
     "at": {
      "$datetime": "2026-12-05T14:01:00+00:00"
     },
@@ -1104,7 +1139,7 @@
     "arguments": {}
    },
    {
-    "id": 22,
+    "id": 23,
     "at": {
      "$datetime": "2026-12-04T14:01:00+00:00"
     },
@@ -1115,7 +1150,7 @@
     "arguments": {}
    },
    {
-    "id": 21,
+    "id": 22,
     "at": {
      "$datetime": "2026-12-02T19:05:00+00:00"
     },
@@ -1128,7 +1163,7 @@
     }
    },
    {
-    "id": 20,
+    "id": 21,
     "at": {
      "$datetime": "2026-12-02T19:04:00+00:00"
     },
@@ -1141,7 +1176,7 @@
     }
    },
    {
-    "id": 19,
+    "id": 20,
     "at": {
      "$datetime": "2026-12-02T19:02:00+00:00"
     },
@@ -1152,7 +1187,7 @@
     "arguments": {}
    },
    {
-    "id": 18,
+    "id": 19,
     "at": {
      "$datetime": "2026-12-02T19:01:00+00:00"
     },
@@ -1163,7 +1198,7 @@
     "arguments": {}
    },
    {
-    "id": 17,
+    "id": 18,
     "at": {
      "$datetime": "2026-12-02T19:00:00+00:00"
     },
@@ -1176,7 +1211,7 @@
     }
    },
    {
-    "id": 16,
+    "id": 17,
     "at": {
      "$datetime": "2026-12-02T15:00:00+00:00"
     },
@@ -1189,7 +1224,7 @@
     }
    },
    {
-    "id": 15,
+    "id": 16,
     "at": {
      "$datetime": "2026-12-02T14:30:00+00:00"
     },
@@ -1205,7 +1240,7 @@
     }
    },
    {
-    "id": 14,
+    "id": 15,
     "at": {
      "$datetime": "2026-12-02T14:00:00+00:00"
     },
@@ -1219,7 +1254,7 @@
     }
    },
    {
-    "id": 13,
+    "id": 14,
     "at": {
      "$datetime": "2026-12-02T13:40:00+00:00"
     },
@@ -2488,6 +2523,129 @@
        }
       ]
      },
+     "by_slot": {
+      "11": {
+       "sold": 9,
+       "empty": true,
+       "product": "COCA-ORIGINAL-20BOT",
+       "product_changed": false
+      },
+      "13": {
+       "sold": 5,
+       "empty": false,
+       "product": "COCA-DIET-20BOT",
+       "product_changed": false
+      },
+      "16": {
+       "sold": 3,
+       "empty": false,
+       "product": "COCA-ZERO_SUG-20BOT",
+       "product_changed": false
+      },
+      "17": {
+       "sold": 3,
+       "empty": false,
+       "product": "SPRITE-ORIGINAL-20BOT",
+       "product_changed": false
+      },
+      "22": {
+       "sold": 4,
+       "empty": false,
+       "product": "BUBLY-STRAWBER-12CAN",
+       "product_changed": false
+      },
+      "24": {
+       "sold": 2,
+       "empty": false,
+       "product": "BUBLY-PARADISE-12CAN",
+       "product_changed": false
+      },
+      "25": {
+       "sold": 3,
+       "empty": false,
+       "product": "TOPOCHICO-ORIGINAL-16BOT",
+       "product_changed": false
+      },
+      "28": {
+       "sold": 2,
+       "empty": false,
+       "product": "VITAMINWATER-DARK-20BOT",
+       "product_changed": false
+      },
+      "31": {
+       "sold": 4,
+       "empty": true,
+       "product": "PEPSI-ORIGINAL-20BOT",
+       "product_changed": false
+      },
+      "33": {
+       "sold": 8,
+       "empty": true,
+       "product": "MOUNTAIN-ORIGINAL-20BOT",
+       "product_changed": false
+      },
+      "36": {
+       "sold": 3,
+       "empty": false,
+       "product": "DRPEPPER-ORIGINAL-20BOT",
+       "product_changed": false
+      },
+      "37": {
+       "sold": 14,
+       "empty": true,
+       "product": "REDBULL-ORIGINAL-8_4CAN",
+       "product_changed": false
+      },
+      "41": {
+       "sold": 6,
+       "empty": false,
+       "product": "MONSTER-ORIGINAL-16CAN",
+       "product_changed": false
+      },
+      "44": {
+       "sold": 1,
+       "empty": false,
+       "product": "SNAPPLE-ORIGINAL-16BOT",
+       "product_changed": false
+      },
+      "46": {
+       "sold": 2,
+       "empty": false,
+       "product": "PREMIER-CHOCOLAT-11CAR",
+       "product_changed": false
+      },
+      "47": {
+       "sold": 3,
+       "empty": false,
+       "product": "RECESS-LIME-12CAN",
+       "product_changed": false
+      },
+      "52": {
+       "sold": 4,
+       "empty": false,
+       "product": "MOUNTAIN-BAJA_BLA-20BOT",
+       "product_changed": false
+      },
+      "54": {
+       "sold": 3,
+       "empty": false,
+       "product": "COCA-ORIGINAL-20BOT",
+       "product_changed": false
+      },
+      "55": {
+       "sold": 0,
+       "empty": null,
+       "product": null,
+       "product_changed": false
+      },
+      "58": {
+       "sold": 0,
+       "empty": null,
+       "product": null,
+       "product_changed": false
+      }
+     },
+     "swapped": [],
      "grade_text": "Beat the baseline"
     },
     {
@@ -2506,6 +2664,8 @@
      ],
      "request": null,
      "polls": null,
+     "by_slot": null,
+     "swapped": [],
      "grade_text": "Opening week: not graded"
     }
    ]
@@ -2576,6 +2736,319 @@
      "what": "Run 2",
      "note": "(error text isn't shown on this public page; it is in the database and the container's log)",
      "error": true
+    }
+   ]
+  }
+ },
+ "forecast": {
+  "ok": true,
+  "data": {
+   "opened": true,
+   "weeks": [
+    {
+     "week": "2026-12-05",
+     "ends": "2026-12-11",
+     "final": false,
+     "run_id": 1,
+     "planned_at": {
+      "$datetime": "2026-12-02T19:00:00+00:00"
+     },
+     "status": "compared",
+     "polls": [
+      {
+       "$datetime": "2026-12-05T03:30:00+00:00"
+      },
+      {
+       "$datetime": "2026-12-09T13:30:00+00:00"
+      }
+     ],
+     "class_days": "2.2",
+     "rows": [
+      {
+       "slot": "11",
+       "product": "COCA-ORIGINAL-20BOT",
+       "rate": "2.40",
+       "unit": "class_day",
+       "basis": "fall prior: fast seller; 0 in-stock class days of our own so far, own rate after 5",
+       "expected": "5.2",
+       "sold": 9,
+       "difference": "3.8",
+       "empty": true,
+       "counted": true,
+       "note": null
+      },
+      {
+       "slot": "13",
+       "product": "COCA-DIET-20BOT",
+       "rate": "1.20",
+       "unit": "class_day",
+       "basis": "fall prior: slow seller, low-priced; 0 in-stock class days of our own so far, own rate after 5",
+       "expected": "2.6",
+       "sold": 5,
+       "difference": "2.4",
+       "empty": false,
+       "counted": true,
+       "note": null
+      },
+      {
+       "slot": "16",
+       "product": "COCA-ZERO_SUG-20BOT",
+       "rate": "0.90",
+       "unit": "class_day",
+       "basis": "fall prior: slow seller, low-priced; 0 in-stock class days of our own so far, own rate after 5",
+       "expected": "1.9",
+       "sold": 3,
+       "difference": "1.1",
+       "empty": false,
+       "counted": true,
+       "note": null
+      },
+      {
+       "slot": "17",
+       "product": "SPRITE-ORIGINAL-20BOT",
+       "rate": "0.80",
+       "unit": "class_day",
+       "basis": "fall prior: slow seller, low-priced; 0 in-stock class days of our own so far, own rate after 5",
+       "expected": "1.7",
+       "sold": 3,
+       "difference": "1.3",
+       "empty": false,
+       "counted": true,
+       "note": null
+      },
+      {
+       "slot": "22",
+       "product": "BUBLY-STRAWBER-12CAN",
+       "rate": "1.00",
+       "unit": "class_day",
+       "basis": "fall prior: slow seller, low-priced; 0 in-stock class days of our own so far, own rate after 5",
+       "expected": "2.2",
+       "sold": 4,
+       "difference": "1.9",
+       "empty": false,
+       "counted": true,
+       "note": null
+      },
+      {
+       "slot": "24",
+       "product": "BUBLY-PARADISE-12CAN",
+       "rate": "0.90",
+       "unit": "class_day",
+       "basis": "fall prior: slow seller, low-priced; 0 in-stock class days of our own so far, own rate after 5",
+       "expected": "1.9",
+       "sold": 2,
+       "difference": "0.1",
+       "empty": false,
+       "counted": true,
+       "note": null
+      },
+      {
+       "slot": "25",
+       "product": "TOPOCHICO-ORIGINAL-16BOT",
+       "rate": "0.70",
+       "unit": "class_day",
+       "basis": "fall prior: slow seller, low-priced; 0 in-stock class days of our own so far, own rate after 5",
+       "expected": "1.5",
+       "sold": 3,
+       "difference": "1.5",
+       "empty": false,
+       "counted": true,
+       "note": null
+      },
+      {
+       "slot": "28",
+       "product": "VITAMINWATER-DARK-20BOT",
+       "rate": "0.80",
+       "unit": "class_day",
+       "basis": "fall prior: slow seller, low-priced; 0 in-stock class days of our own so far, own rate after 5",
+       "expected": "1.7",
+       "sold": 2,
+       "difference": "0.3",
+       "empty": false,
+       "counted": true,
+       "note": null
+      },
+      {
+       "slot": "31",
+       "product": "PEPSI-ORIGINAL-20BOT",
+       "rate": "1.70",
+       "unit": "class_day",
+       "basis": "fall prior: fast seller; 0 in-stock class days of our own so far, own rate after 5",
+       "expected": "3.7",
+       "sold": 4,
+       "difference": "0.3",
+       "empty": true,
+       "counted": true,
+       "note": null
+      },
+      {
+       "slot": "33",
+       "product": "MOUNTAIN-ORIGINAL-20BOT",
+       "rate": "1.70",
+       "unit": "class_day",
+       "basis": "fall prior: fast seller; 0 in-stock class days of our own so far, own rate after 5",
+       "expected": "3.7",
+       "sold": 8,
+       "difference": "4.3",
+       "empty": true,
+       "counted": true,
+       "note": null
+      },
+      {
+       "slot": "36",
+       "product": "DRPEPPER-ORIGINAL-20BOT",
+       "rate": "0.70",
+       "unit": "class_day",
+       "basis": "fall prior: slow seller, low-priced; 0 in-stock class days of our own so far, own rate after 5",
+       "expected": "1.5",
+       "sold": 3,
+       "difference": "1.5",
+       "empty": false,
+       "counted": true,
+       "note": null
+      },
+      {
+       "slot": "37",
+       "product": "REDBULL-ORIGINAL-8_4CAN",
+       "rate": "3.40",
+       "unit": "class_day",
+       "basis": "fall prior: fast seller; 0 in-stock class days of our own so far, own rate after 5",
+       "expected": "7.3",
+       "sold": 14,
+       "difference": "6.7",
+       "empty": true,
+       "counted": true,
+       "note": null
+      },
+      {
+       "slot": "41",
+       "product": "MONSTER-ORIGINAL-16CAN",
+       "rate": "1.30",
+       "unit": "class_day",
+       "basis": "fall prior: slow seller, low-priced; 0 in-stock class days of our own so far, own rate after 5",
+       "expected": "2.8",
+       "sold": 6,
+       "difference": "3.2",
+       "empty": false,
+       "counted": true,
+       "note": null
+      },
+      {
+       "slot": "44",
+       "product": "SNAPPLE-ORIGINAL-16BOT",
+       "rate": "0.70",
+       "unit": "class_day",
+       "basis": "fall prior: slow seller, low-priced; 0 in-stock class days of our own so far, own rate after 5",
+       "expected": "1.5",
+       "sold": 1,
+       "difference": "-0.5",
+       "empty": false,
+       "counted": true,
+       "note": null
+      },
+      {
+       "slot": "46",
+       "product": "PREMIER-CHOCOLAT-11CAR",
+       "rate": "0.60",
+       "unit": "class_day",
+       "basis": "fall prior: slow seller, low-priced; 0 in-stock class days of our own so far, own rate after 5",
+       "expected": "1.3",
+       "sold": 2,
+       "difference": "0.7",
+       "empty": false,
+       "counted": true,
+       "note": null
+      },
+      {
+       "slot": "47",
+       "product": "RECESS-LIME-12CAN",
+       "rate": "0.70",
+       "unit": "class_day",
+       "basis": "fall prior: slow seller, low-priced; 0 in-stock class days of our own so far, own rate after 5",
+       "expected": "1.5",
+       "sold": 3,
+       "difference": "1.5",
+       "empty": false,
+       "counted": true,
+       "note": null
+      },
+      {
+       "slot": "52",
+       "product": "MOUNTAIN-BAJA_BLA-20BOT",
+       "rate": "0.80",
+       "unit": "class_day",
+       "basis": "fall prior: slow seller, low-priced; 0 in-stock class days of our own so far, own rate after 5",
+       "expected": "1.7",
+       "sold": 4,
+       "difference": "2.3",
+       "empty": false,
+       "counted": true,
+       "note": null
+      },
+      {
+       "slot": "54",
+       "product": "COCA-ORIGINAL-20BOT",
+       "rate": "1.00",
+       "unit": "class_day",
+       "basis": "fall prior: slow seller, low-priced; 0 in-stock class days of our own so far, own rate after 5",
+       "expected": "2.2",
+       "sold": 3,
+       "difference": "0.9",
+       "empty": false,
+       "counted": true,
+       "note": null
+      },
+      {
+       "slot": "55",
+       "product": null,
+       "rate": "0.70",
+       "unit": "class_day",
+       "basis": "fall prior: slow seller, low-priced; 0 in-stock class days of our own so far, own rate after 5",
+       "expected": "1.5",
+       "sold": 0,
+       "difference": "-1.5",
+       "empty": null,
+       "counted": true,
+       "note": null
+      },
+      {
+       "slot": "58",
+       "product": null,
+       "rate": "0.80",
+       "unit": "class_day",
+       "basis": "fall prior: slow seller, low-priced; 0 in-stock class days of our own so far, own rate after 5",
+       "expected": "1.7",
+       "sold": 0,
+       "difference": "-1.7",
+       "empty": null,
+       "counted": true,
+       "note": null
+      }
+     ],
+     "summary": {
+      "slots": 20,
+      "expected": "49.0",
+      "sold": 79,
+      "difference": "30.0",
+      "average_off": "1.9",
+      "empty": 4
+     },
+     "notes": [
+      "In progress: expected and sold cover the polls so far"
+     ]
+    },
+    {
+     "week": "2026-11-28",
+     "ends": "2026-12-04",
+     "final": true,
+     "run_id": null,
+     "planned_at": null,
+     "status": "opening",
+     "polls": null,
+     "class_days": null,
+     "rows": [],
+     "summary": null,
+     "notes": []
     }
    ]
   }
@@ -3799,5 +4272,979 @@
   }
  ],
  "alerts": [],
+ "run_pages": {
+  "6": {
+   "as_of": {
+    "$datetime": "2026-12-09T15:00:00+00:00"
+   },
+   "run_id": 6,
+   "found": true,
+   "shown": true,
+   "run": {
+    "id": 6,
+    "started_at": {
+     "$datetime": "2026-12-09T14:50:00+00:00"
+    },
+    "finished_at": null,
+    "mode": "live",
+    "model": "claude-sonnet-5-5",
+    "status": "running",
+    "detail": null,
+    "cost_usd": null,
+    "request_id": null,
+    "team_update": null,
+    "notes": null,
+    "steps": [
+     {
+      "id": 25,
+      "turn": 1,
+      "at": {
+       "$datetime": "2026-12-09T14:50:00+00:00"
+      },
+      "kind": "thinking",
+      "tool": null,
+      "content": "Wednesday check: is anything wrong before Thursday's cutoff?",
+      "is_error": false,
+      "tool_use_id": null
+     },
+     {
+      "id": 26,
+      "turn": 1,
+      "at": {
+       "$datetime": "2026-12-09T14:51:00+00:00"
+      },
+      "kind": "tool_call",
+      "tool": "get_machine_state",
+      "content": "{}",
+      "is_error": false,
+      "tool_use_id": null
+     },
+     {
+      "id": 27,
+      "turn": 1,
+      "at": {
+       "$datetime": "2026-12-09T14:51:00+00:00"
+      },
+      "kind": "tool_result",
+      "tool": "get_machine_state",
+      "content": "Saved poll reply omitted because its selections could not be scoped.",
+      "is_error": false,
+      "tool_use_id": null
+     },
+     {
+      "id": 28,
+      "turn": 2,
+      "at": {
+       "$datetime": "2026-12-09T14:53:00+00:00"
+      },
+      "kind": "tool_call",
+      "tool": "submit_desired_state",
+      "content": "{\"slots\": 20}",
+      "is_error": false,
+      "tool_use_id": null
+     },
+     {
+      "id": 29,
+      "turn": 2,
+      "at": {
+       "$datetime": "2026-12-09T14:53:00+00:00"
+      },
+      "kind": "tool_result",
+      "tool": "submit_desired_state",
+      "content": "(error text isn't shown on this public page; it is in the database and the container's log)",
+      "is_error": true,
+      "tool_use_id": null
+     },
+     {
+      "id": 30,
+      "turn": 3,
+      "at": {
+       "$datetime": "2026-12-09T14:56:00+00:00"
+      },
+      "kind": "thinking",
+      "tool": null,
+      "content": "Friday's request is in. Red Bull is down to 2 with two class days to go: preview a midweek top-up to see what it costs.",
+      "is_error": false,
+      "tool_use_id": null
+     },
+     {
+      "id": 31,
+      "turn": 3,
+      "at": {
+       "$datetime": "2026-12-09T14:57:00+00:00"
+      },
+      "kind": "tool_call",
+      "tool": "preview_desired_state",
+      "content": "{\"desired\": {\"off_cycle\": true, \"slots\": [{\"slot\": \"11\", \"product\": \"COCA-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.75\"}, {\"slot\": \"13\", \"product\": \"COCA-DIET-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"16\", \"product\": \"COCA-ZERO_SUG-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"17\", \"product\": \"SPRITE-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"22\", \"product\": \"BUBLY-STRAWBER-12CAN\", \"fill_to\": 8, \"sale_price\": \"1.75\"}, {\"slot\": \"24\", \"product\": \"BUBLY-PARADISE-12CAN\", \"fill_to\": 8, \"sale_price\": \"1.50\"}, {\"slot\": \"25\", \"product\": \"TOPOCHICO-ORIGINAL-16BOT\", \"fill_to\": 7, \"sale_price\": \"2.75\"}, {\"slot\": \"28\", \"product\": \"GORGIE-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"31\", \"product\": \"PEPSI-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.75\"}, {\"slot\": \"33\", \"product\": \"MOUNTAIN-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"36\", \"product\": \"DRPEPPER-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\n... 1,804 characters in all; the database keeps the whole text",
+      "is_error": false,
+      "tool_use_id": null
+     },
+     {
+      "id": 32,
+      "turn": 3,
+      "at": {
+       "$datetime": "2026-12-09T14:57:00+00:00"
+      },
+      "kind": "tool_result",
+      "tool": "preview_desired_state",
+      "content": "{\"ok\": true, \"plan_hash\": \"demo-1\", \"most_we_pay\": \"45.40\"}",
+      "is_error": false,
+      "tool_use_id": null
+     },
+     {
+      "id": 33,
+      "turn": 4,
+      "at": {
+       "$datetime": "2026-12-09T14:59:00+00:00"
+      },
+      "kind": "thinking",
+      "tool": null,
+      "content": "The visit costs $25 and Red Bull's two days make about $11. Try $3.25 instead, as Friday's plan does.",
+      "is_error": false,
+      "tool_use_id": null
+     },
+     {
+      "id": 34,
+      "turn": 4,
+      "at": {
+       "$datetime": "2026-12-09T14:59:00+00:00"
+      },
+      "kind": "tool_call",
+      "tool": "preview_desired_state",
+      "content": "{\"desired\": {\"off_cycle\": true, \"slots\": [{\"slot\": \"11\", \"product\": \"COCA-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.75\"}, {\"slot\": \"13\", \"product\": \"COCA-DIET-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"16\", \"product\": \"COCA-ZERO_SUG-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"17\", \"product\": \"SPRITE-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"22\", \"product\": \"BUBLY-STRAWBER-12CAN\", \"fill_to\": 8, \"sale_price\": \"1.75\"}, {\"slot\": \"24\", \"product\": \"BUBLY-PARADISE-12CAN\", \"fill_to\": 8, \"sale_price\": \"1.50\"}, {\"slot\": \"25\", \"product\": \"TOPOCHICO-ORIGINAL-16BOT\", \"fill_to\": 7, \"sale_price\": \"2.75\"}, {\"slot\": \"28\", \"product\": \"GORGIE-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"31\", \"product\": \"PEPSI-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.75\"}, {\"slot\": \"33\", \"product\": \"MOUNTAIN-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\"}, {\"slot\": \"36\", \"product\": \"DRPEPPER-ORIGINAL-20BOT\", \"fill_to\": 7, \"sale_price\": \"2.50\n... 1,804 characters in all; the database keeps the whole text",
+      "is_error": false,
+      "tool_use_id": null
+     }
+    ],
+    "stale": false
+   },
+   "after": 0,
+   "more": false,
+   "last": 34,
+   "counts": {
+    "steps": 10,
+    "turns": 4,
+    "calls": 4
+   },
+   "opened_at": {
+    "$datetime": "2026-12-02T15:00:00+00:00"
+   },
+   "before_opening": false,
+   "last_step_at": {
+    "$datetime": "2026-12-09T14:59:00+00:00"
+   },
+   "spend": {
+    "spent": {
+     "$decimal": "1.11"
+    },
+    "calls": 4,
+    "pending": 1
+   },
+   "cap": {
+    "usd": {
+     "$decimal": "2"
+    },
+    "set": true
+   },
+   "drafts": [
+    {
+     "n": 1,
+     "turn": 3,
+     "at": {
+      "$datetime": "2026-12-09T14:57:00+00:00"
+     },
+     "use": null,
+     "status": "accepted",
+     "slots": [
+      {
+       "slot": "11",
+       "product": "COCA-ORIGINAL-20BOT",
+       "fill_to": 7,
+       "sale_price": "2.75",
+       "reason": null
+      },
+      {
+       "slot": "13",
+       "product": "COCA-DIET-20BOT",
+       "fill_to": 7,
+       "sale_price": "2.50",
+       "reason": null
+      },
+      {
+       "slot": "16",
+       "product": "COCA-ZERO_SUG-20BOT",
+       "fill_to": 7,
+       "sale_price": "2.50",
+       "reason": null
+      },
+      {
+       "slot": "17",
+       "product": "SPRITE-ORIGINAL-20BOT",
+       "fill_to": 7,
+       "sale_price": "2.50",
+       "reason": null
+      },
+      {
+       "slot": "22",
+       "product": "BUBLY-STRAWBER-12CAN",
+       "fill_to": 8,
+       "sale_price": "1.75",
+       "reason": null
+      },
+      {
+       "slot": "24",
+       "product": "BUBLY-PARADISE-12CAN",
+       "fill_to": 8,
+       "sale_price": "1.50",
+       "reason": null
+      },
+      {
+       "slot": "25",
+       "product": "TOPOCHICO-ORIGINAL-16BOT",
+       "fill_to": 7,
+       "sale_price": "2.75",
+       "reason": null
+      },
+      {
+       "slot": "28",
+       "product": "GORGIE-ORIGINAL-20BOT",
+       "fill_to": 7,
+       "sale_price": "2.50",
+       "reason": null
+      },
+      {
+       "slot": "31",
+       "product": "PEPSI-ORIGINAL-20BOT",
+       "fill_to": 7,
+       "sale_price": "2.75",
+       "reason": null
+      },
+      {
+       "slot": "33",
+       "product": "MOUNTAIN-ORIGINAL-20BOT",
+       "fill_to": 7,
+       "sale_price": "2.50",
+       "reason": null
+      },
+      {
+       "slot": "36",
+       "product": "DRPEPPER-ORIGINAL-20BOT",
+       "fill_to": 7,
+       "sale_price": "2.50",
+       "reason": null
+      },
+      {
+       "slot": "37",
+       "product": "REDBULL-ORIGINAL-8_4CAN",
+       "fill_to": 11,
+       "sale_price": "3.00",
+       "reason": null
+      },
+      {
+       "slot": "41",
+       "product": "MONSTER-ORIGINAL-16CAN",
+       "fill_to": 8,
+       "sale_price": "3.25",
+       "reason": null
+      },
+      {
+       "slot": "44",
+       "product": "SNAPPLE-ORIGINAL-16BOT",
+       "fill_to": 0,
+       "sale_price": "2.50",
+       "reason": null
+      },
+      {
+       "slot": "46",
+       "product": "PREMIER-CHOCOLAT-11CAR",
+       "fill_to": 9,
+       "sale_price": "4.00",
+       "reason": null
+      },
+      {
+       "slot": "47",
+       "product": "RECESS-LIME-12CAN",
+       "fill_to": 8,
+       "sale_price": "2.25",
+       "reason": null
+      },
+      {
+       "slot": "52",
+       "product": "MOUNTAIN-BAJA_BLA-20BOT",
+       "fill_to": 7,
+       "sale_price": "2.50",
+       "reason": null
+      },
+      {
+       "slot": "54",
+       "product": "COCA-ORIGINAL-20BOT",
+       "fill_to": 7,
+       "sale_price": "2.50",
+       "reason": null
+      },
+      {
+       "slot": "55",
+       "product": "TOPOCHICO-ORIGINAL-16BOT",
+       "fill_to": 7,
+       "sale_price": "2.75",
+       "reason": null
+      },
+      {
+       "slot": "58",
+       "product": "MOUNTAIN-BAJA_BLA-20BOT",
+       "fill_to": 7,
+       "sale_price": "2.50",
+       "reason": null
+      }
+     ],
+     "changes": [
+      {
+       "slot": "37",
+       "labels": [
+        "$3.25 to $3.00"
+       ]
+      }
+     ],
+     "unreadable": null,
+     "visit": "midweek"
+    },
+    {
+     "n": 2,
+     "turn": 4,
+     "at": {
+      "$datetime": "2026-12-09T14:59:00+00:00"
+     },
+     "use": null,
+     "status": "waiting",
+     "slots": [
+      {
+       "slot": "11",
+       "product": "COCA-ORIGINAL-20BOT",
+       "fill_to": 7,
+       "sale_price": "2.75",
+       "reason": null
+      },
+      {
+       "slot": "13",
+       "product": "COCA-DIET-20BOT",
+       "fill_to": 7,
+       "sale_price": "2.50",
+       "reason": null
+      },
+      {
+       "slot": "16",
+       "product": "COCA-ZERO_SUG-20BOT",
+       "fill_to": 7,
+       "sale_price": "2.50",
+       "reason": null
+      },
+      {
+       "slot": "17",
+       "product": "SPRITE-ORIGINAL-20BOT",
+       "fill_to": 7,
+       "sale_price": "2.50",
+       "reason": null
+      },
+      {
+       "slot": "22",
+       "product": "BUBLY-STRAWBER-12CAN",
+       "fill_to": 8,
+       "sale_price": "1.75",
+       "reason": null
+      },
+      {
+       "slot": "24",
+       "product": "BUBLY-PARADISE-12CAN",
+       "fill_to": 8,
+       "sale_price": "1.50",
+       "reason": null
+      },
+      {
+       "slot": "25",
+       "product": "TOPOCHICO-ORIGINAL-16BOT",
+       "fill_to": 7,
+       "sale_price": "2.75",
+       "reason": null
+      },
+      {
+       "slot": "28",
+       "product": "GORGIE-ORIGINAL-20BOT",
+       "fill_to": 7,
+       "sale_price": "2.50",
+       "reason": null
+      },
+      {
+       "slot": "31",
+       "product": "PEPSI-ORIGINAL-20BOT",
+       "fill_to": 7,
+       "sale_price": "2.75",
+       "reason": null
+      },
+      {
+       "slot": "33",
+       "product": "MOUNTAIN-ORIGINAL-20BOT",
+       "fill_to": 7,
+       "sale_price": "2.50",
+       "reason": null
+      },
+      {
+       "slot": "36",
+       "product": "DRPEPPER-ORIGINAL-20BOT",
+       "fill_to": 7,
+       "sale_price": "2.50",
+       "reason": null
+      },
+      {
+       "slot": "37",
+       "product": "REDBULL-ORIGINAL-8_4CAN",
+       "fill_to": 11,
+       "sale_price": "3.25",
+       "reason": null
+      },
+      {
+       "slot": "41",
+       "product": "MONSTER-ORIGINAL-16CAN",
+       "fill_to": 8,
+       "sale_price": "3.25",
+       "reason": null
+      },
+      {
+       "slot": "44",
+       "product": "SNAPPLE-ORIGINAL-16BOT",
+       "fill_to": 0,
+       "sale_price": "2.50",
+       "reason": null
+      },
+      {
+       "slot": "46",
+       "product": "PREMIER-CHOCOLAT-11CAR",
+       "fill_to": 9,
+       "sale_price": "4.00",
+       "reason": null
+      },
+      {
+       "slot": "47",
+       "product": "RECESS-LIME-12CAN",
+       "fill_to": 8,
+       "sale_price": "2.25",
+       "reason": null
+      },
+      {
+       "slot": "52",
+       "product": "MOUNTAIN-BAJA_BLA-20BOT",
+       "fill_to": 7,
+       "sale_price": "2.50",
+       "reason": null
+      },
+      {
+       "slot": "54",
+       "product": "COCA-ORIGINAL-20BOT",
+       "fill_to": 7,
+       "sale_price": "2.50",
+       "reason": null
+      },
+      {
+       "slot": "55",
+       "product": "TOPOCHICO-ORIGINAL-16BOT",
+       "fill_to": 7,
+       "sale_price": "2.75",
+       "reason": null
+      },
+      {
+       "slot": "58",
+       "product": "MOUNTAIN-BAJA_BLA-20BOT",
+       "fill_to": 7,
+       "sale_price": "2.50",
+       "reason": null
+      }
+     ],
+     "changes": [
+      {
+       "slot": "37",
+       "labels": [
+        "$3.00 to $3.25"
+       ]
+      }
+     ],
+     "unreadable": null,
+     "visit": "midweek"
+    }
+   ],
+   "replies": [],
+   "plan": null
+  },
+  "5": {
+   "as_of": {
+    "$datetime": "2026-12-09T15:00:00+00:00"
+   },
+   "run_id": 5,
+   "found": true,
+   "shown": true,
+   "run": {
+    "id": 5,
+    "started_at": {
+     "$datetime": "2026-12-07T14:00:00+00:00"
+    },
+    "finished_at": {
+     "$datetime": "2026-12-07T14:12:00+00:00"
+    },
+    "mode": "live",
+    "model": "claude-sonnet-5-5",
+    "status": "submitted",
+    "detail": null,
+    "cost_usd": {
+     "$decimal": "0.58"
+    },
+    "request_id": "pr-002",
+    "team_update": "Next Friday's order: three prices up, one down, one swap, one lane pulled for a swap to come. Selections 55 and 58 get another try at a seller. Coca-Cola and Mountain Dew refill from the closet; Red Bull, Diet Coke, bubly Strawberry and the protein shake are bought, since the closet can't fill them.",
+    "notes": "Pepsi sold out on Sunday: if it sells out again at $2.75, price it at $3.00. Check whether GORGIE outsells vitaminwater, and pick the product for 44.",
+    "steps": [
+     {
+      "id": 12,
+      "turn": 1,
+      "at": {
+       "$datetime": "2026-12-07T14:00:00+00:00"
+      },
+      "kind": "thinking",
+      "tool": null,
+      "content": "Monday. Last week's plan is the baseline. I want sales per lane, what sold out, and what the ledger says I can spend.",
+      "is_error": false,
+      "tool_use_id": null
+     },
+     {
+      "id": 13,
+      "turn": 1,
+      "at": {
+       "$datetime": "2026-12-07T14:01:00+00:00"
+      },
+      "kind": "tool_call",
+      "tool": "get_machine_state",
+      "content": "{}",
+      "is_error": false,
+      "tool_use_id": null
+     },
+     {
+      "id": 14,
+      "turn": 1,
+      "at": {
+       "$datetime": "2026-12-07T14:01:00+00:00"
+      },
+      "kind": "tool_result",
+      "tool": "get_machine_state",
+      "content": "Saved poll reply omitted because its selections could not be scoped.",
+      "is_error": false,
+      "tool_use_id": null
+     },
+     {
+      "id": 15,
+      "turn": 1,
+      "at": {
+       "$datetime": "2026-12-07T14:02:00+00:00"
+      },
+      "kind": "tool_call",
+      "tool": "get_account_balance",
+      "content": "{}",
+      "is_error": false,
+      "tool_use_id": null
+     },
+     {
+      "id": 16,
+      "turn": 1,
+      "at": {
+       "$datetime": "2026-12-07T14:02:00+00:00"
+      },
+      "kind": "tool_result",
+      "tool": "get_account_balance",
+      "content": "Saved poll reply omitted because its selections could not be scoped.",
+      "is_error": false,
+      "tool_use_id": null
+     },
+     {
+      "id": 17,
+      "turn": 2,
+      "at": {
+       "$datetime": "2026-12-07T14:04:00+00:00"
+      },
+      "kind": "thinking",
+      "tool": null,
+      "content": "Coca-Cola and Red Bull ran out before Saturday's top-up and are empty or nearly again, and Pepsi ran out on Sunday. Their price is too low for the demand, and a quarter more should still clear them.",
+      "is_error": false,
+      "tool_use_id": null
+     },
+     {
+      "id": 18,
+      "turn": 2,
+      "at": {
+       "$datetime": "2026-12-07T14:05:00+00:00"
+      },
+      "kind": "tool_call",
+      "tool": "get_sales_history",
+      "content": "{\"slot\": \"31\"}",
+      "is_error": false,
+      "tool_use_id": null
+     },
+     {
+      "id": 19,
+      "turn": 2,
+      "at": {
+       "$datetime": "2026-12-07T14:05:00+00:00"
+      },
+      "kind": "tool_result",
+      "tool": "get_sales_history",
+      "content": "Saved poll reply omitted because its selections could not be scoped.",
+      "is_error": false,
+      "tool_use_id": null
+     },
+     {
+      "id": 20,
+      "turn": 3,
+      "at": {
+       "$datetime": "2026-12-07T14:07:00+00:00"
+      },
+      "kind": "thinking",
+      "tool": null,
+      "content": "vitaminwater sold 1 since Thursday. GORGIE was approved in November; try it there. Snapple sold 1, so pull it and swap a new product in next week.",
+      "is_error": false,
+      "tool_use_id": null
+     },
+     {
+      "id": 21,
+      "turn": 3,
+      "at": {
+       "$datetime": "2026-12-07T14:08:00+00:00"
+      },
+      "kind": "tool_call",
+      "tool": "preview_desired_state",
+      "content": "{\"slots\": 20}",
+      "is_error": false,
+      "tool_use_id": null
+     },
+     {
+      "id": 22,
+      "turn": 3,
+      "at": {
+       "$datetime": "2026-12-07T14:08:00+00:00"
+      },
+      "kind": "tool_result",
+      "tool": "preview_desired_state",
+      "content": "most we pay $173.40, 0 refusals",
+      "is_error": false,
+      "tool_use_id": null
+     },
+     {
+      "id": 23,
+      "turn": 4,
+      "at": {
+       "$datetime": "2026-12-07T14:10:00+00:00"
+      },
+      "kind": "tool_call",
+      "tool": "submit_desired_state",
+      "content": "{\"slots\": 20}",
+      "is_error": false,
+      "tool_use_id": null
+     },
+     {
+      "id": 24,
+      "turn": 4,
+      "at": {
+       "$datetime": "2026-12-07T14:12:00+00:00"
+      },
+      "kind": "text",
+      "tool": null,
+      "content": "Submitted request pr-002.",
+      "is_error": false,
+      "tool_use_id": null
+     }
+    ],
+    "stale": false
+   },
+   "after": 0,
+   "more": false,
+   "last": 24,
+   "counts": {
+    "steps": 13,
+    "turns": 4,
+    "calls": 5
+   },
+   "opened_at": {
+    "$datetime": "2026-12-02T15:00:00+00:00"
+   },
+   "before_opening": false,
+   "last_step_at": {
+    "$datetime": "2026-12-07T14:12:00+00:00"
+   },
+   "spend": {
+    "spent": {
+     "$decimal": "0"
+    },
+    "calls": 0,
+    "pending": 0
+   },
+   "cap": {
+    "usd": {
+     "$decimal": "2"
+    },
+    "set": true
+   },
+   "drafts": [
+    {
+     "n": 1,
+     "turn": 3,
+     "at": {
+      "$datetime": "2026-12-07T14:08:00+00:00"
+     },
+     "use": null,
+     "status": "unknown",
+     "slots": null,
+     "changes": [],
+     "unreadable": "arguments not readable (stored cut short, or omitted)"
+    }
+   ],
+   "replies": [],
+   "plan": {
+    "visit": "scheduled",
+    "reason": "Raise three prices on sell-outs, lower one, swap the slowest lane, and pull one for a swap to come.",
+    "slots": [
+     {
+      "slot": "11",
+      "product": "COCA-ORIGINAL-20BOT",
+      "fill_to": 7,
+      "sale_price": "2.75",
+      "reason": "Coca-Cola ran out on Saturday morning before the top-up, and is down to 1 again. One more quarter should still sell it through."
+     },
+     {
+      "slot": "13",
+      "product": "COCA-DIET-20BOT",
+      "fill_to": 7,
+      "sale_price": "2.50",
+      "reason": "Unchanged from last week: the numbers don't argue for a move."
+     },
+     {
+      "slot": "16",
+      "product": "COCA-ZERO_SUG-20BOT",
+      "fill_to": 7,
+      "sale_price": "2.50",
+      "reason": "Unchanged from last week: the numbers don't argue for a move."
+     },
+     {
+      "slot": "17",
+      "product": "SPRITE-ORIGINAL-20BOT",
+      "fill_to": 7,
+      "sale_price": "2.50",
+      "reason": "Unchanged from last week: the numbers don't argue for a move."
+     },
+     {
+      "slot": "22",
+      "product": "BUBLY-STRAWBER-12CAN",
+      "fill_to": 8,
+      "sale_price": "1.75",
+      "reason": "Unchanged from last week: the numbers don't argue for a move."
+     },
+     {
+      "slot": "24",
+      "product": "BUBLY-PARADISE-12CAN",
+      "fill_to": 8,
+      "sale_price": "1.50",
+      "reason": "bubly Paradise Paloma sold 1 since Thursday, a third of what Strawberry sold at the same price. A quarter off, to see if it moves."
+     },
+     {
+      "slot": "25",
+      "product": "TOPOCHICO-ORIGINAL-16BOT",
+      "fill_to": 7,
+      "sale_price": "2.75",
+      "reason": "Unchanged from last week: the numbers don't argue for a move."
+     },
+     {
+      "slot": "28",
+      "product": "GORGIE-ORIGINAL-20BOT",
+      "fill_to": 7,
+      "sale_price": "2.50",
+      "reason": "vitaminwater sold 1 since Thursday, one of the slowest lanes. GORGIE's request was approved, so swap it in."
+     },
+     {
+      "slot": "31",
+      "product": "PEPSI-ORIGINAL-20BOT",
+      "fill_to": 7,
+      "sale_price": "2.75",
+      "reason": "Pepsi sold out on Sunday night, three and a half days after the fill. Raising the price a quarter."
+     },
+     {
+      "slot": "33",
+      "product": "MOUNTAIN-ORIGINAL-20BOT",
+      "fill_to": 7,
+      "sale_price": "2.50",
+      "reason": "Unchanged from last week: the numbers don't argue for a move."
+     },
+     {
+      "slot": "36",
+      "product": "DRPEPPER-ORIGINAL-20BOT",
+      "fill_to": 7,
+      "sale_price": "2.50",
+      "reason": "Unchanged from last week: the numbers don't argue for a move."
+     },
+     {
+      "slot": "37",
+      "product": "REDBULL-ORIGINAL-8_4CAN",
+      "fill_to": 11,
+      "sale_price": "3.25",
+      "reason": "Red Bull sold out on Saturday morning and again early on Monday at $3.00. $3.25 is still under the ceiling."
+     },
+     {
+      "slot": "41",
+      "product": "MONSTER-ORIGINAL-16CAN",
+      "fill_to": 8,
+      "sale_price": "3.25",
+      "reason": "Unchanged from last week: the numbers don't argue for a move."
+     },
+     {
+      "slot": "44",
+      "product": "SNAPPLE-ORIGINAL-16BOT",
+      "fill_to": 0,
+      "sale_price": "2.50",
+      "reason": "Snapple sold 1 since Thursday. Pull it to the closet now, so the lane is free for a better seller: the next plan swaps one in and fills it to its column."
+     },
+     {
+      "slot": "46",
+      "product": "PREMIER-CHOCOLAT-11CAR",
+      "fill_to": 9,
+      "sale_price": "4.00",
+      "reason": "Unchanged from last week: the numbers don't argue for a move."
+     },
+     {
+      "slot": "47",
+      "product": "RECESS-LIME-12CAN",
+      "fill_to": 8,
+      "sale_price": "2.25",
+      "reason": "Unchanged from last week: the numbers don't argue for a move."
+     },
+     {
+      "slot": "52",
+      "product": "MOUNTAIN-BAJA_BLA-20BOT",
+      "fill_to": 7,
+      "sale_price": "2.50",
+      "reason": "Unchanged from last week: the numbers don't argue for a move."
+     },
+     {
+      "slot": "54",
+      "product": "COCA-ORIGINAL-20BOT",
+      "fill_to": 7,
+      "sale_price": "2.50",
+      "reason": "Unchanged from last week: the numbers don't argue for a move."
+     },
+     {
+      "slot": "55",
+      "product": "TOPOCHICO-ORIGINAL-16BOT",
+      "fill_to": 7,
+      "sale_price": "2.75",
+      "reason": "Unchanged from last week: the numbers don't argue for a move."
+     },
+     {
+      "slot": "58",
+      "product": "MOUNTAIN-BAJA_BLA-20BOT",
+      "fill_to": 7,
+      "sale_price": "2.50",
+      "reason": "Unchanged from last week: the numbers don't argue for a move."
+     }
+    ]
+   }
+  },
+  "2": {
+   "as_of": {
+    "$datetime": "2026-12-09T15:00:00+00:00"
+   },
+   "run_id": 2,
+   "found": true,
+   "shown": true,
+   "run": {
+    "id": 2,
+    "started_at": {
+     "$datetime": "2026-12-04T14:00:00+00:00"
+    },
+    "finished_at": {
+     "$datetime": "2026-12-04T14:03:00+00:00"
+    },
+    "mode": "live",
+    "model": "claude-sonnet-5-5",
+    "status": "failed",
+    "detail": "(error text isn't shown on this public page; it is in the database and the container's log)",
+    "cost_usd": {
+     "$decimal": "0.12"
+    },
+    "request_id": null,
+    "team_update": null,
+    "notes": null,
+    "steps": [
+     {
+      "id": 9,
+      "turn": 1,
+      "at": {
+       "$datetime": "2026-12-04T14:00:00+00:00"
+      },
+      "kind": "thinking",
+      "tool": null,
+      "content": "Checking Friday's stock before deciding whether a visit is worth it.",
+      "is_error": false,
+      "tool_use_id": null
+     },
+     {
+      "id": 10,
+      "turn": 1,
+      "at": {
+       "$datetime": "2026-12-04T14:01:00+00:00"
+      },
+      "kind": "tool_call",
+      "tool": "get_machine_state",
+      "content": "{}",
+      "is_error": false,
+      "tool_use_id": null
+     },
+     {
+      "id": 11,
+      "turn": 1,
+      "at": {
+       "$datetime": "2026-12-04T14:03:00+00:00"
+      },
+      "kind": "tool_result",
+      "tool": "get_machine_state",
+      "content": "(error text isn't shown on this public page; it is in the database and the container's log)",
+      "is_error": true,
+      "tool_use_id": null
+     }
+    ],
+    "stale": false
+   },
+   "after": 0,
+   "more": false,
+   "last": 11,
+   "counts": {
+    "steps": 3,
+    "turns": 1,
+    "calls": 1
+   },
+   "opened_at": {
+    "$datetime": "2026-12-02T15:00:00+00:00"
+   },
+   "before_opening": false,
+   "last_step_at": {
+    "$datetime": "2026-12-04T14:03:00+00:00"
+   },
+   "spend": {
+    "spent": {
+     "$decimal": "0"
+    },
+    "calls": 0,
+    "pending": 0
+   },
+   "cap": {
+    "usd": {
+     "$decimal": "2"
+    },
+    "set": true
+   },
+   "drafts": [],
+   "replies": [],
+   "plan": null
+  }
+ },
  "demo": true
 }
