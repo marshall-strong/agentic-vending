@@ -155,14 +155,33 @@ def spend_category(label: str, by: str = "") -> str:
     return "agent runs"
 
 
+def _team_database_fallback(url: str) -> bool:
+    """Require an explicit remote target before reusing the run's database."""
+    import os
+
+    from psycopg.conninfo import conninfo_to_dict
+    from vending import db
+
+    params = conninfo_to_dict(url)
+    if params.get("service") or any(os.environ.get(name) for name in db.LIBPQ_HOST_OVERRIDES):
+        return False
+    hosts = params.get("host", "").split(",")
+    if params.get("hostaddr"):
+        hosts.extend(params["hostaddr"].split(","))
+    return all(host.strip() and not host.startswith(("/", "@"))
+               and host.lower().rstrip(".") not in db.LOCAL_HOSTS for host in hosts)
+
+
 def spend_connection() -> psycopg.Connection:
     """Open a separate short connection to the team's spend database."""
     from vending import db, settings
 
     url = settings.get(SPEND_DATABASE_ENV)
-    if not url:
-        raise HarnessError(SPEND_DATABASE_HELP)
     try:
+        if not url:
+            url = settings.get("DATABASE_URL")
+            if not url or not _team_database_fallback(url):
+                raise HarnessError(SPEND_DATABASE_HELP)
         return psycopg.connect(url, autocommit=True, connect_timeout=db.CONNECT_TIMEOUT,
                                options=db.session_options(url, "-c statement_timeout=5000"))
     except (psycopg.Error, ValueError):

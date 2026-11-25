@@ -59,8 +59,9 @@ a unique label. A manual label identifies one receipt per recorder. Use
 
 ## Record paid runs
 
-Set `SPEND_DATABASE_URL` to the team spend database with write access before
-a paid run. The harness records the worst-case charge there before it sends
+For a paid run on a scratch database, set `SPEND_DATABASE_URL` to the team
+spend database with write access. A run on the team database can use its
+writable `DATABASE_URL`. The Container App uses the writer secret for both. The harness records the worst-case charge there before it sends
 the request. It updates the charge after the reply. Free scripted runs use
 their scratch database. The CLI keeps the estimate if settlement fails.
 

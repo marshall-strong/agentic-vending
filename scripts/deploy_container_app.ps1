@@ -181,6 +181,8 @@ if ($targetPort -ne "$Port") {
 
 Write-Host "Rolling $App to $full with $MinReplicas-$MaxReplicas replicas..."
 $envVars = @($Secrets.GetEnumerator() | ForEach-Object { "$($_.Key)=secretref:$($_.Value)" }) + @("VENDING_TOOLS=built", "TS_HOSTNAME=agentic-vending-azure", "PORT=$Port")
+# Reuse the writer secret without requiring a second value from .env.
+$envVars += "SPEND_DATABASE_URL=secretref:database-url"
 $envVars += @($optional | ForEach-Object { "$($_.Key)=secretref:$($_.Value)" })
 if ($dexBase) { $envVars += "DEX_BASE_URL=$dexBase" }
 $removeArgs = @()

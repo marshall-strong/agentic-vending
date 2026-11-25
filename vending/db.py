@@ -24,6 +24,8 @@ CONNECT_TIMEOUT = 10
 # with a `UTC` label (#87). Every connection we open pins its session to UTC, so the label is
 # true whatever time zone the server, database or role is set to.
 UTC_SESSION = "-c TimeZone=UTC"
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+LIBPQ_HOST_OVERRIDES = ("PGHOSTADDR", "PGSERVICE", "PGSERVICEFILE")
 
 
 def session_options(url: str, *extra: str) -> str:
