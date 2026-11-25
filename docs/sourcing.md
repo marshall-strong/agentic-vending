@@ -309,18 +309,22 @@ python -m vending.alternates --write --by NAME     # store them
 
 - **Which price.** The same drink at another store, in the pick's pack size, from `price_lookups` in the last
   `--max-age` hours (default 24, at most 144). The store's cutoff for `--visit` (default Mon 30 Nov) must not have
-  passed. Not out of stock. Read by the check model or a dearer one, or the check model's own reading when it
-  disagreed with a cheaper find. A cheaper model's unchecked find never counts. Per unit within half and twice the
-  primary's. Cheapest per unit wins.
+  passed. Not out of stock, and no later lookup at that store says out of stock. Read by the check model or a
+  dearer one, or the check model's own reading when it disagreed on price with a cheaper find of the same listing
+  and pack. A cheaper model's unchecked find never counts. Per unit within half and twice the primary's. Cheapest
+  per unit wins.
 - **Its max.** The price plus 25%, held to the pick's most-we-pay per pack. A price above that is left out.
 - **An existing alternate** whose max alone is over the pick's gets its max lowered to the pick's (C4 on 25 Nov).
 - **The fill's checks.** Each one is tried on the fill's planner first. It is kept only if the fill gains no
   refusal and no `pick_deviation`, its most-we-pay stays within the $400 cap, and the spendable floor holds out of
-  the $600 opening. The fill counts each line at its dearer choice.
+  the $600 opening. The fill counts each line at its dearer choice. While the fill is over the cap or the floor,
+  only a change that lowers it is kept, and `--write` writes nothing (`over_limit`).
 - **Output.** Each line: kept, set, replaced, lowered, or none with each store's reason. Then the lines with a
   backup before and after, and the cap room.
 - **Stored** with `sourcing.set_option` in the write gate: `checked_by` `agent-search`, dated when it was looked up,
-  the note naming you. A row changed since it was read refuses the write (`changed_meanwhile`).
+  the note naming you. A changed pick, or any changed row of the plan's drinks, refuses the write
+  (`changed_meanwhile`). `set_option` takes the SKU lock every writer takes, so a `sourcing set` at the same time
+  waits.
 - **When.** After the go-live re-price (`price_search --plan picked --compare --max-age 24`), before the fill preview.
 
 ## The price memory

@@ -22,10 +22,10 @@ URLS = {"Walmart": "https://www.walmart.com/ip/test-coke/123", "BJs": "https://w
 
 
 def lookup(conn, sku, store, units, price, *, at=LOOKED, model=SONNET, kind="search", outcome="found",
-           stock="in_stock", asked=None):
+           stock="in_stock", asked=None, url=None):
     price_search.remember(conn, sku=sku, store=store, kind=kind, asked=asked or (units, units), outcome=outcome,
                           model=model, cost=Decimal(0), by="Test Runner", no_store=False, at=at,
-                          seen={"units": units, "price": price, "url": URLS[store], "stock": stock})
+                          seen={"units": units, "price": price, "url": url or URLS[store], "stock": stock})
 
 
 def run(schema_url, fake, *argv) -> int:  # noqa: F811
@@ -131,3 +131,47 @@ def test_writing_needs_a_name(db, fake, schema_url, capsys):  # noqa: F811
     seed(db, fake)
     with pytest.raises(SystemExit):
         run(schema_url, fake, "--write")
+
+
+# --- Sol's review of #255 ----------------------------------------------------------------------------
+
+def test_a_later_out_of_stock_reading_supersedes_an_earlier_price(db, fake, schema_url, capsys):  # noqa: F811
+    seed(db, fake)
+    lookup(db, "COKE20", "Walmart", 12, 1150)
+    lookup(db, "COKE20", "Walmart", 12, 1150, at=LOOKED + timedelta(hours=1), outcome="out_of_stock",
+           stock="out_of_stock")
+    assert run(schema_url, fake, "--write", "--by", "Test Runner") == 0
+    assert ("COKE20", "alternate") not in rows(db)
+    assert "out of stock in a later lookup" in capsys.readouterr().out
+
+
+def test_a_check_that_read_another_listing_is_not_that_drinks_price(db, fake, schema_url, capsys):  # noqa: F811
+    seed(db, fake)
+    lookup(db, "COKE20", "Walmart", 12, 1000, model=HAIKU)
+    lookup(db, "COKE20", "Walmart", 12, 1150, kind="check", outcome="check_disagrees",
+           at=LOOKED + timedelta(seconds=9), url="https://www.walmart.com/ip/another-drink/999")
+    assert run(schema_url, fake, "--write", "--by", "Test Runner") == 0
+    assert ("COKE20", "alternate") not in rows(db)
+
+
+def test_nothing_is_written_while_the_fill_is_over_the_cap(db, fake, schema_url, capsys, monkeypatch):  # noqa: F811
+    """A change that lowers the most-we-pay is still found, but nothing is written while the fill is over the
+    cap after it: the cap is a hard limit (Sol, #255)."""
+    seed(db, fake)
+    sourcing.set_option(db, option("COKE20", "alternate", store="Walmart", expected_cents=1150, max_cents=1302), NOW)
+    monkeypatch.setattr(alternates, "FILL_CAP_CENTS", 16000)        # the fill is $162.00 at the most
+    before = rows(db)
+    assert run(schema_url, fake, "--write", "--by", "Test Runner") == 1
+    assert "over_limit" in capsys.readouterr().err and rows(db) == before
+
+
+def test_a_plan_row_changed_after_the_trials_refuses_the_write(db, fake, schema_url):  # noqa: F811
+    seed(db, fake)
+    lookup(db, "COKE20", "Walmart", 12, 1150)
+    with open_in(*schema_url) as conn:
+        result = alternates.backups(conn, fake.client(), NOW)
+    sourcing.set_option(db, option("PICKLE", expected_cents=1700), NOW)     # another line's primary
+    with open_in(*schema_url) as conn, pytest.raises(alternates.Refused) as refused:
+        alternates.write(conn, result, "Test Runner", NOW)
+    assert refused.value.refusals[0].code == alternates.CHANGED
+    assert ("COKE20", "alternate") not in rows(db)

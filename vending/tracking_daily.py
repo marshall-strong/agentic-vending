@@ -65,7 +65,7 @@ from typing import Any
 import psycopg
 
 from vending import db, ledger, settings, tracking
-from vending.slots import DEVICE_ID, SlotsNotRecorded
+from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 from vending.start import EASTERN
 
 MODE_SETTING = "TRACKING_DAILY"
@@ -199,7 +199,17 @@ def run(conn: psycopg.Connection, bridge: Callable[[], Any] | None = None,
         if found is None:                       # cannot happen either, and the answer is the same
             raise tracking.CantCompute("no poll of ours since the ledger's opening is in the bridge's books yet")
         picked["session"] = found[0]
-        return tracking.figures(c, found[0])
+        if moment - found[1] > STALE_POLL:
+            # Before the figures: an unloaded slot (a skip) must not hide a history sync that has stopped.
+            raise tracking.StaleFigures(
+                f"the newest settled poll is from {found[1].astimezone(EASTERN):%Y-%m-%d %H:%M} Eastern, over "
+                f"{int(STALE_POLL.total_seconds() // 3600)} hours before the send, so the history sync may have "
+                "stopped; nothing was sent")
+        try:
+            return tracking.figures(c, found[0])
+        except tracking.NotLoaded:
+            picked["skip_at"] = moment          # observed under the send's lock (`record_skip`)
+            raise
 
     try:
         outcome = tracking.send(conn, (bridge or _bridge)(), prepare, WORKER, now=stamp, once_a_day=True,
@@ -207,7 +217,7 @@ def run(conn: psycopg.Connection, bridge: Callable[[], Any] | None = None,
     except tracking.NotLoaded as error:
         # No guess about an unloaded slot (#254): a skip with its reason, not a failed job, until it is loaded.
         try:
-            record_skip(conn, stamp(), error.slots)
+            record_skip(conn, picked.get("skip_at") or stamp(), error.slots)
         except psycopg.Error as failure:
             log(f"tracking_daily: not sent. {error} Recording the skip failed ({type(failure).__name__}).")
             return 1
@@ -261,14 +271,27 @@ def run(conn: psycopg.Connection, bridge: Callable[[], Any] | None = None,
     return 3 if outcome.status is None or outcome.error_type == "malformed_answer" else 1
 
 
+# A reservation the send marked `not_sent` never reached the bridge, so it doesn't end a skip.
+_SENT = "coalesce(c.error_type, '') <> 'not_sent'"
+
+
 def record_skip(conn: psycopg.Connection, at: datetime, slots: tuple[str, ...],
                 reason: str = NOT_LOADED) -> None:
-    """Count one skipped round in `tracking_skips`: one row per Eastern day and reason, with the latest slots."""
-    conn.execute(
-        "insert into tracking_skips (eastern_day, reason, slots, first_at, last_at) values (%s, %s, %s, %s, %s)"
-        " on conflict (eastern_day, reason) do update set slots = excluded.slots,"
-        " last_at = greatest(tracking_skips.last_at, excluded.last_at), rounds = tracking_skips.rounds + 1",
-        (at.astimezone(EASTERN).date(), reason, list(slots), at, at))
+    """Count one skipped round, observed at `at`, in `tracking_skips`: the day's latest row for `reason` when no
+    check was sent after it, else a new row. So each row is one run of skips between sends."""
+    with conn.transaction():
+        day = at.astimezone(EASTERN).date()
+        row = conn.execute(
+            "select s.id from tracking_skips s where s.eastern_day = %s and s.reason = %s and s.last_at <= %s"
+            f" and not exists (select 1 from tracking_checks c where {_SENT} and c.sent_at > s.last_at"
+            "                  and c.sent_at <= %s)"
+            " order by s.last_at desc, s.id desc limit 1 for update", (day, reason, at, at)).fetchone()
+        if row is None:
+            conn.execute("insert into tracking_skips (eastern_day, reason, slots, first_at, last_at)"
+                         " values (%s, %s, %s, %s, %s)", (day, reason, list(slots), at, at))
+        else:
+            conn.execute("update tracking_skips set slots = %s, last_at = greatest(last_at, %s), rounds = rounds + 1"
+                         " where id = %s", (list(slots), at, row[0]))
 
 
 def latest_skip(conn: psycopg.Connection, now: datetime) -> dict | None:
@@ -277,18 +300,26 @@ def latest_skip(conn: psycopg.Connection, now: datetime) -> dict | None:
     row = conn.execute(
         "select s.reason, s.slots, s.first_at, s.last_at, s.rounds from tracking_skips s"
         " where s.last_at <= %s and s.last_at > %s"
-        " and not exists (select 1 from tracking_checks c where c.sent_at >= s.last_at and c.sent_at <= %s)"
+        f" and not exists (select 1 from tracking_checks c where {_SENT} and c.sent_at >= s.last_at"
+        "                  and c.sent_at <= %s)"
         " order by s.last_at desc, s.id desc limit 1", (now, now - SKIP_SHOWN, now)).fetchone()
     if row is None:
         return None
     reason, slots, first_at, last_at, rounds = row
-    # Since the first skip after the last check sent before this one: the skip may run over several days.
+    # Only slots of the current assignment: a skip stored before a reassignment names none of another team's.
+    try:
+        ours = set(our_slots(conn))
+    except SlotsNotRecorded:
+        return None
+    slots = [slot for slot in slots if slot in ours]
+    if not slots:
+        return None
+    # Since the first skip after the last check sent before this one: the skips may run over several days.
     since = conn.execute(
         "select min(first_at) from tracking_skips where reason = %s and last_at <= %s and first_at >"
-        " coalesce((select max(sent_at) from tracking_checks where sent_at < %s), '-infinity')",
-        (reason, last_at, first_at)).fetchone()[0]
-    return {"reason": reason, "slots": list(slots), "since": since or first_at, "last_at": last_at,
-            "rounds": rounds}
+        f" coalesce((select max(c.sent_at) from tracking_checks c where {_SENT} and c.sent_at < %s), '-infinity')",
+        (reason, last_at, last_at)).fetchone()[0]
+    return {"reason": reason, "slots": slots, "since": since or first_at, "last_at": last_at, "rounds": rounds}
 
 
 def _skip_text(skip: dict) -> str:

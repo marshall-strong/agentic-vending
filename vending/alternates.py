@@ -58,6 +58,7 @@ START_CENTS = plan_rounds.START_CENTS
 DEFAULT_MAX_AGE_HOURS = 24
 MOST_MAX_AGE_HOURS = 144            # under the 7 days after which the fill refuses a price as stale
 CHANGED = "changed_meanwhile"
+OVER_LIMIT = "over_limit"
 
 
 class NoPlan(RuntimeError):
@@ -140,10 +141,21 @@ def usable(row: tuple, store: str, trusted: Callable[[str], bool]) -> bool:
     return (trusted(model) and price_search.on_store(url, store) and price_search.product_page(url, store))
 
 
+def _same_listing_check(row: tuple, mine: list[tuple]) -> bool:
+    """A `check_disagrees` row counts only as a price disagreement: the check read the same listing and pack as the
+    find it checked (the newest earlier search or listing lookup at that store). A check that read another listing
+    (another ASIN, say) is not that product's price."""
+    if row[2] != "check":
+        return True
+    checked = next((r for r in mine if r[0] < row[0] and r[2] in ("search", "listing")), None)
+    return (checked is not None and checked[4] == row[4]
+            and price_search.same_listing(row[1], checked[6], row[6]))
+
+
 def prices(conn: psycopg.Connection, sku: str, primary: sourcing.Option, units: int, now: datetime,
            since: datetime, visit: date, trusted: Callable[[str], bool]) -> tuple[list[Price], dict[str, str]]:
     """The newest usable price of `sku` in `units`-packs at each store but the primary's, looked up after `since`;
-    and for each store without one, why."""
+    and for each store without one, why. A later out-of-stock reading at that store supersedes it."""
     rows = conn.execute(
         "select id, store, kind, outcome, units_per_pack, price_cents, url, stock, model, asked_min, asked_max, at"
         " from price_lookups where sku = %s and at > %s and at <= %s order by at desc, id desc",
@@ -158,9 +170,16 @@ def prices(conn: psycopg.Connection, sku: str, primary: sourcing.Option, units: 
             why[store] = f"past its cutoff for the {visit:%a %d %b} stocking"
             continue
         mine = [r for r in rows if r[1] == store]
-        good = [r for r in mine if usable(r, store, trusted)]
+        good = [r for r in mine if usable(r, store, trusted) and _same_listing_check(r, mine)]
         fit = [r for r in good if r[4] == units]
-        if fit:
+        # P1 (Sol): newer evidence wins. An out-of-stock reading at this store after the newest usable price, for
+        # this pack or with no pack read, means the store may not have it now.
+        gone = fit and any(r[0] != fit[0][0] and (r[11], r[0]) > (fit[0][11], fit[0][0])
+                           and (r[3] == "out_of_stock" or r[7] == "out_of_stock") and r[4] in (None, units)
+                           for r in mine)
+        if gone:
+            why[store] = "out of stock in a later lookup"
+        elif fit:
             r = fit[0]
             price = Price(store, r[4], r[5], sourcing.plain_link(store, r[6]), r[7], r[11])
             if primary.expected_cents and not (price_search.PLAUSIBLE[0] <= price.per_unit / Fraction(
@@ -197,10 +216,20 @@ def trial(gathered: planning.Gathered, checked: plan_rounds.Round, rows: dict) -
     given = replace(gathered, sourcing_rows=table, current=replace(gathered.current,
                                                                     sourcing_table=sourcing.to_planner(list(table))))
     planned = planning.plan_gathered(given, fill.desired_state(checked), pool=True)
-    refusals = frozenset((r.code, r.slot) for r in (*planned.refusals, *fill.input_refusals(checked, given)))
+    refusals = frozenset(_key(r) for r in (*planned.refusals, *fill.input_refusals(checked, given)))
     cost = planned.cost
     most = 0 if cost is None else cost.max_cents - cost.visit_fee_cents
     return Trial(planned, frozenset(fill.deviations(planned, checked)), refusals, most)
+
+
+# Slot-less refusals whose message carries the plan's cost: keyed by code alone, or every trial would look new.
+COST_CODES = ("insufficient_balance", "below_spendable_floor")
+
+
+def _key(r: Refusal) -> tuple[str, str | None, str | None]:
+    """A refusal as `trial` compares them: by code and slot, and by message when it names no slot (two stores'
+    cutoffs are two refusals)."""
+    return (r.code, r.slot, None if r.slot is not None or r.code in COST_CODES else r.message)
 
 
 def _alternate_deviates(t: Trial, sku: str) -> bool:
@@ -209,13 +238,14 @@ def _alternate_deviates(t: Trial, sku: str) -> bool:
 
 def _worse(now: Trial, then: Trial, floor_cents: int) -> str | None:
     """Why `then` is worse for the fill than `now`, or None."""
-    if added := sorted(then.refusals - now.refusals, key=lambda r: (r[0], r[1] or "")):
-        return f"the fill would refuse it ({', '.join(sorted({code for code, _ in added}))})"
+    if added := sorted(then.refusals - now.refusals, key=lambda r: (r[0], r[1] or "", r[2] or "")):
+        return f"the fill would refuse it ({', '.join(sorted({key[0] for key in added}))})"
     if added := sorted(then.deviations - now.deviations):
         return f"it differs from the pick ({'; '.join(added)})"
-    if then.max_cents > FILL_CAP_CENTS and then.max_cents > now.max_cents:
+    lowers = then.max_cents < now.max_cents
+    if then.max_cents > FILL_CAP_CENTS and not lowers:
         return (f"the fill's most-we-pay would be {_usd(then.max_cents)}, over the {_usd(FILL_CAP_CENTS)} cap")
-    if START_CENTS - then.max_cents < floor_cents and then.max_cents > now.max_cents:
+    if START_CENTS - then.max_cents < floor_cents and not lowers:
         return (f"the fill's most-we-pay would be {_usd(then.max_cents)}, leaving under the {_usd(floor_cents)} "
                 f"floor of the {_usd(START_CENTS)} opening")
     return None
@@ -238,7 +268,8 @@ def backups(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = Non
     now = gathered.now
     since = now - max_age
     rows = {(o.sku, o.rank): o for o in gathered.sourcing_rows}
-    read = dict(rows)
+    # Every stored row of the plan's drinks as read, delisted ones too: the write checks none changed.
+    read = {(o.sku, o.rank): o for o in sourcing.options_for(conn, [p.sku for p in pick.round.purchases])}
     table = harness.load_prices()
     check = price_search.Memory.read(conn).check_model
     trusted = lambda model: not price_search.needs_check(table, model, check)  # noqa: E731
@@ -294,10 +325,21 @@ def backups(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = Non
 
 
 def write(conn: psycopg.Connection, result: Result, by: str, now: datetime | None = None) -> list[str]:
-    """Store every changed alternate in one write, if no row of those drinks changed since `backups` read it."""
+    """Store every changed alternate in one write. Refused (nothing written) when the fill's most-we-pay after them
+    is over the cap or under the floor, or when the pick or any row of the plan's drinks changed since `backups`
+    read them: the trials were run on those."""
     if not by.strip():
         raise ValueError("--write needs --by NAME")
     changed = [ln for ln in result.lines if ln.changed]
+    over = []
+    if result.after.max_cents > FILL_CAP_CENTS:
+        over.append(f"the fill's most-we-pay after these backups is {_usd(result.after.max_cents)}, over the "
+                    f"{_usd(FILL_CAP_CENTS)} cap: fix the plan's own lines first")
+    if START_CENTS - result.after.max_cents < result.floor_cents:
+        over.append(f"the fill's most-we-pay after these backups is {_usd(result.after.max_cents)}, leaving under the "
+                    f"{_usd(result.floor_cents)} floor of the {_usd(START_CENTS)} opening")
+    if over and changed:
+        raise Refused([Refusal(OVER_LIMIT, why) for why in over])
     arguments = {"by": by.strip(), "plan_id": result.picked.id, "label": result.picked.label,
                  "alternates": [{"sku": ln.sku, "action": ln.action, "store": ln.after.store,
                                  "units_per_pack": ln.after.units_per_pack, "price_cents": ln.after.expected_cents,
@@ -305,7 +347,12 @@ def write(conn: psycopg.Connection, result: Result, by: str, now: datetime | Non
     said: list[str] = []
 
     def action(conn: psycopg.Connection) -> price_search.Recorded:
-        skus = {ln.sku for ln in changed}
+        # The pick, then every row of the plan's drinks, as the trials saw them. `sourcing.set_option` takes the
+        # same SKU locks, so a `sourcing set` waits for this write, or this write sees what it stored.
+        conn.execute("lock table first_fill_plans in share mode")
+        if fill._picked_row(conn) != result.picked.row:
+            raise Refused([Refusal(CHANGED, "the picked plan changed since it was read; run it again")])
+        skus = {p.sku for p in result.picked.round.purchases}
         sourcing.lock_skus(conn, skus)
         for sku in sorted(skus):
             for rank in sourcing.RANKS:

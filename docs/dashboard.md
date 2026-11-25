@@ -416,7 +416,8 @@ and the agent's next briefing has it (`books_outside_<figure>`). The worker send
 `TRACKING_DAILY=on` ([`deploy.md`](deploy.md)); off, a person sends with `python -m vending.tracking check --send`.
 
 A round the worker skipped because a slot has no counted receipt (#254) is a **Check** in Needs attention and a
-line in the panel: which slots, since when, and the latest round. It goes once a check is sent after it.
+line in the panel: which slots (only those still ours), since when, and the latest round. It goes once a check is
+sent after it; a reservation marked `not_sent` doesn't count. `/db` hides the skips' slots.
 
 ## Catalog requests
 

@@ -255,6 +255,9 @@ def set_option(conn: psycopg.Connection, o: Option, now: datetime | None = None)
     if found:
         raise SourcingError(f"{o.sku} {o.rank}: " + "; ".join(found))
     with conn.transaction():
+        # The same SKU lock every multi-row writer takes (`lock_skus`), so a person's `set` and a writer that
+        # checked this SKU's rows (`vending.alternates`, an import, a compare) wait for each other.
+        lock_skus(conn, {o.sku})
         if o.sku not in in_catalog(conn, [o.sku]):
             raise SourcingError(f"{o.sku} is not in our catalog copy, or has been delisted; check the SKU, or run "
                                 "python -m vending.sync_catalog if it was added recently")

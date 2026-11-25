@@ -67,7 +67,8 @@ in the incident log and the agent's briefing.
 A slot with no counted receipt (a day-one line that came back unavailable) is a skip, not a failed job (#254),
 when it is the only reason the figures can't be worked out. Nothing is sent and nothing is guessed. Each skipped
 round is counted in `tracking_skips` (migration 038), and the dashboard shows a **Check** line until a check is
-sent after it. Any other reason still fails the job.
+sent after it. Any other reason still fails the job. A settled poll over 6 hours old fails the job first, so a skip
+never hides a stopped history sync.
 
 **Friday reads around our visit** (`vending/visit_polls.py`, #172). Besides the hourly rounds, the
 worker asks the bridge to read the machine live (`POST /api/v1/poll`, about 8.5 s) on Fridays, once a

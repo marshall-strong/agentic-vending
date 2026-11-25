@@ -829,3 +829,50 @@ def test_an_outside_verdict_survives_seven_later_refusals(conn):
     assert level == "bad" and "cash" in text
     snap, _ = dashboard._snapshot(conn, later)
     assert any("tracking check" in a["text"] for a in dashboard.attention(snap))
+
+
+# --- Sol's review of #255 ----------------------------------------------------------------------------
+
+def unloaded(conn):
+    open_ledger(conn)
+    fill(conn, slots=TEST_SLOTS[:-1])
+    poll(conn, "p0", "2026-11-02T18:00:00+00:00")
+    poll(conn, "p1", SETTLED.isoformat())
+
+
+def test_an_unloaded_slot_does_not_hide_a_stale_poll(conn):
+    unloaded(conn)
+    code, lines = run(conn, FakeBridge(), NOW + timedelta(hours=7))
+    assert code == 1 and skips(conn) == [] and "history sync may have stopped" in lines[-1]
+
+
+def test_a_reservation_never_sent_does_not_end_a_skip_and_a_real_send_starts_a_new_run(conn):
+    unloaded(conn)
+    assert run(conn, FakeBridge())[0] == 0
+    conn.execute("insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request, error_type,"
+                 " used_check) values (%s, '2026-12-04', 'x', 'p1', %s, '{}', 'not_sent', false)",
+                 (NOW + timedelta(minutes=10), SETTLED))
+    later = NOW + timedelta(hours=1)
+    assert run(conn, FakeBridge(), later)[0] == 0
+    assert [r[3] for r in skips(conn)] == [2]
+    assert tracking_daily.attention(tracking_daily.panel(conn, later))
+    conn.execute("insert into tracking_checks (sent_at, eastern_day, sent_by, as_of, as_of_time, request, status,"
+                 " used_check) values (%s, '2026-12-04', 'x', 'p1', %s, '{}', 409, false)",
+                 (later + timedelta(minutes=10), SETTLED))
+    assert run(conn, FakeBridge(), NOW + timedelta(hours=2))[0] == 0
+    assert [r[3] for r in skips(conn)] == [2, 1]
+    skip = tracking_daily.latest_skip(conn, NOW + timedelta(hours=2))
+    assert skip["since"] == NOW + timedelta(hours=2)
+
+
+def test_a_skip_names_only_slots_of_the_current_assignment(conn):
+    unloaded(conn)
+    run(conn, FakeBridge())
+    conn.execute("update tracking_skips set slots = array['99']")
+    assert tracking_daily.latest_skip(conn, NOW) is None
+
+
+def test_the_public_explorer_hides_a_skips_slots():
+    from vending import pages
+
+    assert pages.HIDE["tracking_skips"].columns == ("slots",)
