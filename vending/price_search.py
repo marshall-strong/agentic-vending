@@ -468,6 +468,17 @@ def confirmed_price(conn: psycopg.Connection, sku: str, store: str, units: int, 
     return None
 
 
+def needs_check(prices: Any, model: str, check: str) -> bool:
+    """A find by a model cheaper than the check model gets a check (`PriceSearch._verified`). A dearer or the same
+    model doesn't: a cheaper model never second-guesses a better one. `prices`: the harness's price table."""
+    if model == check:
+        return False
+    try:
+        return prices.rates(model, 0).input < prices.rates(check, 0).input
+    except Exception:       # an unpriced model: check, and let the harness refuse what it can't price
+        return True
+
+
 def dead_ends(conn: psycopg.Connection, sku: str, asked: tuple[int, int], now: datetime,
               days: int) -> dict[str, datetime]:
     """The stores whose open search found no listing of `sku` (`not_found`) in the last `days`, for a range of packs
@@ -765,14 +776,8 @@ class PriceSearch:
         return self._search(sku, store, product, model, packs, asked, limit, budget)
 
     def _needs_check(self, model: str, check: str) -> bool:
-        """A find by a model cheaper than the check model gets a check (`_verified`). A dearer or the same model
-        doesn't: a cheaper model never second-guesses a better one."""
-        if model == check:
-            return False
-        try:
-            return self.harness.prices.rates(model, 0).input < self.harness.prices.rates(check, 0).input
-        except Exception:       # an unpriced model: check, and let the harness refuse what it can't price
-            return True
+        """`needs_check` on the harness's price table."""
+        return needs_check(self.harness.prices, model, check)
 
     def _verified(self, sku: str, store: str, product: tuple, model: str, found: dict,
                   rows: dict[str, sourcing.Option], memory: Memory, limit: int, budget: Budget | None) -> dict:
