@@ -186,3 +186,12 @@ def test_the_side_card_follows_the_plan_the_machine_draws(conn, picked, before_l
     conn.execute("update purchase_requests set status = 'fulfilled'")
     after = side()
     assert "Plan changes" in after and f"run #{run}" in after
+
+
+def test_a_substitute_backup_is_named_with_its_drink(conn, picked, before_lock):
+    plan_id, _ = picked
+    send_fill(conn, plan_id)
+    conn.execute("update purchase_requests set request_body = jsonb_set(request_body,"
+                 " '{lines,0,alternate,sku}', '\"SIM-SUB\"')")
+    facts = dashboard._first_fill_lines(dashboard.snapshot(conn, NOW))
+    assert facts[PURCHASED]["sent"] == "SIM-RB · $3.75 · 9 units · Walmart, backup SIM-SUB from BJs"

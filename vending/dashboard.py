@@ -465,8 +465,11 @@ def _sent_fill_plan(sent: dict, ours: tuple[str, ...]) -> dict:
             load = line.get("primary") if isinstance(line.get("primary"), dict) else {}
             alternate = line.get("alternate") if isinstance(line.get("alternate"), dict) else {}
             units = loads.get(slot)
+            # A substitute backup (#257) is another drink: name it.
+            other = text(alternate.get("sku")) if text(alternate.get("sku")) != text(load.get("sku")) else None
             where = (text(load.get("store")) or "store unknown") + (
-                f", backup {text(alternate.get('store'))}" if text(alternate.get("store")) else "")
+                f", backup {other + ' from ' if other else ''}{text(alternate.get('store'))}"
+                if text(alternate.get("store")) else "")
         units = units if isinstance(units, int) and not isinstance(units, bool) else None
         sku, price = text(load.get("sku")), text(load.get("sale_price"))
         try:
