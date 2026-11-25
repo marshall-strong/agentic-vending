@@ -7,9 +7,11 @@
     /dashboard/pnl           the weekly P&L (`vending.pnl_report`)
     /dashboard/spend         development spend by week (`vending.dev_spend`)
     /dashboard/products      every product we can order, our sourcing, the day-one plan, back stock (`vending.products_page`)
+    /dashboard/run/<id>      one live agent run, followed as it happens (`vending.run_page`); `.json` for its data
     /dashboard/demo/money    the money chart with its made-up MOCK data, under a DEMO banner; no database
     /dashboard/demo/spend    dev spend from the team's run notes, under a DEMO banner; no database
     /dashboard/demo/products the Products page from made-up data, under a DEMO banner; no database
+    /dashboard/demo/run/<id> a run page from the demo snapshot, under a DEMO banner; no database
     /db                      the DB explorer (`vending.db_explorer`)
 
     python -m vending.pages check                            # is the pages' login really read-only?
@@ -78,6 +80,7 @@ from psycopg.types.json import Jsonb
 
 from vending import (dashboard, db, db_explorer, demo, dev_spend, ledger, money_chart, pnl_report, products_page,
                      settings)
+from vending import run_page
 from vending.slots import DEVICE_ID, SlotsNotRecorded, our_slots
 
 READER = "READONLY_DATABASE_URL"
@@ -85,7 +88,7 @@ DASHBOARD, STATE, EXPLORER = "/dashboard", "/dashboard/state.json", "/db"
 MONEY_CHART, PNL, SPEND = "/dashboard/money", "/dashboard/pnl", "/dashboard/spend"
 PRODUCTS = products_page.ROUTE
 # Where the dashboard links to each chart and to the Products page (`dashboard.render`'s `charts`).
-CHARTS = {"money": MONEY_CHART, "pnl": PNL, "spend": SPEND, "products": PRODUCTS}
+CHARTS = {"money": MONEY_CHART, "pnl": PNL, "spend": SPEND, "products": PRODUCTS, "run": run_page.ROUTE}
 TITLES = {DASHBOARD: "Agent dashboard", STATE: "Agent dashboard", EXPLORER: "DB explorer",
           MONEY_CHART: "Money chart", PNL: "Weekly P&L", SPEND: "Development spend", PRODUCTS: products_page.TITLE}
 MAX_CONNECTIONS = 2
@@ -615,6 +618,10 @@ def respond(target: str, syncs: dict | None = None) -> Reply | None:
         return _demo_reply(path)
     if path == products_page.DEMO_ROUTE:
         return _products_demo()
+    if (found := run_page.parse(path, run_page.DEMO_ROUTE)) is not None:
+        return _run_demo(*found)
+    if (found := run_page.parse(path, run_page.ROUTE)) is not None:
+        return _run(*found, after=run_page.after_of(parts.query))
     if path not in TITLES:
         return None
     request = query = None
@@ -687,6 +694,60 @@ def respond(target: str, syncs: dict | None = None) -> Reply | None:
                             nav=(("Home", "/"), ("Products", PRODUCTS), ("Database", EXPLORER), ("Weekly P&L", PNL),
                                  ("Dev spend", SPEND), ("Demo copy", demo.DEMO)), picked=picked)
     return Reply(200, HTML, page, CSP_DASHBOARD)
+
+
+# Links above a run's page.
+RUN_NAV = (("Agent dashboard", DASHBOARD), ("Database", EXPLORER))
+
+
+def _run_problem(as_json: bool, status: int, text: str) -> Reply:
+    if as_json:
+        return Reply(status, JSON, dashboard.to_json({"error": text}))
+    return Reply(status, HTML, _notice("Agent run", text))
+
+
+def _run(run_id: int, as_json: bool, after: int = 0) -> Reply:
+    """One live run's page (`vending.run_page`) or its JSON, with the steps after step id `after`, on the pages'
+    read-only login. Never raises, and never puts an error's own text in a reply."""
+    where = f"{run_page.ROUTE}{run_id}"
+    if not configured():
+        return _run_problem(as_json, 503, NOT_SET_UP)
+    try:
+        with _connection() as conn:
+            data = run_page.read(conn, run_id, public=True, after=after)
+        status = 200 if data["found"] and data.get("shown") else 404
+        if as_json:
+            return Reply(status, JSON, dashboard.to_json(data))
+        return Reply(status, HTML, run_page.html(data, nav=RUN_NAV, json_href=f"{where}.json"), CSP_DASHBOARD)
+    except Busy:
+        return _run_problem(as_json, 503, BUSY)
+    except CanWrite as error:
+        _log("can write", f"not serving {where}: the {READER} login can write ({error}). "
+                          "Give it a login with select only; run python -m vending.pages check")
+        return _run_problem(as_json, 503, NOT_READ_ONLY)
+    except (psycopg.Error, settings.SettingsError, dashboard.Missing) as error:
+        # A database not yet migrated (`dashboard.Missing`) is a read failure like any other.
+        first = str(error).strip().splitlines()[0] if str(error).strip() else ""
+        _log(type(error).__name__, f"{where}: {type(error).__name__}: {first}")
+        return _run_problem(as_json, 503, CANT_READ)
+    except Exception as error:  # noqa: BLE001 - a public page answers, whatever happened
+        _log(type(error).__name__, f"{where}: {type(error).__name__}: {error}")
+        return _run_problem(as_json, 500, BROKEN)
+
+
+def _run_demo(run_id: int, as_json: bool) -> Reply:
+    """A run page from the demo snapshot. Opens no connection. Never raises, and puts no error text in a reply."""
+    try:
+        data = demo.run_data(run_id)
+        if data is None:
+            return _run_problem(as_json, 404, "The demo has no page for this run.")
+        if as_json:
+            return Reply(200, JSON, dashboard.to_json({"demo": True, **data}))
+        return Reply(200, HTML, run_page.html(data, nav=demo.NAV, json_href=f"{run_page.DEMO_ROUTE}{run_id}.json",
+                                              demo=True), CSP_DASHBOARD)
+    except Exception as error:  # noqa: BLE001 - a page answers, whatever happened
+        _log(type(error).__name__, f"{run_page.DEMO_ROUTE}{run_id}: {type(error).__name__}: {error}")
+        return _run_problem(as_json, 500, BROKEN)
 
 
 # Links above the Products page.
