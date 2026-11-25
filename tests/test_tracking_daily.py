@@ -489,11 +489,50 @@ def test_with_no_poll_since_the_opening_it_skips_quietly(conn):
 
 def test_figures_it_cannot_work_out_fail_the_job_and_send_nothing(conn):
     open_ledger(conn)
-    poll(conn, "p1", SETTLED.isoformat())          # no receipt has loaded our slots
+    fill(conn)
+    conn.execute("update purchase_lines set total_paid = null where slot = '15'")   # cash can't be known
+    poll(conn, "p1", SETTLED.isoformat())
     bridge = FakeBridge()
     code, lines = run(conn, bridge)
     assert (code, bridge.sent, sends(conn)) == (1, [], [])
     assert "not sent" in lines[-1]
+    assert skips(conn) == []
+
+
+def skips(conn):
+    return conn.execute("select eastern_day, reason, slots, rounds from tracking_skips order by id").fetchall()
+
+
+def test_a_slot_no_receipt_has_loaded_is_a_skip_with_its_reason_until_it_is_loaded(conn):
+    """#254: a day-one line came back unavailable, so a slot has no counted receipt. Each round is a skip with its
+    reason (exit 0, nothing sent, no guess), and the dashboard shows a Check line, not a failed job. Once the slot
+    is loaded, the round sends and the line goes."""
+    from datetime import date
+
+    from vending import dashboard
+
+    open_ledger(conn)
+    fill(conn, slots=TEST_SLOTS[:-1])
+    poll(conn, "p0", "2026-11-02T18:00:00+00:00")
+    poll(conn, "p1", SETTLED.isoformat())
+    bridge = FakeBridge()
+    code, lines = run(conn, bridge)
+    assert (code, bridge.sent, sends(conn)) == (0, [], [])
+    assert lines[-1].startswith("tracking_daily: skipped") and TEST_SLOTS[-1] in lines[-1]
+    later = NOW + timedelta(hours=1)
+    assert run(conn, bridge, later)[0] == 0
+    assert skips(conn) == [(date(2026, 12, 4), "not_loaded", [TEST_SLOTS[-1]], 2)]
+    data = tracking_daily.panel(conn, later)
+    [(level, text)] = tracking_daily.attention(data)
+    assert level == "warn" and f"slot {TEST_SLOTS[-1]}" in text and "loaded" in text
+    assert "skipped" in tracking_daily.panel_html({"ok": True, "data": data})
+    snap, _ = dashboard._snapshot(conn, later)
+    assert any(a["level"] == "warn" and "tracking check" in a["text"].lower() for a in dashboard.attention(snap))
+
+    fill(conn, slots=TEST_SLOTS[-1:], request_id="late")
+    sent = FakeBridge(answer())
+    assert run(conn, sent, NOW + timedelta(hours=2))[0] == 0 and len(sent.sent) == 1
+    assert tracking_daily.attention(tracking_daily.panel(conn, NOW + timedelta(hours=2))) == []
 
 
 def test_a_stale_newest_poll_fails_the_job(conn):
