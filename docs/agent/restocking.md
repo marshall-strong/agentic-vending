@@ -23,7 +23,7 @@ One free restock every Friday; an extra dispatch costs $25 per request (not per 
 
 Fill before the break and at the end: end stock counts at cost (A5, confirmed), so unsold units cost no profit.
 
-**Slow sellers** (team decision, 12 Nov). Flag a slot when it has sold nothing for **5 class days in a row while our records say it held stock** (a receipt or a person's count shows units in it). Days in a break don't count, and a slot that may be empty is not slow, because an empty slot can't sell. At the next restock (normally Friday), act on a flagged slot: swap the product (the planner refuses a price-only change for now). Pulled units go to the closet at cost, not a write-off. Don't flag a slot for selling slowly but steadily; there is no rule for that until we have sales of our own drinks.
+**Slow sellers** (team decision 12 Nov; redesign 25 Nov). Swap a slot's product at the next restock when `class_days_since_sale` is 5 or more. No person confirms it. A class day counts only if the slot surely held stock and its units and money counters both stayed flat, read after the day ended, with no gap over 6 hours. A possible sale, a gap, a counter reset, an unsettled drop, a new product or the day-one fill starts it again. Pulled units go to the closet at cost.
 
 **Class days** (the Institute's calendar): Monday to Friday, except **Tue 22 Dec to Fri 1 Jan** (Winter Holiday Break) and **Mon 15 Feb** (Presidents Day). Winter Quarter classes end Fri 19 Feb.
 

@@ -18,7 +18,8 @@ NOW = THURSDAY_EVENING + timedelta(hours=1)
 STEP = timedelta(hours=4)
 
 
-def machine(conn, sales=None, last=THURSDAY_EVENING, gaps=(), drop_at=None, edit=None, full=False, takings=None):
+def machine(conn, sales=None, last=THURSDAY_EVENING, gaps=(), drop_at=None, edit=None, full=False, takings=None,
+            prices=None):
     """Our slots on a Friday-to-Thursday cycle, polled every 4 hours from Fri 16 Oct to `last`.
 
     At the 16 Oct visit: 15 (the wildcard), 16, 17, 18, 25, 26 and 28 are loaded with 10 each. At the 23 Oct
@@ -26,7 +27,8 @@ def machine(conn, sales=None, last=THURSDAY_EVENING, gaps=(), drop_at=None, edit
     stored inside a gap `(begin, end)`. `drop_at` is when slot 16's units counter reads low once. `edit(t,
     units)` may change a poll's units per slot before it is stored, or drop a slot from it. `full` loads our
     other 13 slots at the 16 Oct visit too (no poll reads them), so a receipt names what every slot holds.
-    `takings` maps slot -> [(when, cents)] added to its takings counter with no unit counted."""
+    `takings` maps slot -> [(when, cents)] added to its takings counter with no unit counted. `prices` maps
+    slot -> price(t), the price a poll at `t` reads (300 cents otherwise); the takings stay at 300 a unit."""
     from tests.conftest import TEST_SLOTS as SLOTS
 
     sales = sales or {}
@@ -47,7 +49,9 @@ def machine(conn, sales=None, last=THURSDAY_EVENING, gaps=(), drop_at=None, edit
             if edit is not None:
                 edit(t, units)
             extra = {slot: sum(c for at, c in (takings or {}).get(slot, []) if at <= t) for slot in units}
-            store_poll(conn, f"p{n}", t.isoformat(), {slot: (300, u, 300 * u + extra[slot]) for slot, u in units.items()})
+            price = {slot: (prices or {}).get(slot, lambda t: 300)(t) for slot in units}
+            store_poll(conn, f"p{n}", t.isoformat(),
+                       {slot: (price[slot], u, 300 * u + extra[slot]) for slot, u in units.items()})
         t, n = t + STEP, n + 1
 
 
@@ -112,6 +116,38 @@ def test_silent_slots_rank_silent_longest_then_lowest_margin(conn):
     # 17 and 28 have been quiet since the 16 Oct load; 28 cost $2.00 a unit, 17 $1.00, so 28 earns less.
     # 16 was loaded at the 23 Oct visit, so it has been quiet the shortest.
     assert [s.slot for s in report(conn).silent] == ["28", "17", "16"]
+
+
+def test_the_old_products_sale_split_at_a_swap_doesnt_make_the_slot_quiet_later(conn):
+    # Review round 1, item 5. Slot 17 held OLD ($2.00) until the 16 Oct visit swapped it for CCC. The
+    # window from 18:00 to 22:00 holds the visit, and its cents say the 1 unit sold was OLD: booked to the
+    # 22:00 poll, but taken at the swap. CCC has sold nothing, so 17 has been quiet since 20:00, as 28 has.
+    # On a tie the lower margin goes first: 17's CCC cost $3.00 a unit, 28's HHH $2.00.
+    fulfilled(conn, "rp", datetime(2026, 10, 9, 20, tzinfo=UTC), ("17", "OLD", "primary", "10.00", 10, 0, 0))
+    sold = datetime(2026, 10, 16, 19, tzinfo=UTC)
+    machine(conn, sales={"17": [(sold, 1)]}, takings={"17": [(sold, -100)]},
+            prices={"17": lambda t: 200 if t < R0 else 300})
+    conn.execute("update purchase_lines set units_pulled = 9, pulled_sku = 'OLD', slot_reassigned = true,"
+                 " total_paid = 30 where request_id = 'r0' and slot = '17'")
+    count(conn, "17", 10)
+    count(conn, "28", 10)
+    old = [s for s in stock.stock(conn, until=NOW).sales if s.slot == "17"]
+    assert [(s.product, s.at, s.taken_at) for s in old] == [("OLD", datetime(2026, 10, 16, 22, tzinfo=UTC), R0)]
+    silent = report(conn).silent
+    assert [(s.slot, s.quiet_since) for s in silent[:2]] == [("17", R0), ("28", R0)]
+
+
+def test_a_sale_booked_at_the_runs_first_load_empties_the_slot(conn):
+    # Review round 3, case (h). A poll at the 16 Oct load's own moment reads all 10 of slot 17's units sold. The
+    # replay applies the load, then the sale, so 17 stood empty until 5 more went in on Tue 27 Oct. Since the
+    # window began it held stock as Wed 28 and Thu 29 began, so 2 of 4 days: not silent after 4.
+    machine(conn, sales={"17": [(R0, 10)]})
+    store_poll(conn, "at-load", R0.isoformat(), {"17": (300, 110, 33000)})
+    fulfilled(conn, "rt", datetime(2026, 10, 27, 15, tzinfo=UTC), ("17", "CCC", "primary", "5.00", 5, 0, 0))
+    count(conn, "17", 5, at=datetime(2026, 10, 28, 15, tzinfo=UTC))
+    assert [(s.at, s.product, s.units) for s in stock.stock(conn, until=NOW).sales if s.slot == "17"] == [
+        (R0, "CCC", 10)]
+    assert why(report(conn), "17") == f"2 of {SILENT_DAYS} in-stock class days seen since the window began; not silent yet"
 
 
 def test_a_thursday_morning_run_hasnt_seen_four_class_days(conn):
