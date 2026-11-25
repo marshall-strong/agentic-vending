@@ -217,7 +217,9 @@ agent starts a run knowing how fresh each number is. It does not replace `get_ac
   opening capital + later capital + takings - receipts - midweek visit fees - token spend - tax
   remitted, plus or minus adjustments. Each part is its own field (`opening`, `capital`,
   `revenue`, `receipts`, `visit_fees` and `visits`, `token_spend`, `tax_remitted`,
-  `adjustments`). Also `tax_set_aside`, `tax_owed` (set aside less remitted) and `spendable`
+  `adjustments`). Also `tax_set_aside` (takings x 8/108, rounded half up per tax week, Sunday to
+  Saturday Eastern, the week in progress on its takings so far), `tax_owed` (set aside less
+  remitted) and `spendable`
   (balance less tax owed), which is the figure the planner's spend check uses. Plus `as_of`,
   `opening_at` and `notes`.
 - **Preconditions**: a person has opened the ledger with
@@ -234,7 +236,9 @@ agent starts a run knowing how fresh each number is. It does not replace `get_ac
 ## `get_pnl`
 
 - **Inputs**: optional `start` and `end`, calendar days in Eastern time, both inclusive. Default:
-  from the ledger's opening to today.
+  from the ledger's opening to today. A poll at `start`'s midnight sharp is counted when `start`
+  is after the opening; from the opening's own moment, or before the opening, that poll is the
+  baseline. Entries, receipts and visits always count from `start`'s midnight itself.
 - **Outputs**: `revenue` (tax included), `tax_set_aside`, `revenue_ex_tax`, `units_sold`,
   `units_costed`, `cost_of_sales` (first-in, first-out cost from receipts) and
   `cost_of_sales_complete`, `units_estimated` and `estimated_cost_of_sales` (an estimate for
@@ -244,7 +248,13 @@ agent starts a run knowing how fresh each number is. It does not replace `get_ac
   a sale), `visit_fees`, `visits`, `token_spend`, `adjustments`, `net`; also `purchases`,
   `capital` and `tax_remitted`, which are shown but are not in `net`; inventory at cost
   (`inventory_machine`, `inventory_closet`, `inventory`, `inventory_complete`); per-week revenue
-  in `weeks`; and `notes`.
+  in `weeks` (Saturday to Friday, each with its share of the tax); `tax_weeks`, each Sunday to
+  Saturday tax week's revenue and tax as David calculates it (`week`, the Sunday it starts, and
+  `ends` at Saturday 23:59:59.999999 Eastern), with `from` and `to`, the part of the week the window
+  counted (Eastern), and `partial`: true when the window cut the week (it starts midweek, or at an
+  opening after that week's Sunday 00:00, or it ends before Saturday), so its `revenue` and `tax` are
+  the window's, not the whole week's figure; and `notes`. An `end` of today or later stops the window
+  at now: `end` in the reply is now, and the week in progress is `partial` with `to` now.
 - **Preconditions**: the ledger is open, unless `start` is given (`end` then defaults to today).
 - **Side effects**: one `action_log` row.
 - **Cost**: database queries only.
@@ -356,7 +366,7 @@ rounded up to the next 5 cents. Off-step prices are refused, never rounded. Past
 - **Side effects**: on success, a real purchase request on the bridge (`POST
   /api/v1/purchase-requests`): the student worker buys what it lists and loads the machine at the
   next visit. Our records: a `purchase_submissions` row saved **before** sending, settled after
-  as `accepted`, `refused`, `not_filed` or `unknown`; on acceptance a `purchase_requests` row,
+  as `accepted`, `not_filed` or `unknown` (`refused` is no longer set: see below); on acceptance a `purchase_requests` row,
   which the request sync then follows. One `action_log` row for every attempt.
 - **Cost**: **real money**. Up to `max_cost`: for every line, the dearer of its two purchase
   options at its max pack price, plus the midweek fee (`midweek_fee_cents`, $25 by default) if
@@ -369,19 +379,31 @@ rounded up to the next 5 cents. Off-step prices are refused, never rounded. Past
     planner's codes: `plan_changed` (the lines, their worst-case cost or the visit fee changed
     since the preview: preview again) and `submission_unresolved`.
   - Something a person must fix first: `success: false`, "Can't submit yet:" and what to do.
-  - The bridge says too many requests are open (`429`): refused `too_many_open_requests`; wait for
-    earlier ones to be decided.
-  - The bridge refuses the request (another `4xx`): `success: false` with the bridge's reason;
-    nothing was ordered.
-  - Bridge unreachable: `success: false`, "nothing was sent"; the record is `not_filed`.
-  - Sent but no usable answer (a timeout, a `5xx`, or an answer with no request ID): the record is
-    `unknown`, the agent is told not to submit again, and every later preview and submit refuses
-    `submission_unresolved` until a person checks the bridge and runs
-    `python -m vending.submissions resolve`.
-  - Accepted, but storing the answer fails (the database dropped mid-call): the request ID is
-    written to the server's error log as a `LOST ANSWER` line, and the error the agent sees names
-    the ID and the `resolve` command. The record stays `sending`, which blocks further submits.
-  - The POST is never retried: a retry after a lost answer could order twice.
+  - Accepted only on the documented `201`, whole: a body whose `Content-Length` is one number equal to
+    its size, or chunked with exact framing (each chunk closed by CRLF, ending in the blank line), read
+    in full within the 30-second total deadline and the 64 KB cap, `application/json`, not encoded,
+    strict JSON with no repeated key, in the `PurchaseRequestPending` shape (`id`,
+    `status: pending`, `created_at`), under an ID no other submission or recorded request holds.
+  - Connecting to the bridge failed (no byte of the request left): `success: false`,
+    `status: not_filed`, "nothing was sent"; the record is `not_filed`.
+  - **Every other answer is `unknown`**, the bridge's documented refusals included (`403`, `422`
+    such as `invalid_lines`, `429` such as `too_many_open_requests` or `submissions_locked`), and
+    any other `4xx`, `5xx`, redirect or success, an answer cut off, slow, too long, encoded or not
+    plain JSON, and no answer at all. The reply has `success: false`, `status: unknown`, the bridge's
+    words if any, and tells the agent not to submit again. Every later preview and submit refuses
+    `submission_unresolved` until a person finds out whether the bridge filed it and runs
+    `python -m vending.submissions resolve N --request-id ID --by NAME` or `--not-filed --by NAME`.
+    A refusal-shaped reply can't prove nothing was ordered, so it never settles a row by itself.
+  - Accepted, but storing the answer fails (the database dropped mid-call): the validated `201`'s
+    ID was already kept on the row (`created_id`) before anything else, so the next run's check
+    (`python -m vending.submissions check`) reads `GET /api/v1/purchase-requests/{id}` and settles
+    it from the bridge's documented record of that ID. That is the only row the check settles. The
+    ID is also written to the server's error log as a `LOST ANSWER` line, and the error the agent
+    sees names the ID and the `resolve` command. The record stays `sending`, which blocks further
+    submits until then.
+  - The POST is never retried, and never redirected: a retry after a lost answer could order twice.
+    The agent tries once more in the same run only after our own `plan_changed` (no `submission`
+    number: nothing was sent) or `not_filed` (#217).
 - **Owner**: Marshall Strong (issue #20, PR #37).
 
 ## `get_purchase_requests`
@@ -464,7 +486,7 @@ rounded up to the next 5 cents. Off-step prices are refused, never rounded. Past
   for the config change.
 - **Cost**: database only.
 - **Failure behavior**: code `wildcard`, every reason at once: not one of ours, not on a middle
-  shelf (2 to 4), column 5 (beside the machine's centre line), no reason, or a slot already set.
+  shelf (2 to 4), column 4 or 5 (beside the machine's centre line), no reason, or a slot already set.
   `halted` when the halt switch is on.
 - **Owner**: Kevin Sykes (PR #166).
 

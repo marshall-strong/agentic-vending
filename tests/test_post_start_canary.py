@@ -166,7 +166,9 @@ def test_the_poll_does_carry_the_sentinels(machine, assignment):
     ("get_pnl", {"start": "2026-11-30", "end": "2026-12-05"}, None),
     ("get_account_balance", {}, None),
 ])
-def test_the_agents_tools(machine, assignment, tool, arguments, rows):
+def test_the_agents_tools(machine, assignment, tool, arguments, rows, monkeypatch):
+    # get_pnl stops a window at now; these polls may be later than the real date the tests run on.
+    monkeypatch.setattr(pnl, "_now", lambda conn: datetime(2026, 12, 6, 17, 0, tzinfo=timezone.utc))
     if arguments.get("slots") == "first":   # one of ours, whichever the assignment is
         arguments = {**arguments, "slots": [assignment[0]]}
     result = call(tool, arguments)

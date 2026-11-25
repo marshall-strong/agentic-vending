@@ -22,9 +22,13 @@ course staff's rule, not a team choice. See `docs/agent/interloper.md`.
 Which selections are ours is the inventory server's assignment (brief, section 1). The
 machine is split evenly between the two teams. The instructors change the assignment exactly once,
 through the server, before the competition starts, and that change is what the competition uses
-(David, 16 Nov, as Kevin reported; nobody knows yet whether it has happened). The brief (section 1)
-says the assignment is fixed for both quarters, so the change is the instructors' practice, not the
-brief's text.
+(David, 16 Nov, as Kevin reported). It happened by 20 Nov: David wrote that slots have been
+reassigned and will not change during the quarter. The brief (section 1) says the assignment is
+fixed for both quarters, so the change is the instructors' practice, not the brief's text.
+
+David's 20 Nov email adds an honor rule: don't influence others with knowledge of who owns what in
+the machine. Don't tell anyone which selections are ours or theirs, and don't steer customers
+toward or away from a selection except through our own prices and products.
 
 ## Fall data (before the fall cut)
 
@@ -36,8 +40,8 @@ and prices from all 40 selections, for polls taken before the cut (Kevin, 15 Nov
 **The cut comes before the day-one fill.** Once staff start loading the teams' products they
 "basically turn it off" (David, 12 Nov), and from then on the machine's prices and counters are the
 teams' own choices. The cut is the setting `FALL_CUTOFF`: unset, 18 Nov 2026 00:00 Eastern, the
-first day of the break after Fall Quarter classes, safely before any loading (about 30 Nov to
-2 Dec). It is never later than the start, 3 Dec 2026 00:00 Eastern.
+first day of the break after Fall Quarter classes, safely before the loading on Mon 30 Nov
+(David, 20 Nov). It is never later than the start, 3 Dec 2026 00:00 Eastern.
 
 **From the cut on**, nothing reads per-selection sales, prices or stock outside our assignment.
 What counts is when the poll was taken, not when the data is read: fall data stays usable after the
@@ -67,10 +71,18 @@ repo root points here.
   (`vending/slots.py`). `get_sales_history` refuses any other slot ("Not our slots: ...").
 - **The agent has no web-fetch tool.** It can't browse to another team's dashboard.
   `tests/test_server.py::test_tool_list_is_pinned` pins the MCP server's tool names, so
-  adding a tool (a web fetcher, say) is a deliberate change that shows up in review.
+  adding a tool (a web fetcher, say) is a deliberate change that shows up in review. Its one
+  web search, `find_pack_price` (from the start, live runs only, `vending/price_search.py`; people
+  run the same lookup with `python -m vending.price_search`), is
+  limited by `allowed_domains` to the four stores' own sites, and the code refuses any page off
+  them, so it can't reach the other team's pages or the Interloper. The harness refuses any
+  other search or fetch tool (`vending/harness.py`).
 - **Our stock count reads only our machine's counters.** `vending/stock.py` reads poll
   counters only from `DEVICE_ID`, and only for selections in the current server assignment
   that our own receipts name. A historical receipt does not authorize reads after reassignment.
+- **The tracking check sends and stores only our slots.** `vending/tracking.py` builds `coil` from
+  our slots (the server's assignment, `vending.slots.our_slots`) and passes on stock warnings only
+  for those slots and our closet.
 - **Count estimates use the same assignment.** Both the count rows and the counter query filter
   selections in SQL. Dashboard response filtering is an additional display check.
 - **The bridge script never prints a whole poll.** `scripts/bridge.py` (`raw`, `latest`,
@@ -88,6 +100,23 @@ repo root points here.
   stop at the cut too; from it, they cover our assignment only. Normal runs may keep rows from the fall cut on only for our assignment as stored from the
   inventory server (recorded in each export as `assigned_slots`; the code has no fixed list),
   and a time without a UTC offset is refused. `tests/test_analysis_slots.py` checks all of it.
+- **Logs carry no poll bytes.** The worker's logs, its job output and `/health` are read by people, and a
+  poll can hold selections that aren't ours. So nothing turns what the bridge sent back (an error body, a
+  malformed document, a status line, a header) into a log line, an exception message or output.
+  `vending/bridge.py`, `vending/sync_history.py`, `vending/visit_polls.py`, `scripts/poll_snapshot.py` and
+  `scripts/check_archive.py` log the status, sizes, a session id that passes
+  `vending.bridge.valid_session_id` (32 hex digits), and a reason the code wrote itself ("502 Bad Gateway",
+  "short read: 1234 of 2000 bytes", "device mismatch"). A database error is logged as its class and SQLSTATE,
+  not its text, which can quote the row: the sync does it for a poll it can't store, and `worker.run_round`
+  for any job that crashes on one. A sync that loses its connection raises a message of its own, `from None`.
+  `scripts/check_archive.py` reads a log line's reason from its structured start only, because an older line
+  can hold a reply's records in `detail` or `problems`. An error built from a reply is raised `from None`, so a traceback
+  doesn't print the reply either. The archive and the database still keep whole polls. The scope is poll
+  content (bodies, documents, tracebacks), not every field of a JSON answer: the one write we make
+  (`post`) still shows the server's reason for our own request. A day's listing is checked row by row
+  (`vending.bridge.listed_poll`): a row with no usable session id or start is counted and skipped, and the
+  good polls of that day are still stored. `tests/test_logs_no_poll_bytes.py` answers each of these places
+  with `PA1*`, `PA2*` and `VA1*` records and checks every line logged, raised, printed or formatted.
 
 The fall rule applies to the poll timestamps, not the date an analysis runs. Historical fall
 data remains usable after the start. Our own historical purchase receipts and action logs also

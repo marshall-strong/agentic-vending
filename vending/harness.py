@@ -22,9 +22,17 @@ it answers**:
    in Eastern time), and the worst case is written as a `pending` row (and, for
    a live call, a ledger estimate). If the minimum output won't fit, nothing is
    sent and `CapReached` says why. If the row can't be written, nothing is sent
-   either: spend we can't record isn't spent.
+   either: spend we can't record isn't spent. A harness given `hold` (the
+   agent's run lease, `vending.run_lease.hold`) checks it first, in the same
+   transaction: if it says no, nothing is reserved or sent and `NotHeld` says why.
 3. The request is sent once; the client's own retries are turned off, because
-   each could bill again.
+   each could bill again. A harness given `stop_at` (the caller's deadline)
+   checks it after the count and again just before sending: past it, nothing is
+   sent (`PastDeadline`). One given `request_deadline` waits at most that long
+   for the answer, by the wall clock, since the SDK's timeout only bounds each
+   wait for bytes; past it the harness gives up (`Abandoned`) and keeps the
+   worst case. Given `hold_margin` too, it sends only if the lease `hold`
+   renewed still lasts past that hard end.
 4. The answer's `usage` is priced from `model_prices.json` (at the model that
    actually answered) and the row is corrected to that cost, with its tokens,
    latency, stop reason and Anthropic's request id. If the correction fails, the
@@ -44,8 +52,22 @@ day (`python -m vending.config set model_test_daily_cap_cents 2000 --by <name>`)
 The defaults are placeholders until the team sets a budget. `key_env` names the
 variable the key came from (never the key), so each row says which key paid.
 
-Not priced here, so refused: server tools (web search bills per use), fast
-mode, priority capacity (requests are sent `standard_only`), streaming (use a
+**One server tool is priced: the basic web search** (`web_search_20250305`, $10
+per 1,000 searches, `server_tools` in the price file), and only with a
+`max_uses` of 1 to `MAX_SEARCHES` and an `allowed_domains` list, so every search
+is capped and stays on named sites (`vending.price_search` is its one user). Its
+worst case reads the prompt once more for each search, plus
+`SEARCH_RESULT_TOKENS` of results for each search so far, plus the searches'
+fee; its cost adds `usage.server_tool_use.web_search_requests` at the fee.
+`SEARCH_RESULT_TOKENS` is our allowance, not a documented figure: if a call
+bills more than its worst case, the harness logs a warning, records what was
+billed and marks the row, and a `Budget` over such calls leaves nothing for the
+rest of that Eastern day. The fee is `web_search_requests` (an errored search
+isn't billed); a call kept at its worst case already holds every search's fee.
+
+Not priced here, so refused: every other server tool (the web search with
+dynamic filtering, `web_search_20260209` and later, which runs code; web
+fetch), fast mode, priority capacity (requests are sent `standard_only`), streaming (use a
 non-streaming call), `extra_body`, `betas` and `fallbacks`. Add their prices
 before allowing them. (A fallback re-runs a declined request on another model in
 the same call and bills both, more than the one worst case reserved here.)
@@ -100,6 +122,11 @@ COUNTED = ("messages", "model", "cache_control", "output_config", "output_format
            "tool_choice", "tools")
 # Anthropic-defined tools that run on our side bill as ordinary tokens; other typed tools are server tools.
 CLIENT_TOOL_PREFIXES = ("custom", "bash_", "text_editor_", "memory_", "computer_")
+# The one server tool with a price: the basic web search, which Claude calls directly (no code execution).
+SEARCH_TOOL_TYPE = "web_search_20250305"
+MAX_SEARCHES = 5                # the most `max_uses` one request may ask for
+# Input tokens allowed for each search's results in the worst case: our allowance, not a documented figure.
+SEARCH_RESULT_TOKENS = 25_000
 
 
 class HarnessError(Exception):
@@ -140,6 +167,22 @@ class CapReached(HarnessError):
     """Not sent: the worst case doesn't fit under what's left of a cap. Nothing was spent."""
 
 
+class NotHeld(HarnessError):
+    """Not sent: `hold` said the caller may not spend now (the agent lost its run lease). Nothing was reserved."""
+
+
+class PastDeadline(HarnessError):
+    """Not sent: the caller's deadline (`stop_at`) passed while the request was being counted or reserved."""
+
+
+class Abandoned(HarnessError):
+    """Sent, but no answer came within `request_deadline`: the harness stopped waiting. It may have billed, so
+    its worst case stays in the books. Its thread may still be going: `in_flight()` says so."""
+
+
+NEAR_END = "the lease `hold` renewed ends before the request's hard end"
+
+
 @dataclass(frozen=True)
 class Rates:
     """Dollars per million tokens, for prompts up to `prompt_up_to` tokens (None: no limit)."""
@@ -156,6 +199,7 @@ class PriceTable:
     checked: str
     us_only_multiplier: Decimal
     models: dict[str, tuple[Rates, ...]]
+    web_search_usd: Decimal | None = None      # per search (`SEARCH_TOOL_TYPE`); None: web search is refused
 
     def rates(self, model: str, prompt_tokens: int) -> Rates:
         """The tier this prompt length bills at. Every input token counts, cached ones too."""
@@ -177,7 +221,9 @@ def load_prices(path: Path = PRICES_FILE) -> PriceTable:
         if not built or built[-1].prompt_up_to is not None:
             raise HarnessError(f"{path.name}: {model}'s last tier must have no prompt limit")
         models[model] = built
-    return PriceTable(raw["checked"], Decimal(raw["us_only_multiplier"]), models)
+    search = (raw.get("server_tools") or {}).get(SEARCH_TOOL_TYPE)
+    return PriceTable(raw["checked"], Decimal(raw["us_only_multiplier"]), models,
+                      Decimal(search["per_use"]) if search else None)
 
 
 def _n(value: Any) -> int:
@@ -207,16 +253,27 @@ def padded(counted: int) -> int:
     return int((counted * COUNT_MARGIN).to_integral_value(ROUND_CEILING)) + COUNT_PAD
 
 
-def worst_case_usd(model: str, counted: int, max_tokens: int, prices: PriceTable, *, caches: str | None) -> Decimal:
+def tokens_in(counted: int, searches: int = 0) -> int:
+    """The most input tokens a request counted at `counted` might bill, with up to `searches` web searches.
+
+    After each search the model reads the prompt again with every result so far, so the prompt is read
+    `searches + 1` times, and the k-th search's results up to `searches - k + 1` times."""
+    return padded(counted) * (searches + 1) + SEARCH_RESULT_TOKENS * searches * (searches + 1) // 2
+
+
+def worst_case_usd(model: str, counted: int, max_tokens: int, prices: PriceTable, *, caches: str | None,
+                   searches: int = 0) -> Decimal:
     """The most a request can bill: padded input at its dearest possible rate and tier,
-    plus `max_tokens` out, with US-only routing assumed (the workspace may default to it).
+    plus `max_tokens` out, with US-only routing assumed (the workspace may default to it),
+    plus up to `searches` web searches and the results they could add (`tokens_in`).
 
     `caches` is None, "5m" or "1h": with caching asked for, any input token could be a write.
     """
-    tokens_in = padded(counted)
-    r = prices.rates(model, tokens_in)
+    read = tokens_in(counted, searches)
+    r = prices.rates(model, read)
     unit_in = {None: r.input, "5m": max(r.input, r.cache_write_5m), "1h": max(r.input, r.cache_write_1h)}[caches]
-    return (tokens_in * unit_in + max_tokens * r.output) / MILLION * prices.us_only_multiplier
+    fee = searches * prices.web_search_usd if searches else Decimal(0)
+    return (read * unit_in + max_tokens * r.output) / MILLION * prices.us_only_multiplier + fee
 
 
 def _caching(request: dict) -> str | None:
@@ -227,11 +284,25 @@ def _caching(request: dict) -> str | None:
     return "1h" if '"ttl": "1h"' in text else "5m"
 
 
-def _refuse_unpriced(request: dict) -> None:
+def _refuse_unpriced(request: dict, prices: PriceTable | None = None) -> int:
+    """Refuse anything the harness can't price. Returns the most web searches the request may make."""
+    searches = 0
     for tool in request.get("tools") or []:
         kind = tool.get("type") if isinstance(tool, dict) else None
-        if kind is not None and not str(kind).startswith(CLIENT_TOOL_PREFIXES):
+        if kind is None or str(kind).startswith(CLIENT_TOOL_PREFIXES):
+            continue
+        if kind != SEARCH_TOOL_TYPE or prices is None or prices.web_search_usd is None:
             raise HarnessError(f"server tool {kind!r} bills per use and has no price here; not sent")
+        uses = tool.get("max_uses")
+        if isinstance(uses, bool) or not isinstance(uses, int) or not 1 <= uses <= MAX_SEARCHES:
+            raise HarnessError(f"a web search needs max_uses of 1 to {MAX_SEARCHES}, so its cost has a limit; "
+                               "not sent")
+        domains = tool.get("allowed_domains")
+        if not isinstance(domains, list) or not domains or "blocked_domains" in tool:
+            raise HarnessError("a web search needs an allowed_domains list, so it stays on sites we named; not sent")
+        if tool.get("allowed_callers") not in (None, ["direct"]):
+            raise HarnessError("a web search must be called directly, not from code execution; not sent")
+        searches += uses
     if request.get("speed") not in (None, "standard"):
         raise HarnessError("fast mode bills at its own rates and has no price here; not sent")
     if request.get("service_tier") not in (None, "standard_only"):
@@ -246,6 +317,7 @@ def _refuse_unpriced(request: dict) -> None:
     for key in ("extra_body", "extra_query", "extra_headers"):
         if key in request:
             raise HarnessError(f"{key} could change what's billed without the harness seeing it; not sent")
+    return searches
 
 
 def day_start(now: datetime) -> datetime:
@@ -281,6 +353,25 @@ class Call:
 
 
 @dataclass(frozen=True)
+class Budget:
+    """A daily cap of its own for the calls whose `model_calls.label` starts with `prefix` (`vending.price_search`).
+
+    Read under the reservation lock with the other caps, on the reservation's Eastern day: what those calls billed,
+    and the worst case still held for any that haven't settled. If one of them billed more than its worst case
+    that day, nothing is left: the worst case is an allowance, not a limit the API promises
+    (`SEARCH_RESULT_TOKENS`), so after a miss the day's budget stops rather than trust it again."""
+    prefix: str
+    daily_usd: Decimal
+
+    def left(self, conn: psycopg.Connection, now: datetime) -> Decimal:
+        spent, missed = conn.execute(
+            "select coalesce(sum(cost_usd), 0), coalesce(bool_or(status = 'ok' and cost_usd > worst_case_usd), false)"
+            " from model_calls where left(label, %s) = %s and at >= %s",
+            (len(self.prefix), self.prefix, day_start(now))).fetchone()
+        return Decimal(0) if missed else self.daily_usd - Decimal(spent)
+
+
+@dataclass(frozen=True)
 class _Reserved:
     max_tokens: int
     worst: Decimal
@@ -295,7 +386,10 @@ class Harness:
                  run_cap_usd: Decimal | None = None, daily_cap_usd: Decimal | None = None,
                  prices: PriceTable | None = None, min_tokens: int = DEFAULT_MIN_TOKENS,
                  now: Callable[[], datetime] | None = None, by: str = "harness",
-                 key_env: str = DEFAULT_KEY_ENV, run_id: str | None = None):
+                 key_env: str = DEFAULT_KEY_ENV, run_id: str | None = None,
+                 hold: Callable[[psycopg.Connection], str | None] | None = None,
+                 hold_margin: float | None = None, request_deadline: float | None = None,
+                 stop_at: float | None = None):
         if purpose not in PURPOSES:
             raise HarnessError(f"purpose must be one of {', '.join(PURPOSES)}, not {purpose!r}")
         if key_env.upper().startswith("ANTHROPIC_"):
@@ -309,6 +403,15 @@ class Harness:
         self.prices = prices or load_prices()
         self.min_tokens = min_tokens
         self.now = now      # None: the database clock, read under the lock (a test may pass a fixed one)
+        # Checked in the reservation's transaction, before anything is reserved: why not to spend, or None.
+        # `hold_margin`: the seconds `hold` promises, from when the reservation starts, when it says yes.
+        self.hold, self.hold_margin = hold, hold_margin
+        # The most seconds one request may take, from send to answer, by the wall clock. The SDK's own timeout
+        # only bounds each wait for bytes, so a reply that keeps trickling in could outlast it. None: no limit.
+        self.request_deadline = request_deadline
+        # `time.monotonic()` past which nothing more is reserved or sent (the caller's deadline). None: none.
+        self.stop_at = stop_at
+        self._threads: list = []    # requests given up on that may still be going
         daily_key, daily_default = DAILY_CAPS[purpose]
         with connect() as conn:
             self.run_cap = run_cap_usd if run_cap_usd is not None else Decimal(
@@ -319,14 +422,48 @@ class Harness:
         self.reserved = 0           # requests that got past the caps (each has a model_calls row)
         self.calls: list[Call] = []
 
-    def call(self, request: dict, *, label: str = "") -> Any:
-        """Send `request` (a `messages.create` body) under the caps and record its cost. Returns the response."""
-        return self.call_detailed(request, label=label).response
+    def in_flight(self) -> bool:
+        """Whether a request the harness gave up on (`Abandoned`) may still be going."""
+        return any(t.is_alive() for t in self._threads)
 
-    def call_detailed(self, request: dict, *, label: str = "") -> Call:
+    def _past(self, when: str) -> None:
+        if self.stop_at is not None and time.monotonic() >= self.stop_at:
+            raise PastDeadline(f"not sent: the run's deadline passed {when}. Nothing was spent.")
+
+    def _send(self, body: dict) -> Any:
+        """`messages.create(**body)`, given at most `request_deadline` seconds by the wall clock. Past that, its
+        thread is left to end by itself, and this raises `Abandoned`."""
+        if self.request_deadline is None:
+            return self.client.messages.create(**body)
+        import threading
+
+        done: dict = {}
+
+        def send() -> None:
+            try:
+                done["response"] = self.client.messages.create(**body)
+            except BaseException as error:      # noqa: BLE001 - handed to the caller below
+                done["error"] = error
+        thread = threading.Thread(target=send, name="model_request", daemon=True)
+        thread.start()
+        thread.join(self.request_deadline)
+        if thread.is_alive():
+            self._threads.append(thread)
+            raise Abandoned(f"no answer within {self.request_deadline:g} s")
+        if "error" in done:
+            raise done["error"]
+        return done["response"]
+
+    def call(self, request: dict, *, label: str = "", daily_budget: Budget | None = None) -> Any:
+        """Send `request` (a `messages.create` body) under the caps and record its cost. Returns the response."""
+        return self.call_detailed(request, label=label, daily_budget=daily_budget).response
+
+    def call_detailed(self, request: dict, *, label: str = "", daily_budget: Budget | None = None) -> Call:
+        """`daily_budget`: one more daily cap, for the calls whose label starts with its prefix (`Budget`), checked
+        and reserved under the same lock as the run and daily caps."""
         import anthropic
 
-        _refuse_unpriced(request)
+        searches = _refuse_unpriced(request, self.prices)
         model = request.get("model")
         if not model:
             raise HarnessError("the request names no model")
@@ -346,16 +483,36 @@ class Harness:
             counted = self.client.messages.count_tokens(**{k: v for k, v in request.items() if k in COUNTED}).input_tokens
         except anthropic.APIError as error:
             raise HarnessError(f"counting the request failed ({_describe(error)}); nothing was sent or spent") from None
+        # The caller's deadline can't stop this thread, so it is checked here, and again just before sending.
+        self._past("while the request was counted")
 
         reference = f"{self.purpose}{' ' + label if label else ''}"
-        held = self._reserve(model, effort, counted, wanted, floor, caches, label, reference)
+        reserving = time.monotonic()
+        if daily_budget is not None and not label.startswith(daily_budget.prefix):
+            raise HarnessError(f"a call under the {daily_budget.prefix!r} budget must have a label starting with it")
+        held = self._reserve(model, effort, counted, wanted, floor, caches, label, reference, searches, daily_budget)
         self.spent += held.worst
         self.reserved += 1
+
+        # The last checks before money can be spent: the deadline, and that the lease `hold` renewed still lasts
+        # past the request's hard end (the reservation's own commit may have been slow).
+        try:
+            self._past("while the request was reserved")
+            if self.hold is not None and self.hold_margin is not None and self.request_deadline is not None                     and time.monotonic() + self.request_deadline > reserving + self.hold_margin:
+                raise NotHeld(f"not sent: {NEAR_END}. Nothing was spent.")
+        except HarnessError as error:
+            self._refused(held, f"{reference} not sent: {error}", None, 0.0)
+            self.spent -= held.worst
+            raise
 
         body = {**request, "max_tokens": held.max_tokens, "service_tier": "standard_only"}
         started = time.monotonic()
         try:
-            response = self.client.messages.create(**body)
+            response = self._send(body)
+        except Abandoned as error:      # it may still run and bill: kept at its worst case
+            self._mark(held, f"{reference} estimate: abandoned, {error}", None, time.monotonic() - started)
+            raise Abandoned(f"the model call was abandoned ({error}); kept at its worst case, "
+                            f"${held.worst:.4f}") from None
         except anthropic.APIStatusError as error:
             seconds = time.monotonic() - started
             if error.status_code < 500:      # refused by the API, not billed
@@ -381,10 +538,16 @@ class Harness:
             paid = cost_usd(answered_by if answered_by in self.prices.models else model, usage, self.prices,
                             us_only=us_only)
             note = ""
-            if answered_by not in self.prices.models:
+            # Anthropic bills a search per `web_search_requests`; a search that came back as an error isn't counted.
+            searched = _n(getattr(getattr(usage, "server_tool_use", None), "web_search_requests", 0))
+            if answered_by not in self.prices.models:       # the worst case already holds every search's fee
                 note, paid = f" (answered by unpriced {answered_by}; kept at worst case)", worst
                 log.error("model call answered by %s, which has no price; kept at its worst case", answered_by)
-            if getattr(getattr(usage, "server_tool_use", None), "web_search_requests", 0):
+            elif searched and searches:
+                fee = searched * self.prices.web_search_usd
+                paid += fee
+                note += f" ({searched} web search{'es' if searched != 1 else ''}, ${fee:.2f})"
+            if searched and not searches:
                 note += " (server tool use not priced)"
                 log.error("model call used server tools, which aren't priced: %s", usage.server_tool_use)
             tier = getattr(usage, "service_tier", None)
@@ -394,6 +557,10 @@ class Harness:
             if paid <= 0:       # usage reported nothing (a proxy stripped it?): never erase a paid call
                 note, paid = " (usage reported no tokens; kept at worst case)", worst
                 log.error("model call %s reported no usage; kept at its worst case", reference)
+            elif paid > worst:  # only a search's results can do this: recorded as billed
+                note += " (billed more than its worst case)"
+                log.warning("model call %s billed $%s, more than its worst case $%s; raise SEARCH_RESULT_TOKENS",
+                            reference, paid, worst)
             recorded = self._settle(held, paid, answered_by, usage, response, seconds,
                                     f"{reference} {response.id}{note}", note.strip())
         except Exception:
@@ -406,29 +573,39 @@ class Harness:
         return call
 
     def _reserve(self, model: str, effort: str | None, counted: int, wanted: int, floor: int, caches: str | None,
-                 label: str, reference: str) -> _Reserved:
-        """Fit max_tokens under the caps and write the worst case, under a short lock."""
+                 label: str, reference: str, searches: int = 0, budget: Budget | None = None) -> _Reserved:
+        """Fit max_tokens under the caps and write the worst case, under a short lock.
+
+        Every cap is read and the worst case written in one transaction under `LOCK_KEY`, so two calls can't both
+        fit in the same room. Each day is the Eastern day of `now`, the reservation's own time."""
         try:
             with self.connect() as conn, conn.transaction():
                 conn.execute(f"set local lock_timeout = '{LOCK_TIMEOUT}'")
                 conn.execute("select pg_advisory_xact_lock(%s)", (LOCK_KEY,))
+                if self.hold is not None and (why := self.hold(conn)) is not None:
+                    raise NotHeld(f"not sent: {why}. Nothing was reserved or spent.")
                 now = self.now() if self.now else ledger.db_now(conn)
                 left_today = self.daily_cap - spent_since(conn, day_start(now), self.purpose)
-                allowed = min(self.run_cap - self.spent, left_today)
-                room = allowed - worst_case_usd(model, counted, 0, self.prices, caches=caches)
-                r = self.prices.rates(model, padded(counted))
+                left_budget = budget.left(conn, now) if budget is not None else None
+                allowed = min(self.run_cap - self.spent, left_today,
+                              *([left_budget] if left_budget is not None else []))
+                room = allowed - worst_case_usd(model, counted, 0, self.prices, caches=caches, searches=searches)
+                r = self.prices.rates(model, tokens_in(counted, searches))
                 per_token = r.output * self.prices.us_only_multiplier / MILLION
                 max_tokens = min(wanted, int(room / per_token)) if room > 0 else 0
                 if max_tokens < floor:
                     raise CapReached(
                         f"not sent: ${max(allowed, Decimal(0)):.4f} is left (run cap ${self.run_cap:.2f}; "
-                        f"${max(left_today, Decimal(0)):.4f} of today's {self.purpose} cap, ${self.daily_cap:.2f}), "
+                        f"${max(left_today, Decimal(0)):.4f} of today's {self.purpose} cap, ${self.daily_cap:.2f}"
+                        + (f"; ${max(left_budget, Decimal(0)):.4f} of today's {budget.prefix.strip()} cap, "
+                           f"${budget.daily_usd:.2f}" if budget is not None and left_budget is not None else "")
+                        + "), "
                         f"and this {counted}-token request needs room for at least {floor} output tokens. "
                         "Nothing was spent.")
-                worst = worst_case_usd(model, counted, max_tokens, self.prices, caches=caches)
+                worst = worst_case_usd(model, counted, max_tokens, self.prices, caches=caches, searches=searches)
                 entry = None
                 if self.purpose == "live":      # only live calls are the competition's money
-                    entry = ledger.record_tokens(conn, worst, model, padded(counted), max_tokens,
+                    entry = ledger.record_tokens(conn, worst, model, tokens_in(counted, searches), max_tokens,
                                                  f"{reference} pending", by=self.by, at=now).id
                 call_id = conn.execute(
                     "insert into model_calls (at, purpose, label, run_id, model, effort, key_env, max_tokens,"
@@ -436,7 +613,7 @@ class Harness:
                     " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s) returning id",
                     (now, self.purpose, label, self.run_id, model, effort, self.key_env, max_tokens,
                      worst, worst, entry, self.by, self.host)).fetchone()[0]
-        except CapReached:
+        except (CapReached, NotHeld):
             raise
         except Exception as error:
             raise HarnessError(f"couldn't write the worst-case estimate ({type(error).__name__}: "

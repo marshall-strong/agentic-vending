@@ -11,7 +11,7 @@ balance, the sales tax still owed in it, inventory at cost, and net worth (the
 balance less that tax, plus inventory at cost). Each day also lists its events
 (visits, receipt lines, model calls, observed price changes) for a chart to
 mark, and notes for whatever it couldn't count. `by_week` adds the days up into
-the ledger's Saturday-to-Friday weeks. This is the data under the money chart,
+the ledger's Saturday-to-Friday display weeks. This is the data under the money chart,
 the weekly report and the agent's briefing. It reads; it decides nothing.
 
 It is competition money only. Counting starts at the ledger's opening entry,
@@ -35,11 +35,14 @@ opening, or from one microsecond before the first midnight when the window
 starts later (so a poll at midnight sharp counts), to the last day's end. An
 entry stamped in that first microsecond belongs to the day before and is left
 out. Each day's cash balance is `ledger.balance` at the day's end. Tax needs
-care: the ledger rounds the tax inside each week's takings, not each sale's,
-so a day's tax is what the day added to its week's rounded tax. A week cut by
-the window is rounded on its days inside it, as `ledger.pnl` does, so a window
-that starts midweek can put a cent of tax on a different day than one that
-starts at the opening.
+care: the ledger rounds the tax inside each tax week's takings, not each
+sale's, so a day's tax is what the day added to its tax week's rounded tax. Tax
+weeks run Sunday to Saturday, as David calculates the tax (David, 20 Nov;
+`ledger.tax_week_of`), and a day is always inside one. A tax week cut by the
+window is rounded on its days inside it, as `ledger.pnl` does, so a window that
+starts midweek can put a cent of tax on a different day than one that starts at
+the opening. The display weeks (`by_week`, Saturday to Friday) add up their
+days' tax, so they carry their share of the tax weeks' rounding.
 
 Cost of sales is `ledger.summarize_sales`: exact costs only. Units sold across
 a product change the counters can't split have no exact cost; their estimate
@@ -117,13 +120,15 @@ import psycopg
 
 from vending import db, ledger, stock
 from vending.pricing import DEFAULT_TAX_PERCENT
-from vending.slots import SlotsNotRecorded
+from vending.slots import SlotsNotRecorded, our_slots
 from vending.tools.machine_state import price_history
 from vending.tools.sales_history import tax_cents
 
 EASTERN = ZoneInfo(ledger.TIMEZONE)
 MICROSECOND = timedelta(microseconds=1)
 NO_OPENING = "the ledger has no opening entry, so none of this is competition money yet"
+# A receipt line's marker for a slot that isn't ours now: no slot, no product.
+NOT_OURS_LINE = "a line for a selection that isn't ours now"
 NO_GOOD_POLL = "no good poll this day, so its sales show on the next day that has one"
 # How the notes about the polls behind the takings begin: ours above, and `ledger.rises_between`'s
 # ("no polls in the window, ..." and "no poll at or before ..."). The table shows these in full.
@@ -222,7 +227,7 @@ class Day(_Lines):
     counted_from: datetime | None   # midnight, or the opening on the opening day; None when not counted
     ended: bool                     # the day was over when the series was read
     takings_cents: int              # tax included, from the polls' counters
-    sales_tax_cents: int            # what the day added to its week's rounded set-aside
+    sales_tax_cents: int            # what the day added to its tax week's rounded set-aside
     units_sold: int                 # every rise in our slots' unit counters
     units_costed: int               # of those, the units whose cost the receipts know
     cost_of_sales_cents: Fraction   # of the costed units
@@ -320,9 +325,9 @@ def daily(conn: psycopg.Connection, start: date, end: date, now: datetime | None
         why = NO_OPENING if opened is None else _before_opening(opened)
         return [_not_counted(d, why, now) for d in dates]
     first = max(_midnight(start), opened.at)                    # the first moment counted
-    # `ledger.pnl`'s start for this window. Sales count at polls after it: the
+    # `ledger.pnl`'s poll start for this window (`ledger.poll_start`). Sales count at polls after it: the
     # poll at the opening is the baseline, and a poll at midnight sharp counts.
-    since = opened.at if opened.at >= _midnight(start) else _midnight(start) - MICROSECOND
+    since = ledger.poll_start(first, opened.at)
     book = _Book(conn, opened, first, since, until)
 
     out = []
@@ -366,7 +371,7 @@ class _Book:
         # (`ledger.opening_rises`), including those before a later window start.
         rises = ledger.opening_rises(sales_rows, opened.at, until)[2]
         self.cash += [(r.at, Fraction(r.amount)) for r in rises]
-        # The tax still owed at a moment counts from the opening too, rounded per week as the balance does.
+        # The tax still owed at a moment counts from the opening too, rounded per tax week as the balance does.
         self.open_rises = sorted((r.at, r.amount) for r in rises)
         self.remitted: list[tuple[datetime, Fraction]] = []
         self.poll_days = {_day(at) for at, _, _ in sales_rows}
@@ -394,6 +399,9 @@ class _Book:
             if at >= first:
                 self.visits[_day(at)] += 1
                 self.fees[_day(at)] += fee
+        # A receipt line names its slot and product. A slot that isn't ours by the current assignment
+        # (reassigned since) keeps its money in every total, but its marker names neither.
+        ours = set(our_slots(conn))
         # On the receipt clock the ledger and the stock replay use (`stock.receipt_lines`).
         receipts = stock.receipt_lines(conn)
         for at, ref, _, slot, sku, paid in sorted(
@@ -409,8 +417,8 @@ class _Book:
                     self.unpaid_lines[_day(at)] += 1
                 else:
                     self.purchases[_day(at)] += paid
-                self.events[_day(at)].append(Event(at, "receipt", f"slot {slot}: {sku or 'nothing bought'}",
-                                                   ref, paid))
+                detail = f"slot {slot}: {sku or 'nothing bought'}" if slot in ours else NOT_OURS_LINE
+                self.events[_day(at)].append(Event(at, "receipt", detail, ref, paid))
         self.cash.sort(key=lambda c: c[0])
         self.cash_moments = [at for at, _ in self.cash]
         self._visit_events(conn, stock.request_times(receipts))
@@ -457,7 +465,7 @@ class _Book:
         for at, cents in self.open_rises:
             if at > moment:
                 break
-            weeks[ledger.week_of(at.astimezone(EASTERN))] += cents
+            weeks[ledger.tax_week_of(at.astimezone(EASTERN))] += cents
         set_aside = sum(tax_cents(c, DEFAULT_TAX_PERCENT) for c in weeks.values())
         return set_aside - sum((c for at, c in self.remitted if at <= moment), Fraction(0))
 
@@ -483,11 +491,11 @@ class _Book:
             last[slot] = price
 
     def day(self, d: date, week_takings: dict[date, int], now: datetime) -> Day:
-        """Day `d`, which must be counted. `week_takings` runs each week's takings so far, for its tax."""
+        """Day `d`, which must be counted. `week_takings` runs each tax week's takings so far, for its tax."""
         start = max(_midnight(d), self.first)
         finish = _midnight(d + timedelta(days=1)) - MICROSECOND
         ended = finish < now
-        week = ledger.week_of(datetime.combine(d, time.min))
+        week = ledger.tax_week_of(datetime.combine(d, time.min))
         before = week_takings[week]
         week_takings[week] += self.takings[d]
         tax = tax_cents(week_takings[week], DEFAULT_TAX_PERCENT) - tax_cents(before, DEFAULT_TAX_PERCENT)

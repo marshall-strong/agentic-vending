@@ -17,6 +17,22 @@ answers. Re-run with `--since` to retry them; that pass also fetches again any
 poll stored as unparseable, in case the bridge sent a cut-off document. Only an
 unreachable bridge or a rejected key stops the run.
 
+Each row of a day's listing is checked on its own, before anything is fetched
+(`vending.bridge.listed_poll`): it needs a session id of 32 hex digits and a start
+that is a real time with an offset. A row that fails is counted as a failed poll,
+skipped, and never logged. Storing a poll is just as separate: one the database
+refuses (a NUL byte in its serial, say) is counted and logged as the error's class
+and SQLSTATE, and the polls after it are still stored.
+
+A run that couldn't store a poll ends its summary with the earliest day and the `--since <day>` that
+fetches it again: the default window follows the newest poll stored, so it may not go back that far. A
+connection that is gone raises `StorageLost`, with a message of our own.
+
+The log says what happened in words of our own (a status, a size, a session id
+that passes `valid_session_id`) and never quotes what the bridge sent or the
+database's error text: the log is read by people, and a poll can hold selections
+that aren't ours (`docs/integrity.md`).
+
 It never migrates. On a database that is behind it refuses to run (exit 2) and
 names `python -m vending.db migrate`, like the server and the halt switch, so a
 sync started from a branch can't change the shared database's schema.
@@ -32,7 +48,7 @@ from datetime import date, datetime, timedelta, timezone
 import psycopg
 
 from vending import db
-from vending.bridge import Bridge, BridgeError, BridgeUnreachable
+from vending.bridge import Bridge, BridgeError, BridgeUnreachable, listed_poll
 from vending.evadts import ParseError, parse
 
 # The bridge's history starts here.
@@ -47,7 +63,19 @@ class Report:
     crc_failed: int = 0
     unparseable: int = 0
     failed_days: int = 0
-    failed_polls: int = 0
+    failed_polls: int = 0           # skipped: not listed usably, not fetched, or not stored
+    storage_failed: int = 0         # of those, the ones the database refused
+    first_storage_failure: date | None = None   # the earliest day (UTC, as listed) one was refused on
+
+
+class StorageLost(RuntimeError):
+    """The database connection is gone, so no poll after this one can be stored either. The message is ours:
+    the database's own text can quote the row it refused, which holds a poll."""
+
+
+def _device(meta: dict) -> str:
+    device = meta.get("device_id")
+    return device if isinstance(device, str) and device else "unknown"
 
 
 def store(conn: psycopg.Connection, meta: dict, raw: bytes) -> str:
@@ -76,8 +104,9 @@ def store(conn: psycopg.Connection, meta: dict, raw: bytes) -> str:
             where polls.crc_ok is null and excluded.crc_ok is not null
             """,
             (
-                # `crc_ok` stays null when the document couldn't be read at all.
-                meta["session_id"], meta.get("device_id") or "unknown", meta["started_at"], raw, len(raw),
+                # `crc_ok` stays null when the document couldn't be read at all. The listing's device
+                # is the bridge's word: only text is a device.
+                meta["session_id"], _device(meta), meta["started_at"], raw, len(raw),
                 None if poll is None else poll.crc_ok,
                 poll.machine_serial if ok else None, poll.decimal_places if ok else None,
                 poll.total_paid_cents if ok else None, poll.total_paid_units if ok else None,
@@ -96,16 +125,40 @@ def store(conn: psycopg.Connection, meta: dict, raw: bytes) -> str:
     return "ok" if ok else "crc"
 
 
+def rerun_hint(report: Report) -> str | None:
+    """The line that names the first day a poll couldn't be stored and the command that fetches it again, or
+    None. A default run starts a day before the newest stored poll, so it may never go back that far."""
+    if not report.storage_failed:
+        return None
+    day = report.first_storage_failure
+    return (f"storage failed for {report.storage_failed} of the polls skipped, the first on {day}. Fetch them again "
+            f"with: python -m vending.sync_history --since {day}\n"
+            "(a default run starts a day before the newest poll stored, so it may not go back that far)")
+
+
 def sync(conn: psycopg.Connection, bridge: Bridge, since: date, until: date, log=print,
          retry_bad: bool = False) -> Report:
+    """Fetch and store every poll from `since` to `until` that we don't hold (`_sync`)."""
+    report = Report()
+    try:
+        return _sync(conn, bridge, since, until, log, retry_bad, report)
+    except BaseException:
+        # A run that stops early (the bridge gone, the connection lost) still names a day it couldn't store.
+        hint = rerun_hint(report)
+        if hint:
+            log(hint)
+        raise
+
+
+def _sync(conn: psycopg.Connection, bridge: Bridge, since: date, until: date, log, retry_bad: bool,
+          report: Report) -> Report:
     """Fetch and store every poll from `since` to `until` that we don't hold.
 
     With `retry_bad`, polls stored as unparseable (`crc_ok` null) are fetched
     again, in case the bridge returned a cut-off or garbled document last time.
     A poll whose checksum failed (`crc_ok` false) was read whole and is left alone.
     """
-    report = Report()
-    start = datetime.combine(since, datetime.min.time(), timezone.utc)
+    start =datetime.combine(since, datetime.min.time(), timezone.utc)
     known = {row[0] for row in conn.execute(
         "select session_id from polls where started_at >= %s" + (" and crc_ok is not null" if retry_bad else ""),
         (start,))}
@@ -124,30 +177,51 @@ def sync(conn: psycopg.Connection, bridge: Bridge, since: date, until: date, log
             day += timedelta(days=1)
             continue
         report.listed += len(listing)
-        for meta in listing:
-            if meta["session_id"] in known:
+        for row in listing:
+            listed = listed_poll(row)
+            if listed is None:
+                # The listing is the bridge's words, and the log is read by people: a row that has no usable
+                # session id or start is neither logged, fetched nor stored, and the rows after it carry on.
+                report.failed_polls += 1
+                log("  skipped a listed poll whose session id or start time isn't usable")
+                continue
+            session, when = listed.session_id, listed.started_at.isoformat()
+            if session in known:
                 continue
             try:
-                raw = bridge.raw(meta["session_id"])
+                raw = bridge.raw(session)
             except BridgeUnreachable:
                 raise
             except BridgeError as error:
                 report.failed_polls += 1
-                log(f"  could not fetch {meta['session_id']} ({meta['started_at']}): {error}; skipped")
+                log(f"  could not fetch {session} ({when}): {error}; skipped")
                 continue
-            outcome = store(conn, meta, raw)
-            known.add(meta["session_id"])
-            again = meta["session_id"] in retrying
+            try:
+                outcome = store(conn, {**row, "started_at": listed.started_at}, raw)
+            except psycopg.Error as error:
+                # The database's text can quote the row it refused, which holds the document: the class and
+                # the SQLSTATE say enough, here and in the error raised below.
+                why = f"{type(error).__name__}, SQLSTATE {error.sqlstate or 'none'}"
+                if conn.closed or conn.broken:      # nothing after this can be stored either
+                    raise StorageLost(f"the database connection was lost while storing {session}: {why}") from None
+                # One poll the database refuses mustn't stop the rest.
+                report.failed_polls += 1
+                report.storage_failed += 1
+                report.first_storage_failure = report.first_storage_failure or day
+                log(f"  could not store {session} ({when}): {why}; skipped")
+                continue
+            known.add(session)
+            again = session in retrying
             if outcome == "bad":
                 report.unparseable += 1
-                log(f"  {'still ' if again else ''}not EVA-DTS: {meta['session_id']} ({meta['started_at']}); kept raw")
+                log(f"  {'still ' if again else ''}not EVA-DTS: {session} ({when}); kept raw")
                 continue
             report.new += 1
             if again:
-                log(f"  re-fetched {meta['session_id']} ({meta['started_at']}): now readable")
+                log(f"  re-fetched {session} ({when}): now readable")
             if outcome == "crc":
                 report.crc_failed += 1
-                log(f"  checksum failed: {meta['session_id']} ({meta['started_at']}); kept raw, counters skipped")
+                log(f"  checksum failed: {session} ({when}); kept raw, counters skipped")
         log(f"{day}: {len(listing)} listed")
         day += timedelta(days=1)
     return report
@@ -159,6 +233,10 @@ def default_since(conn: psycopg.Connection) -> date:
         return HISTORY_START
     # One day back: a poll from late on day D can be stored after we've already
     # synced an early poll from D+1.
+    #
+    # This window moves with the newest stored poll, so a poll the database refused on an earlier day is not
+    # fetched again once later polls are stored. Nothing records it (there is no row to count from), so the
+    # run says so and names `--since <day>` (`main`), and it exits 1 until someone reruns that.
     return max(last.astimezone(timezone.utc).date() - timedelta(days=1), HISTORY_START)
 
 
@@ -188,7 +266,10 @@ def main(argv: list[str] | None = None) -> int:
         return 3
     print(f"done: {report.days} days, {report.listed} polls listed, {report.new} new, "
           f"{report.crc_failed} failed the checksum, {report.unparseable} unparseable, "
-          f"{report.failed_days} days and {report.failed_polls} polls the bridge couldn't return")
+          f"{report.failed_days} days couldn't be listed, {report.failed_polls} polls skipped")
+    hint = rerun_hint(report)
+    if hint:
+        print(hint)
     problems = report.crc_failed + report.unparseable + report.failed_days + report.failed_polls
     return 1 if problems else 0
 

@@ -152,28 +152,92 @@ def test_a_job_that_overruns_is_timed_out_and_skipped_until_it_ends():
     assert len(calls) == 2
 
 
+def test_tracking_daily_skips_when_its_sync_failed_this_round():
+    """The daily check reads the polls and receipts the round's syncs bring in: a sync that failed
+    would leave it reading stale books and spending the day's check, so it skips (worker.NEEDS)."""
+    calls = []
+    jobs = [("sync_history", lambda: 2), ("tracking_daily", lambda: calls.append(1) or 0)]
+    results = worker.run_round(jobs, log=lambda _: None, needs=worker.NEEDS)
+    assert calls == []
+    assert [(r.outcome, r.exit_code) for r in results] == [("finished", 2), ("skipped", None)]
+    assert "sync_history" in results[1].error
+
+
+def test_tracking_daily_skips_when_the_slot_check_failed_this_round():
+    """`slots check` runs first to confirm the assignment the check's figures are read against: if
+    it failed this round (the server gave a different assignment, or none is stored), sending would
+    read the books against a slot set that may be wrong, so the check skips (worker.NEEDS)."""
+    calls = []
+    jobs = [("slots_check", lambda: 1), ("sync_history", lambda: 0), ("sync_requests", lambda: 0),
+            ("tracking_daily", lambda: calls.append(1) or 0)]
+    results = worker.run_round(jobs, log=lambda _: None, needs=worker.NEEDS)
+    assert calls == []
+    assert [(r.outcome, r.exit_code) for r in results] == [("finished", 1), ("finished", 0),
+                                                           ("finished", 0), ("skipped", None)]
+    assert "slots_check" in results[3].error
+
+
+def test_tracking_daily_runs_when_its_syncs_passed():
+    calls = []
+    jobs = [("sync_history", lambda: 0), ("sync_requests", lambda: 0),
+            ("tracking_daily", lambda: calls.append(1) or 0)]
+    results = worker.run_round(jobs, log=lambda _: None, needs=worker.NEEDS)
+    assert calls == [1] and [(r.outcome, r.exit_code) for r in results] == [("finished", 0)] * 3
+
+
+def test_tracking_daily_skips_when_its_sync_is_still_running():
+    release = threading.Event()
+    calls = []
+
+    def hangs():
+        release.wait(5)
+        return 0
+    jobs = [("sync_history", hangs), ("tracking_daily", lambda: calls.append(1) or 0)]
+    running = {}
+    worker.run_round(jobs[:1], log=lambda _: None, timeout=0.05, running=running)
+    second = worker.run_round(jobs, log=lambda _: None, timeout=5, running=running, needs=worker.NEEDS)
+    assert calls == []
+    assert [(r.outcome, r.exit_code) for r in second] == [("still running", None), ("skipped", None)]
+    release.set()
+    running["sync_history"].join(5)
+
+
+def test_the_gated_job_is_skipped_through_main_too():
+    calls = []
+    jobs = [("sync_history", lambda: 1), ("tracking_daily", lambda: calls.append(1) or 0)]
+    assert worker.main(["--once", "--port", "0"], jobs=jobs, log=lambda _: None) == 1
+    assert calls == []
+
+
 def test_timeout_must_be_positive():
     with pytest.raises(SystemExit):
         worker.main(["--timeout", "0", "--port", "0"], jobs=[], log=lambda _: None)
 
 
 def test_the_default_jobs_never_migrate(monkeypatch):
-    """On a database that is behind, every scheduled sync refuses (exit 2) and none migrates.
+    """On a database that is behind, every scheduled job refuses (exit 2) and none migrates.
 
     In production the worker runs these against the shared Azure database at every
     start and every hour, so a sync that migrated would change its schema on deploy.
+    The wake job refuses the same way when it is on; here it is switched on so this covers
+    it too.
     """
     pytest.importorskip("psycopg")
     from vending import db
 
+    monkeypatch.setenv("MIDWEEK_WAKE", "on")
     migrated = []
     monkeypatch.setattr(db, "connect", lambda: nullcontext(object()))
     monkeypatch.setattr(db, "pending", lambda conn: ["999_not_yet_applied.sql"])
     monkeypatch.setattr(db, "migrate", lambda conn: migrated.append(conn) or [])
+    monkeypatch.setenv("TRACKING_DAILY", "on")     # off, the daily check never opens the database
     results = worker.run_round(worker.default_jobs(), log=lambda _: None)
-    assert [r.job for r in results] == ["slots_check", "sync_history", "sync_requests", "sync_catalog", "sync_product_requests"]
+    assert [r.job for r in results] == ["slots_check", "sync_history", "sync_requests", "sync_catalog",
+                                        "sync_product_requests", "midweek_wake", "tracking_daily"]
     assert migrated == []
-    assert [(r.outcome, r.exit_code) for r in results] == [("finished", 2)] * 5
+    # Without the worker's NEEDS every job runs, so the wake job refuses the database that is behind
+    # too; that it waits for a slot check that passed is tested in test_midweek_wake.
+    assert [(r.outcome, r.exit_code) for r in results] == [("finished", 2)] * 7
 
 
 # --- The home page at / (#54) -----------------------------------------------------
@@ -345,3 +409,88 @@ def test_a_minute_past_the_hour_needs_rounds_that_fit_the_hour(args):
 def test_off_keeps_any_every():
     assert worker.main(["--every", "7", "--at-minute", "off", "--once", "--port", "0"],
                        jobs=[("a", lambda: 0)], log=lambda _: None) == 0
+
+
+# --- The chart pages behind the password ------------------------------------------------------------
+
+CHARTS = ("/dashboard/money", "/dashboard/pnl", "/dashboard/spend")
+
+
+def _ask(server, method: str, path: str, headers: dict | None = None):
+    import http.client
+    conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=20)
+    try:
+        # A POST with no body: the server refuses it without reading one, and on Windows a body it never
+        # read can make the client's send fail with WinError 10053 before the 405 arrives.
+        conn.request(method, path, body=b"" if method == "POST" else None, headers=headers or {})
+        reply = conn.getresponse()
+        return reply.status, dict(reply.getheaders()), reply.read().decode()
+    finally:
+        conn.close()
+
+
+@pytest.fixture
+def gated(monkeypatch):
+    """The worker's server with the password gate on, and every chart loader failing the test if reached."""
+    from vending import gate, pages
+
+    monkeypatch.setattr(gate, "ENABLED", True)
+    monkeypatch.setenv(gate.KEY_SETTING, "postgresql://reader:secret@example/db")
+    monkeypatch.setenv(pages.READER, "set")
+    monkeypatch.setattr(pages, "_cache", {})
+    for name in ("money_data", "pnl_data", "spend_data"):
+        monkeypatch.setattr(pages, name, lambda *args, _name=name: pytest.fail(f"{_name} reached without a sign-in"))
+    monkeypatch.setattr(pages, "connect", lambda: pytest.fail("a connection opened without a sign-in"))
+    server = worker.serve_health(worker.State(), 0)
+    yield server
+    server.shutdown()
+    server.server_close()
+
+
+def test_the_chart_pages_send_a_signed_out_browser_to_the_password_page(gated):
+    from vending import gate
+
+    for path in CHARTS + tuple(p + "/" for p in CHARTS) + ("/dashboard/pnl?start=2026-12-05",):
+        status, headers, body = _ask(gated, "GET", path)
+        assert status == 303 and headers["Location"] == gate.login_location(path) and body == "", path
+    # A forged cookie is no better.
+    status, _, _ = _ask(gated, "GET", CHARTS[0], {"Cookie": f"{gate.COOKIE}=9999999999.forged"})
+    assert status == 303
+    # The dashboard's JSON twin still answers a signed-out refresh with JSON, as before.
+    status, headers, body = _ask(gated, "GET", "/dashboard/state.json")
+    assert status == 401 and headers["Content-Type"] == "application/json" and "signed out" in json.loads(body)["error"]
+
+
+def test_the_chart_pages_take_no_post_signed_in_or_not(gated):
+    from vending import gate
+
+    for path in CHARTS:
+        for headers in ({}, {"Cookie": f"{gate.COOKIE}={gate.token()}"}):
+            status, _, _ = _ask(gated, "POST", path, headers)
+            assert status == 405, path
+
+
+def test_a_signed_in_browser_gets_each_chart_page_with_its_policy(gated, monkeypatch):
+    from vending import gate, pages
+
+    seen = []
+
+    def respond(target, syncs=None):
+        seen.append(target)
+        return pages.Reply(200, pages.HTML, f"<p>{target}</p>", pages.CSP_PNL)
+    monkeypatch.setattr(pages, "respond", respond)
+    for path in CHARTS:
+        status, headers, body = _ask(gated, "GET", path, {"Cookie": f"{gate.COOKIE}={gate.token()}"})
+        assert status == 200 and body == f"<p>{path}</p>" and headers["Content-Security-Policy"] == pages.CSP_PNL
+        assert headers["Cache-Control"] == "no-store"
+    assert seen == list(CHARTS)
+
+
+def test_the_chart_demos_are_behind_the_password_too(gated, monkeypatch):
+    from vending import gate, pages
+
+    monkeypatch.setattr(pages, "demo_page", lambda path, now=None: pytest.fail("a demo rendered without a sign-in"))
+    for path in ("/dashboard/demo/money", "/dashboard/demo/spend"):
+        status, headers, _ = _ask(gated, "GET", path)
+        assert status == 303 and headers["Location"] == gate.login_location(path)
+        assert _ask(gated, "POST", path)[0] == 405

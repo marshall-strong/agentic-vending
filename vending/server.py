@@ -196,7 +196,8 @@ async def submit_desired_state(desired: DesiredState, expected_plan_hash: str | 
     """Submit a desired state for all 20 slots as a purchase request, after planning it again on live data. Same input as preview_desired_state; pass its plan_hash as expected_plan_hash to be refused if anything changed since. Refused with every problem at once; spends real money when accepted."""
     return await _write("submit_desired_state", {"desired": desired, "expected_plan_hash": expected_plan_hash},
                         submit.submit_desired_state(desired, lambda: bridge(), lambda: connect(),
-                                                    expected_plan_hash=expected_plan_hash),
+                                                    expected_plan_hash=expected_plan_hash,
+                                                    run=submit.RunContext.from_env()),
                         submit.SubmitReply)
 
 

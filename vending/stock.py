@@ -135,6 +135,7 @@ class Movement:
             object.__setattr__(self, "window_since", self.since)
     door_conflict: str = ""              # sale: the receipt it contradicts, by selling with the door open
     split: bool = False                  # sale: already split at its changes; another pass leaves it alone
+    gross_share_cents: int | None = None # sale: this product's share of the raw cents rise after a split
 
 
 @dataclass(frozen=True)
@@ -243,6 +244,9 @@ class SaleCost:
     since: datetime | None = None      # the poll before `at`: the measured window is (since, at]
     estimated_cost_cents: Fraction | None = None      # an unsplit window's estimate; see above
     may_be_written_off: bool = False   # an unsplit window: the old units written off at the change may be these
+    gross_cents: int | None = None      # counter rise, or this product's share after a split
+    attributed: bool = True            # whether leaderboards can link these units to the product
+    attribution_since: datetime | None = None  # start of this product's share of the window
 
 
 @dataclass(frozen=True)
@@ -655,11 +659,17 @@ def _shares(m: Movement, change: Movement, old: int | None) -> list[Movement]:
     if old is None:
         return [replace(m, changes=1, split=True)]
     out = []
+    # The split has already been decided. Keep the counter rise for the whole
+    # window in `cents` and carry the amounts for the leaderboard separately.
+    old_cents = 0
     if old:
+        assert m.price_before is not None  # A positive old share came from _solve.
+        old_cents = old * m.price_before
         out.append(replace(m, at=change.opened_at or change.at, kind="sale_before_change", units=old,
-                           booked_at=m.at, seq=change.seq, split=True))
+                           booked_at=m.at, seq=change.seq, split=True, gross_share_cents=old_cents))
     if old < m.units:
-        out.append(replace(m, since=change.at, units=m.units - old, split=True))
+        new_cents = None if m.cents is None else m.cents - old_cents
+        out.append(replace(m, since=change.at, units=m.units - old, split=True, gross_share_cents=new_cents))
     return out
 
 
@@ -832,6 +842,7 @@ class _Slot:
     unattributed: int = 0         # sold in windows that can't be split; not in `sold`
     at_most: int = 0              # on hand if none of those were this product: loaded less everything else out
     history: list[Applied] = field(default_factory=list)   # what the replay applied to this run (`SlotCount.history`)
+    first_door_close: datetime | None = None  # first load's close minute, for leaderboard attribution
 
 
 def first_in_first_out(movements: list[Movement]) -> Stock:
@@ -908,7 +919,9 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                 candidate = slot.before_pull.get(_request(m), _oldest_unit_cost(slot.pool)) if changed else None
                 slot = slots[m.slot] = _Slot(product=m.sku, since=m.at, replaced=slot.product if changed else None,
                                              written_off=slot.pool.units if changed else 0,
-                                             replaced_unit_cost=candidate)
+                                             replaced_unit_cost=candidate,
+                                             first_door_close=m.at if slot is None and m.opened_at is not None
+                                             else None)
             if m.kind == "purchase":
                 survivors = m.to_slot + m.to_closet
                 each = None if m.paid_cents is None or not survivors else m.paid_cents / survivors
@@ -988,7 +1001,7 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                 unknown_sales.append((len(sales), m))
                 sales.append(SaleCost(m.at, m.slot, None, m.units, costed, None, unattributed_cost_cents=cost,
                                       unattributed=f"sold while {m.door_conflict}'s door times say the door was open",
-                                      since=m.window_since))
+                                      since=m.window_since, attributed=False))
             elif m.kind == "sale" and (across_change or m.changes):
                 # Still taken from the count (the new one, unless the door times show the
                 # window ended before it went in), so on hand errs low, but their cost
@@ -1019,12 +1032,18 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                 sales.append(SaleCost(m.at, m.slot, None, m.units, costed, None, unattributed_cost_cents=cost,
                                       unattributed=f"sold {across}; the counters can't split them",
                                       since=m.window_since,
-                                      estimated_cost_cents=estimate))
+                                      estimated_cost_cents=estimate, attributed=False))
             else:
                 slot.sold += m.units
                 slot.at_most = max(0, slot.at_most - m.units)
+                gross = m.cents if m.gross_share_cents is None else m.gross_share_cents
+                # The first load isn't a swap. As in _split_by_door, a poll
+                # must reach past the start of the close minute to cover a sale.
+                # The stock and cost still use main's replay order at that instant.
+                attributed = m.kind != "sale" or m.at != slot.first_door_close
                 sales.append(SaleCost(m.booked_at or m.at, m.slot, slot.product, m.units, costed, cost,
-                                      taken_at=m.at if m.booked_at else None, since=m.window_since))
+                                      taken_at=m.at if m.booked_at else None, since=m.window_since, gross_cents=gross,
+                                      attributed=attributed, attribution_since=m.since))
 
     # Every change the window touches is a candidate, not only the slot's last one, by the replay's
     # own rule (`_touches`: a poll exactly at a change without door times touches it), and a
@@ -1188,17 +1207,24 @@ def closet_from_receipts(lines: list[dict], losses: list[dict]) -> tuple[ClosetC
                  for c in first_in_first_out(movements_from_receipts(lines, losses)).closet)
 
 
-def stock(conn: psycopg.Connection, until: datetime | None = None, lines: list[dict] | None = None) -> Stock:
+def stock(conn: psycopg.Connection, until: datetime | None = None, lines: list[dict] | None = None, *,
+          polls_to_until: bool = False) -> Stock:
     """Closet and slot stock now, or as of `until`, from every fulfilled request and every good poll.
 
     Once the ledger has an opening entry, receipt lines resolved before it (test purchases) and their
     later losses are left out (`_receipts`): see the module docstring. `lines` is
     `receipt_lines(conn)` when the caller has read it already.
+
+    By default every stored poll is read, even after `until`: a later poll can split a window that
+    spans a product change and move a sale to before `until` (#97). `polls_to_until=True` reads only
+    the polls up to `until`, so the count as of `until` is fixed once that poll is stored, whatever
+    comes later. The tracking check needs that (`vending.tracking`); other callers keep the default.
     """
-    return replay(load_movements(conn, lines), until)
+    return replay(load_movements(conn, lines, until=until if polls_to_until else None), until)
 
 
-def load_movements(conn: psycopg.Connection, lines: list[dict] | None = None) -> list[Movement]:
+def load_movements(conn: psycopg.Connection, lines: list[dict] | None = None, *,
+                   until: datetime | None = None) -> list[Movement]:
     """Every stock movement on record, unsorted: what `stock()` replays.
 
     Separate so a caller that needs the stock at many moments (the daily money
@@ -1206,6 +1232,8 @@ def load_movements(conn: psycopg.Connection, lines: list[dict] | None = None) ->
     for each, which is exactly `stock(conn, until=moment)` without a query per
     moment. Don't cut a prefix yourself: `replay` must split product changes
     (#97) before it cuts.
+
+    `until` bounds the polls used to interpret rises.
     """
     assigned = set(our_slots(conn))
     lines, losses = _receipts(conn, lines)
@@ -1214,11 +1242,12 @@ def load_movements(conn: psycopg.Connection, lines: list[dict] | None = None) ->
     # poll_selections only has rows for polls whose checksum passed. The sync
     # stores every device's polls, so read only our machine's counters.
     # Cents and price too, to split a window that spans a product change (#97).
+    end_sql, end_args = (" and p.started_at <= %s", (until,)) if until is not None else ("", ())
     counters = conn.execute(
         "select s.selection, p.started_at, s.lifetime_units, s.lifetime_sales_cents, s.price_cents"
         " from poll_selections s"
-        " join polls p using (session_id) where p.device_id = %s and s.selection = any(%s)",
-        (DEVICE_ID, slots),
+        " join polls p using (session_id) where p.device_id = %s and s.selection = any(%s)" + end_sql,
+        (DEVICE_ID, slots, *end_args),
     ).fetchall()
     return movements_from_receipts(lines, losses) + sales_from_counters(counters)
 
@@ -1254,7 +1283,7 @@ def request_loads(conn: psycopg.Connection, request_ids: list[str],
 
 
 
-def replay(movements: list[Movement], until: datetime | None = None) -> Stock:
+def replay(movements: list[Movement], until: datetime | None = None, *, inclusive: bool = True) -> Stock:
     """`first_in_first_out` of the movements up to `until`. Pure.
 
     Windows that span a product change are split before the cut (#97). A
@@ -1264,12 +1293,17 @@ def replay(movements: list[Movement], until: datetime | None = None) -> Stock:
     like the takings, so it is in the stock as of `until` but not in its sales.
     So for one period opening + purchases - cost of sales - shrinkage = closing
     can be off by that share; over the two periods together it adds up.
+    Use `inclusive=False` for the stock just before a boundary.
     """
     movements = _split_at_changes(movements)
     if until is None:
         return first_in_first_out(movements)
-    counted = first_in_first_out([m for m in movements if m.at <= until])
-    return replace(counted, sales=tuple(s for s in counted.sales if s.at <= until))
+
+    def in_period(at: datetime) -> bool:
+        return at < until or (inclusive and at == until)
+
+    counted = first_in_first_out([m for m in movements if in_period(m.at)])
+    return replace(counted, sales=tuple(s for s in counted.sales if in_period(s.at)))
 
 
 _LINE_COLUMNS = ("request_id", "line_no", "slot", "outcome", "sku", "total_paid", "units_loaded",

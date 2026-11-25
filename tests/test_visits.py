@@ -299,7 +299,8 @@ def test_counts_and_the_dashboards_tile(conn):
     snap = dashboard.snapshot(conn, public=True)
     assert snap["visits"]["ok"] and snap["visits"]["data"]["visits"] == 3
     page = dashboard.render(snap)
-    assert "Visitors" in page and "2 browsers" in page and "3 visits" in page
+    top, footer = page.split("<footer>")
+    assert "Visitors: 2 browsers, 3 visits" in footer and "Visitors" not in top   # one muted footer line only
     assert visits.REFRESH_HEADER in page
     # Without scripts the page reloads to ?refresh=1, which the counter skips.
     assert '<meta http-equiv="refresh" content="30; url=?refresh=1">' in page
@@ -315,7 +316,7 @@ def test_a_browser_that_only_signed_in_is_not_a_visitor(conn):
     c = visits.counts(conn)
     assert (c["browsers"], c["browsers_7_days"], c["sign_ins"], c["visits"], c["visits_7_days"]) == (1, 1, 2, 1, 1)
     page = dashboard.render(dashboard.snapshot(conn, public=True))
-    assert "this week: 1 visit from 1 browser<" in page
+    assert "this week: 1 visit from 1 browser." in page.split("<footer>")[1]
 
 
 def test_the_counts_read_running_totals_and_only_the_last_week_of_rows(conn):
@@ -379,8 +380,9 @@ def _lock_visits(schema_url):
 def test_a_locked_visits_table_blanks_only_its_tile(schema_url, conn):
     """With the page reader's 5-second statement timeout, a locked table used to fail the whole
     snapshot (and so the page). Now the tile gives up within about a second and says so."""
-    from vending import dashboard
+    from vending import dashboard, ledger
 
+    ledger.record(conn, "opening", 60000, "opening capital", "test")
     visits.write(conn, [("view", "/dashboard", BROWSER)])
     conn.execute("set statement_timeout = 5000")
     other = _lock_visits(schema_url)
@@ -393,7 +395,7 @@ def test_a_locked_visits_table_blanks_only_its_tile(schema_url, conn):
         other.close()
     assert took < 3, took
     assert not snap["visits"]["ok"] and snap["spend"]["ok"] and snap["runs"]["ok"]
-    assert "Visitors" in page and "Unavailable" in page
+    assert "Visitors: unavailable just now." in page.split("<footer>")[1]
     # The rest of the snapshot keeps its own limit, not the tile's short one.
     assert conn.execute("show statement_timeout").fetchone()[0] == "5s"
 
@@ -439,7 +441,7 @@ def test_the_public_dashboard_still_serves_while_the_visits_table_is_locked(sche
                 server.server_close()
         finally:
             _drop(admin, name)
-    assert status == 200 and "Unavailable" in body and took < 4, took
+    assert status == 200 and "Visitors: unavailable just now." in body and took < 4, took
 
 
 def test_the_table_refuses_what_the_counter_never_writes(conn):
@@ -455,7 +457,7 @@ def test_a_dashboard_with_no_visits_says_none_yet(conn):
     from vending import dashboard
 
     page = dashboard.render(dashboard.snapshot(conn, public=True))
-    assert "Visitors" in page and "None yet" in page
+    assert "Visitors: none yet." in page.split("<footer>")[1]
 
 
 def test_the_flush_writes_through_its_own_connection(schema_url, monkeypatch):

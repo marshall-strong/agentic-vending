@@ -30,11 +30,16 @@ def no_database(monkeypatch):
     def boom(*args, **kwargs):
         raise AssertionError("the demo went to the database")
 
+    def live_filter(*args, **kwargs):
+        raise AssertionError("the demo used a live snapshot filter")
+
     for owner, names in ((psycopg, ("connect",)), (pages, ("connect", "_connect", "_connection", "stored_slots")),
                          (dashboard, ("connect", "_connect", "snapshot", "our_slots")), (db, ("connect",)),
                          (visits, ("connect", "_connect")), (slots, ("our_slots", "stored", "clock"))):
         for name in names:
             monkeypatch.setattr(owner, name, boom)
+    monkeypatch.setattr(dashboard, "only_ours", live_filter)
+    monkeypatch.setattr(dashboard, "hide_errors", live_filter)
     monkeypatch.delenv(pages.READER, raising=False)
     monkeypatch.delitem(settings._FILE, pages.READER, raising=False)
     assert not pages.configured()
@@ -97,7 +102,11 @@ def test_the_snapshot_covers_every_panel():
     snap = demo.load()
     assert all(snap[k]["ok"] for k in ("plan", "runs", "activity", "recent_calls", "sales", "stock", "counts", "spend",
                                         "visits", "money", "purchase_requests", "catalog_requests", "catalog_counts",
-                                        "products"))
+                                        "products", "key_dates"))
+    # A week into the competition, the key dates are the next restock request and the next tax Saturday.
+    dates = snap["key_dates"]["data"]
+    assert dates["after_start"] and [r["key"] for r in dates["rows"]] == ["next_restock_request", "next_tax"]
+    assert 'id="dates"' in dashboard.render(snap, demo=True)
     money = snap["money"]["data"]
     assert money["opened"] and money["committed"]["requests"] == 1 and money["visit_fees"] == "25.00"
     assert [r["status"] for r in snap["runs"]["data"]] == ["running", "submitted", "skipped", "submitted", "failed", "submitted"]
@@ -140,7 +149,7 @@ def test_the_page_draws_every_panel_from_the_snapshots_own_selections(no_databas
         assert anchor in page, anchor
     assert "Opening" in page or "opening" in page
     assert "How it decided" in page and "pr-001" in page and "pr-002" in page and "GORGIE Electrolyte Water" in page
-    assert "COCA-ORIGINAL-20BOT" in page and "from Friday" in page and "6 of 20 slots changed" in page
+    assert "COCA-ORIGINAL-20BOT" in page and "from the next restock" in page and "6 of 20 slots changed" in page
     assert "Our slots" not in page and "vmc1" not in page
 
 
@@ -165,7 +174,8 @@ def test_the_demo_keeps_its_toggles_under_its_own_storage_keys(no_database):
     for text in (page, live):
         # Every key goes through the prefix: no literal key is left in the script.
         assert not re.search(r"""(?:getItem|save)\(\s*['"]dash-""", text)
-        assert len(re.findall(r"PFX \+ '(?:show|view|changed|shelf)'", text)) == 9
+        # show, view and changed: read once each, saved four times (the ops layout keeps no shelf key).
+        assert len(re.findall(r"PFX \+ '(?:show|view|changed|shelf)'", text)) == 7
     assert "'demo-dash-' + " not in page      # the prefix is a variable, set once
 
 
@@ -240,7 +250,9 @@ def test_a_post_to_the_demo_is_405_signed_in_or_out(site):
     port, loaded = site
     for headers in ({}, signed_in(port)):
         for path in ("/dashboard/demo", "/dashboard/demo/state.json"):
-            status, _, _ = ask(port, "POST", path, b"x=1", {**headers, "Content-Type": "application/x-www-form-urlencoded"})
+            # No body: the server refuses a POST without reading one, and on Windows a body it never read
+            # can make the client's send fail with WinError 10053 before the 405 arrives.
+            status, _, _ = ask(port, "POST", path, b"", headers)
             assert status == 405, path
     assert loaded == []
 

@@ -8,7 +8,7 @@ Each topic file starts with a `#` title and then a one-line summary, which must 
 
 - `rules-card`: The always-on card: goal, hard guardrails, integrity, and how to work.
 - `goal-and-scoring`: The winner has the most cumulative profit at the end of run week 9, and must qualify by actually running the slots as a business.
-- `money`: The account balance is the only spending limit: $600 once, sales flow back in, and fees and agent costs come out of the same account.
+- `money`: The account balance is the spending limit, less a $53.00 floor every request leaves: $600 once, sales flow back in, and fees and agent costs come out of the same account.
 - `restocking`: One free restock every Friday; an extra dispatch costs $25 per request (not per unit), may take longer than 24 hours, and should be batched.
 - `pricing`: Prices stay within the floor and ceiling, must be explainable, may need deliberate variation to learn demand, and come from our own costs and sales only.
 - `wildcard`: One fixed slot tests products for the other 19 and may sell up to $8.00; it never moves, holds a product no other slot holds, and one purchase for it costs at most $82.00.
@@ -18,4 +18,6 @@ Each topic file starts with a `#` title and then a one-line summary, which must 
 - `guardrails`: Five non-negotiable rules: spend only what you have, price within bounds, obey the halt switch, log every action, and order only through the approved channel.
 - `directive`: The restock and pricing directive must let a person who has never seen our code load every slot and set every price without asking a question.
 - `competition-and-integrity`: Our slot assignment is private; we may not know which other slots are a rival's; the team has chosen to ignore other slots' prices, though the brief calls them a pricing input.
+- `variety`: Each slot should earn its own sales: a second slot of the same drink adds stock, not sales; keep testing new drinks, and lean toward a new category or brand.
 - `interloper`: An outside seller's machine beside ours sells nine drinks; never use its prices, and you know only the drinks the team has recorded here.
+- `price-lookup`: From the start, a live run may look up one pack's price with find_pack_price: a capped web search on one store's own site, for a drink with no checked price or a stale one.

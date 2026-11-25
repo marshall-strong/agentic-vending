@@ -195,13 +195,49 @@ def test_our_slots_are_read_from_the_stored_assignment(schema_url, monkeypatch):
     assert plan_page.read_our_slots()[:4] == ("11", "12", "13", "14")
 
 
-def test_a_round_naming_a_slot_outside_the_stored_assignment_is_refused(tmp_path):
-    import pytest
+def test_rounds_naming_slots_outside_the_stored_assignment_are_set_aside_not_shown(tmp_path):
+    other = tuple(f"{r}{c}" for r in range(1, 6) for c in range(1, 5))    # the rounds name 15, which isn't in it
+    page = plan_page.build(rounds(tmp_path), other, None, interloper_dir(tmp_path))
+    assert page.rounds == [] and [a.id for a in page.set_aside] == ["1", "2"]
+    html = plan_page.render(page)
+    assert "No rounds placed in our slots" in html and "Rounds placed in other slots" in html
+    assert "round2/plan2.json" in html and "$300" in html                    # its projection's base GP, as written
+    assert 'class="cell' not in html and "-s15" not in html                  # no machine face, no slot values
 
-    from vending import plan_rounds as pr
-    other = tuple(f"{r}{c}" for r in range(1, 6) for c in range(1, 5))    # the round names 15, which isn't in it
-    with pytest.raises(pr.RoundError, match="isn't in our current assignment"):
-        plan_page.build(rounds(tmp_path), other, None, interloper_dir(tmp_path))
+
+def test_a_round_placed_again_shows_beside_the_set_aside_ones(tmp_path):
+    from tests.test_plan_rounds import REDRAWN, placed_in
+    root = rounds(tmp_path)
+    write(root, "round5", "5", *placed_in(REDRAWN))
+    page = plan_page.build(root, REDRAWN, None, interloper_dir(tmp_path))
+    assert [r.id for r in page.rounds] == ["5"] and [a.id for a in page.set_aside] == ["1", "2"]
+    html = plan_page.render(page)
+    assert 'id="tab-5" checked' in html and 'id="tab-1"' not in html
+    assert "The first round placed in our slots" in html
+    assert 'id="5-s12"' in html and 'id="5-s15"' not in html
+    assert len(re.findall(r'<span class="cell theirs"', html)) == 20
+
+
+def test_a_set_aside_round_with_malformed_totals_gets_the_normal_refusal(tmp_path, monkeypatch):
+    from tests.test_plan_rounds import REDRAWN
+    root = tmp_path / "rounds"
+    root.mkdir()
+    proj = projection()
+    proj["scenarios"]["base"]["totals"] = [123]
+    write(root, "round3", "3", {"day_one": day_one()}, proj)            # placed before the redraw
+    monkeypatch.setattr(plan_page, "read_our_slots", lambda: REDRAWN)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), plan_page._handler(root, use_db=False))
+    threading.Thread(target=httpd.serve_forever, args=(0.01,), daemon=True).start()
+    try:
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{httpd.server_address[1]}/")
+            raise AssertionError("expected 500")
+        except urllib.error.HTTPError as error:
+            text = error.read().decode()
+            assert error.code == 500 and text.startswith("can't read the rounds: round3/projection3.json")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
 
 
 def test_the_page_refuses_with_nothing_stored(tmp_path, schema_url, monkeypatch, capsys):

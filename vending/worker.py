@@ -5,10 +5,20 @@
 
 Each round runs, in order, `python -m vending.slots check`,
 `python -m vending.sync_history`, `python -m vending.sync_requests`,
-`python -m vending.sync_catalog` and `python -m vending.sync_product_requests`, in this process. `slots check` goes first. It
+`python -m vending.sync_catalog`, `python -m vending.sync_product_requests`,
+`python -m vending.midweek_wake` and `python -m vending.tracking_daily`, in this process. The last
+sends the day's tracking check once it is
+due, only when `TRACKING_DAILY` is `on` (off by default; `vending.tracking_daily`), and only when
+the round's `slots check`, `sync_history` and `sync_requests` all finished (`worker.NEEDS`): the
+check reads the polls and receipts those syncs bring in, against the assignment `slots check`
+confirms, so one that failed, crashed or is still running would
+leave it reading stale books and spending the day's one check. `slots check` goes first. It
 only confirms our slot assignment: if the server gives a different one, or none
 is stored, it changes nothing and fails the round until a person runs
-`python -m vending.slots record` (`vending.slots`). The hourly rounds run at
+`python -m vending.slots record` (`vending.slots`). The wake check runs after the
+syncs, so it reads what they just stored, and only in a round whose `slots check`
+passed (`worker.NEEDS`: it plans on our slots); it is off unless `MIDWEEK_WAKE=on`, and
+off it does nothing and opens no connection (`vending.midweek_wake`). The hourly rounds run at
 SYNC_AT_MINUTE (5) minutes past the hour, UTC, because the course staff's poller
 reads the machine on the hour: a new poll reaches the dashboard about five
 minutes after it is taken, not up to an hour later. `off` runs a round every
@@ -21,7 +31,10 @@ minutes ahead, or a round still running at the first.
 None of them migrates: on a database that is behind each refuses (exit 2), the
 round is logged as failed, and the worker tries again next round,
 so a deploy can never change the shared database's schema. A person runs
-`python -m vending.db migrate`.
+`python -m vending.db migrate`. A round that ends with a failed job is also
+written to `sync_incidents` (migration 026), so the dashboard's incident log
+keeps every failed round, not only the latest; a round the database can't
+record waits and is written after a later round (`vending.worker.record_failed_round`).
 
 Each job gets JOB_TIMEOUT_MINUTES (30). Python can't stop a thread, so a job
 that overruns is reported as timed out and left to finish in the background,
@@ -35,7 +48,7 @@ browser, and a 503 there means the last round failed. `GET /` shows the same
 facts as a page for people: whether the last round passed, each job's outcome,
 when the next round runs, and links to the docs. It reloads itself every
 minute. Neither ever shows error text, because both are public and a database
-error names the host and user; the errors are in the log. The page is built
+error names the host and user; the errors are in the log (a database error as its class and SQLSTATE). The page is built
 only from `State.public()`, the same dict as `/health`, so it can't show more.
 
 `GET /dashboard` (with `/dashboard/state.json`) and `GET /db` are the agent
@@ -58,8 +71,17 @@ about every minute from 2:45 to 7 PM Eastern, so a read lands while the door is 
 (`vending.visit_polls`). A read that fails is logged and skipped. It is not a job of the round, so it
 never fails the round or /health. A read that runs past the round's time delays the round, never ends the loop.
 
-The agent itself (the model loop) does not run here yet; when it does, it
-starts `python -m vending.server` over stdio from the same image.
+The agent (the model loop) runs here only when `AGENT_SCHEDULE_MODE` is `dry-run` or `live` and the
+database's `agent_schedule_mode` says so too (`vending.agent_schedule`; with either unset, it never runs).
+Then, at the times in `AGENT_SCHEDULE` (Eastern), the loop starts `vending.agent.run` in a background
+thread, which starts `python -m vending.server` over stdio from the same image. A run is live only when
+both settings say `live`, from the competition's start, and after its checks before a send; else it is a
+dry run. Like the visit reads, a scheduled run is not a job of the round and never fails it. `/health` and `/`
+then also show that, this worker's `AGENT_SCHEDULE_MODE`, the next time and the last scheduled run's outcome.
+
+The weekly price check (`vending.price_schedule`) runs the same way: only when `PRICE_CHECK_MODE` and the
+database's `price_check_mode` both turn it on, at `PRICE_CHECK_SCHEDULE` (default Tuesday 12:00-20:00 ET), in its
+own thread, never a job of the round. `/health` shows its mode, next time and last run as `price_check`.
 
 `GET /dashboard/demo/simulations` shows simulated seasons from committed files
 (`vending.simulate.demo`), behind the same password. It never opens a database
@@ -86,15 +108,34 @@ from vending import gate, visits
 
 Job = tuple[str, Callable[[], int]]
 
+# A job here skips its round when a named earlier job of the same round didn't finish with 0
+# (failed, crashed, timed out, or still running from an earlier round): the tracking check reads
+# the polls and receipts its round's syncs bring in, so a sync that didn't finish would leave it
+# reading stale books and spending the day's one check on them, and a failed slot check leaves
+# the assignment unconfirmed, so the books it reads may be against slots that are no longer ours.
+# It tries again next round.
+# The midweek wake check (#219) plans on our slots, so it needs only a slot check that passed; the
+# syncs don't hold it back.
+NEEDS = {"midweek_wake": ("slots_check",),
+         "tracking_daily": ("slots_check", "sync_history", "sync_requests")}
+
 
 def default_jobs() -> list[Job]:
-    from vending import slots, sync_catalog, sync_history, sync_product_requests, sync_requests
+    from vending import (midweek_wake, slots, sync_catalog, sync_history, sync_product_requests, sync_requests,
+                         tracking_daily)
 
     return [("slots_check", lambda: slots.main(["check"])),
             ("sync_history", lambda: sync_history.main([])),
             ("sync_requests", lambda: sync_requests.main([])),
             ("sync_catalog", lambda: sync_catalog.main([])),
-            ("sync_product_requests", lambda: sync_product_requests.main([]))]
+            ("sync_product_requests", lambda: sync_product_requests.main([])),
+            # After the syncs, so the wake check reads what they just stored, and only when the
+            # slot check passed (NEEDS). Off unless MIDWEEK_WAKE=on: then the job does nothing and
+            # opens no connection (#219).
+            ("midweek_wake", lambda: midweek_wake.job()),
+            # Last, so the day's check reads the polls and receipts this round brought in; NEEDS
+            # holds it back when one of those syncs didn't finish.
+            ("tracking_daily", lambda: tracking_daily.main([]))]
 
 
 @dataclass
@@ -107,6 +148,31 @@ class JobResult:
     error: str | None = None        # for the log only: /health never shows it
 
 
+# Failed rounds waiting for the database, newest last (`record_failed_round`). An outage takes the
+# rounds' jobs down with it, so their incident rows would be lost without this; a long outage is
+# bounded, so the wait is too.
+PENDING_MAX = 48
+
+# How long the incident write (`record_rounds`) waits for a lock or for the database itself. A
+# timeout raises there, the writer logs it and keeps the round in its wait list, and the sync
+# moves on to its next round — an exclusive lock on `sync_incidents` must not stall it.
+WRITE_TIMEOUT = "5s"
+
+# TCP bounds on the incident writer's connection (libpq connect parameters): a connection that
+# goes silent after login — a dropped tunnel, a dead NAT — must die at the TCP layer instead of
+# blocking the write for the OS's retransmit time. No server-side timeout can do that: a query
+# that never reaches the server has no server to time it out. `tcp_user_timeout` bounds a stalled
+# send where the kernel supports it (libpq ignores it where it doesn't); the keepalives cover the
+# silent rest, about half a minute to a dead connection.
+INCIDENT_TCP = {"keepalives": 1, "keepalives_idle": 15, "keepalives_interval": 5,
+                "keepalives_count": 3, "tcp_user_timeout": 15000}
+
+# The one incident write in flight (`record_failed_round`): the round loop only queues and starts
+# the writer, so a database that never answers cannot stall the next round.
+_INCIDENT_LOCK = threading.Lock()
+_WRITER: threading.Thread | None = None
+
+
 @dataclass
 class State:
     started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -114,6 +180,10 @@ class State:
     last_round_at: str | None = None
     next_round_at: str | None = None
     results: list[JobResult] = field(default_factory=list)
+    # The scheduled agent runs (`vending.agent_schedule`): anything with `public()`, or None when they're off.
+    schedule: object | None = None
+    # The weekly price check (`vending.price_schedule`): the same, or None when it is off.
+    price_checks: object | None = None
 
     @property
     def healthy(self) -> bool:
@@ -121,21 +191,142 @@ class State:
         return all(r.exit_code == 0 for r in self.results)
 
     def public(self) -> dict:
-        """What /health shows: outcomes and exit codes, never error text."""
-        return {"status": "ok" if self.healthy else "failing",
-                "started_at": self.started_at, "rounds": self.rounds,
-                "last_round_at": self.last_round_at, "next_round_at": self.next_round_at,
-                "results": [{"job": r.job, "started_at": r.started_at, "seconds": r.seconds,
-                             "exit_code": r.exit_code, "outcome": r.outcome} for r in self.results]}
+        """What /health shows: outcomes and exit codes, never error text. With scheduled agent runs on, also
+        their mode, next time and last outcome (`agent_schedule`); off, the key isn't there."""
+        shown = {"status": "ok" if self.healthy else "failing",
+                 "started_at": self.started_at, "rounds": self.rounds,
+                 "last_round_at": self.last_round_at, "next_round_at": self.next_round_at,
+                 "results": [{"job": r.job, "started_at": r.started_at, "seconds": r.seconds,
+                              "exit_code": r.exit_code, "outcome": r.outcome} for r in self.results]}
+        if self.schedule is not None:
+            try:
+                shown["agent_schedule"] = self.schedule.public()
+            except Exception:       # noqa: BLE001 - /health must answer whatever the schedule's state
+                shown["agent_schedule"] = {"mode": "unknown", "next_at": None, "last": None}
+        if self.price_checks is not None:
+            try:
+                shown["price_check"] = self.price_checks.public()
+            except Exception:       # noqa: BLE001 - /health must answer whatever the check's state
+                shown["price_check"] = {"mode": "unknown", "next_at": None, "last": None}
+        return shown
+
+
+def _describe(problem: BaseException) -> str:
+    """What the log says of a job that crashed: the class and the message. A database error is its class and
+    SQLSTATE only: its text can quote the row it refused, which holds a poll (docs/integrity.md)."""
+    try:
+        import psycopg      # not imported at the top: the worker's other code doesn't need the driver
+    except ImportError:
+        psycopg = None
+    if psycopg is not None and isinstance(problem, psycopg.Error):
+        return f"{type(problem).__name__}: SQLSTATE {problem.sqlstate or 'none'}"
+    return f"{type(problem).__name__}: {problem}"
+
+
+def record_rounds(rows: list, conn) -> bool:
+    """Write failed rounds to `sync_incidents` (migration 026): one row per `(round_id, jobs)`, under
+    its stable id (`State.last_round_at`), so a retried write never doubles a round. True when the
+    writes went through — a round already stored counts, so the caller can drop it from its wait
+    list. Raises when the database refuses, and writes nothing then (each caller decides what a
+    partial write means; the worker retries the whole wait list).
+
+    The writes run in one transaction under `WRITE_TIMEOUT`: an exclusive lock on `sync_incidents`
+    (a backup, a migration) or a stalled database then raises instead of holding the round, and the
+    caller keeps every round in its wait list for the next one."""
+    from psycopg.types.json import Jsonb
+
+    with conn.transaction():
+        conn.execute("select set_config('lock_timeout', %s, true), set_config('statement_timeout', %s, true)",
+                     (WRITE_TIMEOUT, WRITE_TIMEOUT))
+        for at, jobs in rows:
+            conn.execute("insert into sync_incidents (round_id, round_at, jobs)"
+                         " values (%s, %s, %s) on conflict (round_id) do nothing",
+                         (at, datetime.fromisoformat(at), Jsonb(jobs)))
+    return True
+
+
+def record_failed_round(state: State, pending: list,
+                        log: Callable[[str], None] = print) -> threading.Thread | None:
+    """Keep one `sync_incidents` row per failed round (migration 026), for the dashboard's incident
+    log: a round that failed must stay listed after a later round passes, so the row is written when
+    the round ends, not derived from the latest one. The row carries what /health shows (each job's
+    name, exit code, outcome), never error text.
+
+    The write runs off the scheduling path (`_write_incidents`): this queues the round and starts
+    the one background writer if none is in flight, and returns it — None when one is already
+    running, which writes the new rows before it stops. A round stays in `pending` until the
+    database has taken it: one the database refuses — it is down, like the round's own jobs were —
+    is written by a later round's writer. Recording is best-effort: a failure is logged, and never stops the
+    rounds."""
+    from vending import settings
+
+    if not state.healthy and state.last_round_at:
+        with _INCIDENT_LOCK:
+            pending.append((state.last_round_at,
+                            [{"job": r.job, "exit_code": r.exit_code, "outcome": r.outcome}
+                             for r in state.results]))
+            del pending[:-PENDING_MAX]
+    if not pending or not settings.get("DATABASE_URL"):
+        return None
+    return start_incident_writer(pending, log)
+
+
+def start_incident_writer(pending: list,
+                          log: Callable[[str], None] = print) -> threading.Thread | None:
+    """Start the background writer for the queued rounds, unless one is already in flight: a
+    database that never answers then holds that one thread, and the rounds go on queueing in
+    `pending` for it (or for a later round's writer, once it has given up)."""
+    global _WRITER
+    with _INCIDENT_LOCK:
+        if _WRITER is not None and _WRITER.is_alive():
+            return None
+        _WRITER = threading.Thread(target=_write_incidents, args=(pending, log),
+                                   name="sync-incidents", daemon=True)
+        _WRITER.start()
+        return _WRITER
+
+
+def _write_incidents(pending: list, log: Callable[[str], None]) -> None:
+    """The background writer: write everything queued under the same timeouts as before
+    (`record_rounds`), on a connection bounded at the TCP layer (`INCIDENT_TCP`). The rows stay in
+    `pending` until the database has taken them, so a write that hangs or fails loses nothing, and
+    rounds queued while it ran are written before it stops. It gives up its place (`_WRITER`) under
+    the same lock the rounds queue under, so no round waits behind a writer that is leaving."""
+    global _WRITER
+    try:
+        while True:
+            with _INCIDENT_LOCK:
+                rows = list(pending)
+                if not rows:
+                    _WRITER = None
+                    return
+            from vending.db import connect
+
+            with connect(**INCIDENT_TCP) as conn:
+                record_rounds(rows, conn)
+            with _INCIDENT_LOCK:
+                pending[:] = [row for row in pending if row not in rows]
+    except Exception as problem:  # noqa: BLE001 - recording an incident must never stop the rounds
+        log(f"sync_incidents: {_describe(problem)}")
+    finally:
+        with _INCIDENT_LOCK:
+            if _WRITER is threading.current_thread():
+                _WRITER = None
 
 
 def run_round(jobs: list[Job], log: Callable[[str], None] = print, timeout: float | None = None,
-              running: dict[str, threading.Thread] | None = None) -> list[JobResult]:
+              running: dict[str, threading.Thread] | None = None,
+              needs: dict[str, tuple[str, ...]] | None = None) -> list[JobResult]:
     """Run every job once, in order, even if one fails. Never raises.
 
     `timeout` is in seconds (None waits for ever). A job that overruns keeps
     going in a daemon thread and is recorded in `running`; pass the same dict
     each round so it is skipped until that thread ends.
+
+    With `needs` (the worker's `NEEDS`), a job named there is skipped, as "skipped",
+    when one of the jobs it names didn't finish with exit 0 this round: it would
+    read what that job never brought in. The skipped job is still a row on /health,
+    with no exit code, so the round shows it didn't run.
     """
     running = {} if running is None else running
     results = []
@@ -147,6 +338,15 @@ def run_round(jobs: list[Job], log: Callable[[str], None] = print, timeout: floa
             results.append(JobResult(name, started.isoformat(), 0.0, None, "still running"))
             continue
         running.pop(name, None)
+        missing = None
+        if needs is not None:
+            missing = [r.job for r in results if r.job in needs.get(name, ())
+                       and (r.outcome != "finished" or r.exit_code != 0)]
+        if missing:
+            reason = f"skipped, {', '.join(missing)} didn't finish this round"
+            log(f"{started:%Y-%m-%d %H:%M:%S} {name}: {reason}")
+            results.append(JobResult(name, started.isoformat(), 0.0, None, "skipped", reason))
+            continue
         log(f"{started:%Y-%m-%d %H:%M:%S} {name}: starting")
         done: dict = {}
 
@@ -154,7 +354,7 @@ def run_round(jobs: list[Job], log: Callable[[str], None] = print, timeout: floa
             try:
                 done["code"] = int(run())
             except BaseException as problem:  # noqa: BLE001 - one job's crash must not stop the others
-                done["error"] = f"{type(problem).__name__}: {problem}"
+                done["error"] = _describe(problem)
 
         thread = threading.Thread(target=target, name=name, daemon=True)
         thread.start()
@@ -181,10 +381,12 @@ REPO = "https://github.com/marshall-strong/agentic-vending"
 PAGES_SETTING = "READONLY_DATABASE_URL"
 # The simulated seasons on the dashboard's demo copy (`vending.simulate.demo.ROOT`): files only, no database.
 SIMULATIONS = "/dashboard/demo/simulations"
-OUTCOMES = ("finished", "crashed", "timed out", "still running")
+OUTCOMES = ("finished", "crashed", "timed out", "still running", "skipped")
 JOB_NAMES = {"slots_check": "Our slot assignment", "sync_history": "Machine readings (sales history)",
              "sync_requests": "Purchase requests and receipts", "sync_catalog": "Product catalog",
-             "sync_product_requests": "Catalog requests: approved or rejected"}
+             "sync_product_requests": "Catalog requests: approved or rejected",
+             "midweek_wake": "Midweek wake-up check",
+             "tracking_daily": "Daily tracking check (off unless TRACKING_DAILY=on)"}
 
 
 def _eastern(moment: str | None) -> str:
@@ -196,6 +398,31 @@ def _eastern(moment: str | None) -> str:
     except (TypeError, ValueError):
         return "unknown"
     return f"{local:%a %d %b}, {local.hour % 12 or 12}:{local:%M %p} ET"
+
+
+SCHEDULE_OUTCOMES = ("running", "submitted", "skipped", "halted", "failed", "missed")
+# The most this worker runs; the database's `agent_schedule_mode` must say so too.
+SCHEDULE_MODES = {"dry-run": "dry runs",
+                  "live": "live where agent_schedule_mode in the database says live too, else dry runs",
+                  "invalid": "off: a setting is wrong (see the log)"}
+
+
+def _schedule_facts(schedule: dict | None) -> str:
+    """The scheduled agent runs' boxes on /, or nothing when they're off (`agent_schedule` not in /health)."""
+    if not isinstance(schedule, dict):
+        return ""
+    mode = SCHEDULE_MODES.get(schedule.get("mode"), "unknown")
+    last = schedule.get("last") if isinstance(schedule.get("last"), dict) else None
+    if last is None:
+        done = "none yet"
+    else:
+        outcome = last.get("outcome") if last.get("outcome") in SCHEDULE_OUTCOMES else "unknown"
+        done = f"{outcome}, due {_eastern(last.get('due_at'))}"
+    if schedule.get("model_key") is False:
+        mode += "; model key missing, so each run fails before any request"
+    return (f'\n    <div class="fact"><b>Scheduled agent run</b>{escape(mode)}; next '
+            f'{escape(_eastern(schedule.get("next_at")))}</div>'
+            f'\n    <div class="fact"><b>Last scheduled run</b>{escape(done)}</div>')
 
 
 def pages_ready() -> bool:
@@ -297,7 +524,7 @@ def home_page(public: dict, pages: bool = False) -> str:
   <section class="facts" aria-label="Sync rounds">
     <div class="fact"><b>Last round</b>{escape(_eastern(public.get("last_round_at")))}</div>
     <div class="fact"><b>Next round</b>{escape(_eastern(public.get("next_round_at")))}</div>
-    <div class="fact"><b>Rounds since start</b>{int(public.get("rounds") or 0)}</div>
+    <div class="fact"><b>Rounds since start</b>{int(public.get("rounds") or 0)}</div>{_schedule_facts(public.get("agent_schedule"))}
   </section>
   <section>
     <h2>Each job in the last round</h2>
@@ -528,11 +755,37 @@ def _stop(signum, frame):
     raise Stopped
 
 
+def _midweek_on() -> bool:
+    """Whether the midweek wake check is on (`MIDWEEK_WAKE`): only then can a round ask for a midweek run."""
+    from vending import midweek_wake
+
+    return midweek_wake.enabled()
+
+
+def wait_or_wake(event: threading.Event, seconds: float) -> bool:
+    """Sleep `seconds`, or less: True as soon as `event` is set (a scheduled agent run's thread ended). In steps of
+    a second at most, so Ctrl+C still stops the worker promptly where a lock's wait can't be interrupted (Windows)."""
+    end = time.monotonic() + seconds
+    while (left := end - time.monotonic()) > 0:
+        if event.wait(min(left, 1.0)):
+            return True
+    return False
+
+
 def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
-         sleep: Callable[[float], None] = time.sleep, log: Callable[[str], None] = print,
-         reads=None, clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> int:
-    """`reads` is the visit reader (`vending.visit_polls.Reader`). Left out, the real worker, started with
-    no `jobs`, builds its own from the settings; a test that passes `jobs` gets none, so it can't read the machine."""
+         sleep: Callable[[float], None] | None = None, log: Callable[[str], None] = print,
+         reads=None, clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc), scheduler=None,
+         wait: Callable[[threading.Event, float], bool] | None = None, price_checks=None) -> int:
+    """`reads` is the visit reader (`vending.visit_polls.Reader`) and `scheduler` the scheduled agent runs
+    (`vending.agent_schedule.Scheduler`). Left out, the real worker, started with no `jobs`, builds each from
+    the settings; a test that passes `jobs` gets neither, so it can't read the machine or start the agent.
+
+    `sleep` waits between rounds (left out, real time). With scheduled runs on, `wait(event, seconds)` waits instead
+    and returns True early when `event` is set: a run's thread ended, so the next time is worked out again. Left
+    out, `wait_or_wake` in real time, or `sleep` (never woken early) when a test passes its own `sleep`."""
+    if wait is None:
+        wait = wait_or_wake if sleep is None else (lambda event, seconds: sleep(seconds) or False)
+    sleep = sleep or time.sleep
     parser = argparse.ArgumentParser(prog="python -m vending.worker", description=__doc__.splitlines()[0])
     parser.add_argument("--once", action="store_true", help="one round, then exit with the worst exit code")
     parser.add_argument("--every", type=float, default=float(os.environ.get("SYNC_EVERY_MINUTES") or 60),
@@ -564,8 +817,23 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
         from vending import visit_polls    # imported here: it needs the database driver, and the worker's other code doesn't
 
         reads = visit_polls.default_reader(log)
+    if scheduler is None and jobs is None and not args.once:
+        from vending import agent_schedule
+
+        scheduler = agent_schedule.default_scheduler(log)
+    if price_checks is None and jobs is None and not args.once:
+        from vending import price_schedule
+
+        price_checks = price_schedule.default_checks(log)
+    # The weekly price check (`vending.price_schedule`): it runs in its own thread, like a scheduled agent run.
+    prices = price_checks if hasattr(price_checks, "tick") else None
+    # `Invalid` only reports a wrong setting on /health; it has no times to run.
+    ticks = scheduler if hasattr(scheduler, "tick") else None
+    # Set when a scheduled run's thread ends, to wake the loop before the next sync (`Scheduler.run_ended`).
+    ended = getattr(ticks, "run_ended", None)
     jobs = default_jobs() if jobs is None else jobs
-    state = State()
+    state = State(schedule=scheduler, price_checks=price_checks)
+    unrecorded: list = []                 # failed rounds waiting for the database (`record_failed_round`)
     running: dict[str, threading.Thread] = {}
     server = serve_health(state, args.port) if args.port and not args.once else None
     previous = None
@@ -574,9 +842,13 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
         if threading.current_thread() is threading.main_thread():
             previous = signal.signal(signal.SIGTERM, _stop)
         while True:
-            state.results = run_round(jobs, log, args.timeout * 60, running)
+            state.results = run_round(jobs, log, args.timeout * 60, running, NEEDS)
             state.rounds += 1
             state.last_round_at = datetime.now(timezone.utc).isoformat()
+            record_failed_round(state, unrecorded, log)
+            # The round's midweek wake check may have asked for a run (#219): the scheduler looks at its next tick.
+            if ticks is not None and hasattr(ticks, "poke") and _midweek_on():
+                ticks.poke()
             if args.once:
                 return max((r.exit_code if r.exit_code is not None else 1) for r in state.results)
             now = clock()
@@ -591,10 +863,31 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
                 # Until the next round, take the visit reads when they are due. They are not jobs of the
                 # round: a read that fails is logged and never reaches `state`, so /health never shows it.
                 wake = due if reads is None else min(due, reads.next_due(now))
-                sleep((wake - now).total_seconds())
+                if ticks is not None:
+                    wake = min(wake, ticks.next_due(now))
+                if prices is not None:
+                    wake = min(wake, prices.next_due(now))
+                # Never negative: a wake time already past (a supervisor's deadline crossed during a long
+                # round) means now.
+                seconds = max(0.0, (wake - now).total_seconds())
+                if ended is None:
+                    sleep(seconds)
+                elif wait(ended, seconds):
+                    # A scheduled run ended: work out the next wake again, as its end may bring a time due
+                    # before the next sync (a second window that day). Cleared first, so a run that ends
+                    # meanwhile still wakes the next wait.
+                    ended.clear()
+                    now = clock()
+                    continue
                 if wake >= due:
                     break
-                reads.tick(clock())
+                if reads is not None:
+                    reads.tick(clock())
+                # A scheduled agent run starts in its own thread, so this returns in a moment.
+                if ticks is not None and ticks.next_due(now := clock()) <= now:
+                    ticks.tick(now)
+                if prices is not None and prices.next_due(now := clock()) <= now:
+                    prices.tick(now)
                 now = clock()
     except (KeyboardInterrupt, Stopped):
         log("stopping")
@@ -605,6 +898,12 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
         if server is not None:
             server.shutdown()
             server.server_close()
+        # Give an in-flight incident write a bounded chance to land before the process leaves (it
+        # is bounded at the TCP layer and by `WRITE_TIMEOUT`): a hung one dies with the process.
+        with _INCIDENT_LOCK:
+            writer = _WRITER
+        if writer is not None:
+            writer.join(30)
 
 
 if __name__ == "__main__":

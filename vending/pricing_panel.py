@@ -61,8 +61,6 @@ RANKS = ("primary", "alternate")
 WILDCARD_STALE = ("The wildcard setting names a selection that isn't ours in the stored assignment, so every "
                   "selection here is held to the regular ceiling and the planner won't plan until a person "
                   "sets the wildcard again.")
-# The runs whose plan the panel follows: the dashboard's `WATCHED_MODES` (a test keeps them equal).
-PLAN_MODES = ("live", "dry-run")
 # The sparkline's drawing box, in px.
 SPARK_W, SPARK_H, SPARK_PAD = 112, 26, 3
 
@@ -95,7 +93,7 @@ def read(conn: psycopg.Connection, now: datetime) -> dict:
     slots, wildcard = settings.slots, settings.wildcard_slot
     stale = wildcard is None and config.get_value(conn, "wildcard_slot") is not None
     options: dict[str, dict[str, Any]] = {}
-    for o in sourcing.options_for(conn, _our_products(conn, slots)):
+    for o in sourcing.options_for(conn, _our_products(conn, slots, now)):
         options.setdefault(o.sku, {})[o.rank] = o
     ceilings = {slot: settings.ceiling_for(slot) for slot in slots}
     return {"slots": slots, "ceiling_cents": settings.price_ceiling_cents, "tax_percent": settings.tax_percent,
@@ -104,11 +102,11 @@ def read(conn: psycopg.Connection, now: datetime) -> dict:
             "options": options, "since": since, "history": machine_state.price_history(conn, now, since)}
 
 
-def _our_products(conn: psycopg.Connection, slots: tuple[str, ...]) -> list[str]:
-    """Every product our receipts put in `slots` (ours, from `read`), every product the latest agent plan
+def _our_products(conn: psycopg.Connection, slots: tuple[str, ...], now: datetime) -> list[str]:
+    """Every product our receipts put in `slots` (ours, from `read`), every product the latest live plan
     names for them, and every product the first-fill plan puts in them. Filtered to `slots`: no other
     selection's product is returned."""
-    return sorted(set(_receipt_and_plan_products(conn, slots)) | set(_first_fill_products(conn, slots)))
+    return sorted(set(_receipt_and_plan_products(conn, slots, now)) | set(_first_fill_products(conn, slots)))
 
 
 def _first_fill_products(conn: psycopg.Connection, slots: tuple[str, ...]) -> list[str]:
@@ -134,16 +132,17 @@ def _first_fill_products(conn: psycopg.Connection, slots: tuple[str, ...]) -> li
     return [s.sku for s in checked.slots.values() if s.slot in slots and isinstance(s.sku, str)]
 
 
-def _receipt_and_plan_products(conn: psycopg.Connection, slots: tuple[str, ...]) -> list[str]:
+def _receipt_and_plan_products(conn: psycopg.Connection, slots: tuple[str, ...], now: datetime) -> list[str]:
     return [sku for (sku,) in conn.execute(
         "select sku from purchase_lines where slot = any(%(slots)s) and sku is not null"
         " union"
-        " select e->>'product' from (select plan from agent_runs where plan is not null and mode = any(%(modes)s)"
+        " select e->>'product' from (select plan from agent_runs where plan is not null"
+        "   and mode = 'live' and started_at <= %(now)s"
         "   order by started_at desc, id desc limit 1) latest,"
         "   jsonb_array_elements(case when jsonb_typeof(latest.plan->'slots') = 'array'"
         "                             then latest.plan->'slots' else '[]'::jsonb end) e"
         " where jsonb_typeof(e) = 'object' and e->>'slot' = any(%(slots)s) and jsonb_typeof(e->'product') = 'string'"
-        " order by 1", {"slots": list(slots), "modes": list(PLAN_MODES)})]
+        " order by 1", {"slots": list(slots), "now": now})]
 
 
 def build(snap: dict, raw: dict, now: datetime) -> dict:
@@ -170,6 +169,10 @@ def build(snap: dict, raw: dict, now: datetime) -> dict:
         cost, basis = (receipt, "receipt") if receipt is not None else (_expected(options, product), "expected")
         if cost is None:
             basis = None
+        # An expected price can itself come from an earlier receipt (`vending.receipt_prices`): say so.
+        primary = (options.get(product) or {}).get("primary") if product else None
+        expected_from = (("receipt" if primary.from_receipt else "agent" if primary.from_agent else "person")
+                         if basis == "expected" else None)
         floor, parts = _floor(receipt, options.get(product), tax)
         legal, problems = _check(price, floor, ceiling)
         if legal is False and receipt is not None and _check(price, floor_cents(receipt, tax), ceiling)[0]:
@@ -181,7 +184,7 @@ def build(snap: dict, raw: dict, now: datetime) -> dict:
         rows.append({
             "slot": slot, "product": product, "product_from": product_from,
             "price": sale.get("price"),
-            "unit_cost": _dollars(cost), "cost_basis": basis,
+            "unit_cost": _dollars(cost), "cost_basis": basis, "expected_from": expected_from,
             "ceiling": _dollars(ceiling),
             "floor": _dollars(floor), "floor_from": parts, "legal": legal, "problems": problems,
             "margin": None if price is None or cost is None else _dollars(Fraction(price * 100, 100 + tax) - cost),
@@ -414,8 +417,15 @@ def _legal_pill(legal: bool | None, floor: str | None) -> str:
 
 
 def _row(r: dict, since: datetime, until: datetime) -> str:
-    cost = (f'{_usd(r["unit_cost"])} <span class="pill {"muted" if r["cost_basis"] == "receipt" else "warn"}">'
-            f'{"receipt" if r["cost_basis"] == "receipt" else "expected"}</span>' if r["unit_cost"] is not None
+    basis = ("receipt" if r["cost_basis"] == "receipt"
+             else "expected · receipt" if r.get("expected_from") == "receipt"
+             else "expected · agent" if r.get("expected_from") == "agent" else "expected")
+    tip = (' title="The sourcing price, taken from what the worker paid on an earlier receipt"'
+           if r.get("expected_from") == "receipt"
+           else ' title="The sourcing price the agent found itself, with a web search on the store&#39;s own site"'
+           if r.get("expected_from") == "agent" else "")
+    cost = (f'{_usd(r["unit_cost"])} <span class="pill {"muted" if r["cost_basis"] == "receipt" else "warn"}"{tip}>'
+            f'{basis}</span>' if r["unit_cost"] is not None
             else '<span class="dim">unknown</span>')
     floor_title = "; ".join(r["floor_from"]) or "no receipt or sourcing cost, so no floor"
     margin = r["margin"]
@@ -477,7 +487,9 @@ def html(panel: dict, ours: dict) -> str:
             if d.get("wildcard") and d.get("wildcard_ceiling") else "")
     lede = (f'<p class="lede sub">Ceiling ${_e(d["ceiling"])}{wild}. Shelf prices include {_e(d["tax_percent"])}% sales tax; '
             f'margin is what one sale keeps after it, less the unit cost. <b>Expected</b> costs are from sourcing '
-            f'(no receipt yet). The line is the shelf price at each poll over the last {_e(d["history_days"])} days.'
+            f'(no receipt for the units in the slot); <b>expected · receipt</b> means that sourcing price is what an '
+            f'earlier receipt paid, and <b>expected · agent</b> that the agent found it with a web search. '
+            f'The line is the shelf price at each poll over the last {_e(d["history_days"])} days.'
             + (f' <b class="bad-text">{"; ".join(flags)}.</b>' if flags else "")
             + (f' <b class="warn-text">{WILDCARD_STALE}</b>' if d.get("wildcard_stale") else "")
             + "</p>")

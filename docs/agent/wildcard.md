@@ -2,9 +2,9 @@
 
 One fixed slot tests products for the other 19 and may sell up to $8.00; it never moves, holds a product no other slot holds, and one purchase for it costs at most $82.00.
 
-**Why** (#100; #110, item 1): a new product earns a regular slot by selling well in the wildcard first.
+**Why** (#100; #110, item 1): a new product normally earns a regular slot by selling here first (exception: `variety`).
 
-**Pick it once.** If `get_machine_state` says no wildcard slot is set, pick one with `set_wildcard_slot` and say why: one of ours on a middle shelf (2 to 4), not column 5 (beside the centre line), in a column taking cans and bottles. Only a person can change it. Until it is set, no slot goes above $6.50.
+**Pick it once.** If `get_machine_state` says no wildcard slot is set, pick one with `set_wildcard_slot` and say why: one of ours on a middle shelf (2 to 4), not column 4 or 5 (centre), in a column taking cans and bottles. Only a person can change it. Until it is set, no slot goes above $6.50.
 
 **Each Friday plan**, read `wildcard_trial` in `get_machine_state`:
 

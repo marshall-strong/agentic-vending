@@ -17,7 +17,7 @@ from fractions import Fraction
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from vending import capacity
+from vending import capacity, demand
 from vending.evadts import crc16_arc
 from vending.slots import DEVICE_ID
 
@@ -111,10 +111,11 @@ class Product:
     reference_cents: int        # docs/agent/price-history.md
     rate: float                 # units per class day per stocked slot at the reference price
     rate_basis: str
+    counted_column: int | None = None   # a person's count (`capacity_overrides`), for a size the chart lacks
 
     @property
     def column(self) -> int:
-        units = capacity.from_size(self.size)
+        units = self.counted_column or capacity.from_size(self.size)
         if units is None:
             raise ValueError(f"{self.sku}: the loading chart has no figure for {self.size!r}")
         return units
@@ -187,6 +188,40 @@ PRODUCTS: tuple[Product, ...] = (
 )
 BY_SKU = {p.sku: p for p in PRODUCTS}
 
+# A drink from an export (`vending.simulate.export`) whose product line has no fall history and no product above:
+# the mean of the mid segments, at the plan's own price (assumed). A drink of a line above takes that line's rate.
+UNKNOWN_LINE_RATE = MID
+
+
+def product_for(entry: dict, units_per_pack: int, pack_cents: int, price_cents: int | None,
+                column: int | None = None) -> Product | None:
+    """A world product for a catalog drink the world doesn't have (`entry`: the bridge's product fields), bought
+    in `units_per_pack` for `pack_cents`. Its rate and reference price are its product line's, where a product
+    above has that line, else `UNKNOWN_LINE_RATE` at `price_cents` (the plan's price; $3.00 without one). None
+    when neither the loading chart nor `column` (a person's count, `capacity_overrides`) sizes it."""
+    if column is None and capacity.from_size(entry.get("size") or "") is None:
+        return None
+    kin = next((p for p in PRODUCTS if p.line.casefold() == str(entry.get("line") or "").casefold()), None)
+    if kin is not None:
+        rate, reference, basis = kin.rate, kin.reference_cents, f"{kin.line}'s rate ({kin.rate_basis})"
+    else:
+        rate, reference = UNKNOWN_LINE_RATE, price_cents or 300
+        basis = "no fall line: the mid segments' mean, at the plan's price (assumed)"
+    return Product(entry["sku"], entry.get("name") or entry["sku"], entry.get("line") or "", entry.get("flavor") or "",
+                   entry["size"], units_per_pack, pack_cents, None, True, reference, rate, basis,
+                   column if column else None)
+
+
+def register(products: list[dict]) -> list[str]:
+    """Add products (a `Product`'s fields, as a season keeps them) to the world, for this process. A SKU the world
+    already has keeps its own. Returns the SKUs added."""
+    added = []
+    for fields in products:
+        if fields["sku"] not in BY_SKU:
+            BY_SKU[fields["sku"]] = Product(**fields)
+            added.append(fields["sku"])
+    return added
+
 # The tag on an empty slot before its first load (assumed). The machine starts empty, and the worker sets
 # each slot's tag to the sale price of what it loads, so this only shows in the polls of empty slots.
 OPENING_PRICE_CENTS = 250
@@ -197,8 +232,9 @@ OPENING_PRICE_CENTS = 250
 # a class day averages 1. 66% of units sell 8 to 11 AM (finding 7); the rest of the day is assumed.
 _DOW = (1.19, 1.74, 1.10, 1.61, 1.33)
 DOW = tuple(v * 5 / sum(_DOW) for v in _DOW)
-HOUR_SHARE = {7: 0.02, 8: 0.26, 9: 0.22, 10: 0.18, 11: 0.08, 12: 0.07, 13: 0.06, 14: 0.04, 15: 0.03,
-              16: 0.02, 17: 0.01, 18: 0.01}
+# The hourly shares live in `vending.demand`, which the midweek wake check reads too; floats here,
+# as before, so the simulator's arithmetic is unchanged.
+HOUR_SHARE = {hour: float(share) for hour, share in demand.HOUR_SHARE.items()}
 OFF_DAY = 0.05      # a weekend or no-class weekday sells "about nothing" (inventory-demand.md, assumptions)
 
 
@@ -378,6 +414,12 @@ def _store_unit_prices() -> dict[tuple[str, str], Fraction]:
 
 
 STORE_UNIT_PRICE = _store_unit_prices()
+
+
+def register_prices(rows: list[tuple[str, str, int, int]]) -> None:
+    """Unit prices from an export, as (sku, store, pack cents, units per pack): they win over the sourcing files'."""
+    for sku, store, cents, units in rows:
+        STORE_UNIT_PRICE[(sku, store.casefold())] = Fraction(cents, units)
 
 
 def market_pack_cents(seed: int, sku: str, units_per_pack: int, store: str, on: date) -> int:

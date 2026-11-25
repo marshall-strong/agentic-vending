@@ -12,18 +12,31 @@ so the container joins it with Tailscale in userspace mode.
 
 `Dockerfile` builds one image with the package and the Tailscale binaries. Its default command
 is `python -m vending.worker`: every hour, at 5 minutes past (UTC), it runs `python -m vending.sync_history`,
-`python -m vending.sync_requests`, `python -m vending.sync_catalog` and
+`python -m vending.sync_requests`, `python -m vending.sync_catalog`,
 `python -m vending.sync_product_requests` (which catalog requests were approved or rejected),
+`python -m vending.midweek_wake` and
+`python -m vending.tracking_daily` (the day's tracking check, only when turned on: see below),
 each with a 30-minute
 limit (`JOB_TIMEOUT_MINUTES`), and it answers `GET /health` on port 8080 with the last round's
 outcome per job (a `503` means the last round failed). Its root, `GET /`, is the same status as a
 page for people: whether the last round passed, each job's outcome, when the last and next rounds
 run (Eastern time), and links to the docs. It reloads itself every minute and works on a phone.
 Both are public, so they show exit codes and outcomes only, never error text (a database error
-names the host and user); the errors are in the log. The page is built from the same data as
+names the host and user); the errors are in the log, a database error as its class and SQLSTATE. The page is built from the same data as
 `/health`, so it can't show more. `docker/entrypoint.sh` joins the tailnet first and
 routes plain-http traffic (the bridge) through Tailscale's local proxy; HTTPS (the Anthropic API)
 and Postgres go straight out, which is why `DEX_BASE_URL` must be `http://`.
+
+**Midweek wake-up** (`vending.midweek_wake`, #219). After the syncs, a job runs the team's
+midweek rule (docs/restock-policy.md, section 2) over the stored facts the agent reads: when a slot
+of ours is projected to sell out before this week's Friday restock and a paid midweek visit would
+save more margin than the fee, it records one wake-up row — at most one per Saturday-to-Friday
+week, Eastern, held in the database — names the slots and the arithmetic in its reason, and asks
+for a midweek agent run. `MIDWEEK_WAKE` is off by default; `on` (any case) runs the job, any other
+value or unset leaves it out and the job opens no database connection. The dashboard's Needs
+attention and the briefing show the row, so the run and the visit fee have a why on the record.
+The scheduled agent runs start that midweek run, so it also needs `AGENT_SCHEDULE_MODE` and
+`agent_schedule_mode` (docs/agent.md, "Midweek runs").
 
 **Why 5 minutes past.** The course staff's poller reads the machine on the hour, and the bridge keeps
 every poll. A round at 5 past brings the new poll into our database about 5 minutes after it was
@@ -32,6 +45,24 @@ the last one, at whatever minute the container had started, so a poll could wait
 `SYNC_AT_MINUTE` changes the minute (`off` brings back an hour from the last round), and
 `SYNC_EVERY_MINUTES` the gap. With a minute set, the gap must divide 60 or be a multiple of it
 (15 gives :05, :20, :35 and :50).
+
+**The daily tracking check** (`vending/tracking_daily.py`, #218). The last job of each round sends our books
+to the bridge's tracking check once a day, from 06:00 Eastern, as of the newest poll already in the bridge's
+books. It is **off until the team turns it on**: it spends the day's one check at the course's bridge.
+
+| Setting | Default | |
+|---|---|---|
+| `TRACKING_DAILY` | `off` | `on` sends one check a day; `off` (or unset) sends none. Any other value fails the job |
+| `TRACKING_DAILY_AT` | `06:00` | The first Eastern time of day it may send (HH:MM, before 22:00). It sends in the first round from then that finds the books settled, and never from 22:00 |
+
+Turn it on: `az containerapp update --name ai-group-2-vend --resource-group data_systems_resource_group
+--set-env-vars TRACKING_DAILY=on`. Turn it off the same way with `off`. From the competition start, it never
+sends twice in an Eastern day, by the worker or a person, even after a restart: every send is in `tracking_checks`.
+Before the start the course allows unlimited checks for testing, so a person may send again by hand; the
+worker still sends at most once a day. A sync that didn't finish holds the day's check back until the next
+round, so it never reads books the round's syncs never brought in. With no ledger
+opening yet it logs a line and skips. The verdicts show on the dashboard (Tracking check), an `outside` one
+in the incident log and the agent's briefing.
 
 **Friday reads around our visit** (`vending/visit_polls.py`, #172). Besides the hourly rounds, the
 worker asks the bridge to read the machine live (`POST /api/v1/poll`, about 8.5 s) on Fridays, once a
@@ -81,7 +112,8 @@ A read holds the bridge's one serial line, and anyone else's poll gets a `409` w
   failure is an error status, a timeout, a bridge that is down, or a step that broke; a read that went
   out but whose row is "not confirmed" is not one;
 - **a failed read never fails the round or `/health`.** Reads are not jobs of the round and appear in
-  neither. Only the log shows them.
+  neither. Only the log shows them, and it names a status, a size or a reason of our own, never what the
+  bridge sent back (`docs/integrity.md`, "Logs carry no poll bytes").
 
 Each step first re-reads our pending purchase requests (plain GETs, not machine reads), so a receipt
 is seen within a minute. The reads stop for the day once a request of ours was fulfilled that day and a
@@ -122,12 +154,60 @@ entrypoint keeps retrying every minute in the background. `tailscaled`'s own log
 fails); it is cut to its last 500 lines whenever it passes 1 MB, so an always-on replica's log
 can't fill the disk.
 
-**The agent loop does not run yet.** When the harness exists it starts `python -m vending.server`
-over stdio from the same image, with `VENDING_TOOLS=built` so only working tools are offered.
-Until then the container gets **no Anthropic key**, since nothing in it calls the model; the change
-that runs the agent loop here adds the secret to `$Secrets` in the deploy script, under the name the
-agent reads (`VENDING_ANTHROPIC_API_KEY`, per the README). The deploy of `c1505c2` on 11 Nov, from
-the script before this change, did set `ANTHROPIC_API_KEY` in the container. `--set-env-vars` only
+**The agent runs here only when the schedule is on** (`vending/agent_schedule.py`, #213). It is
+off unless both the app's `AGENT_SCHEDULE_MODE` env var and the database's `agent_schedule_mode`
+setting turn it on; the lower of the two runs. A scheduled run is live, and may send a restock request,
+only when both say `live`, from the competition's start (Thu 3 Dec), and after its checks before a send
+pass ([`docs/agent.md`](agent.md#live-scheduled-runs)); otherwise it is a dry run. Then it
+starts `vending.agent.run` at the times in `AGENT_SCHEDULE`, which starts `python -m vending.server` over stdio from the same image,
+with `VENDING_TOOLS=built` so only working tools are offered. [`docs/agent.md`](agent.md) has the
+settings, and a dry run to try on Azure before the first scheduled run. The container gets the model
+key as `VENDING_ANTHROPIC_API_KEY` (the name the agent reads, per the README), from the optional
+`vending-anthropic-api-key` secret in `$OptionalSecrets`. A deploy works without it, as it does
+without the read-only login: the script notes it is missing and goes on, and a scheduled run without
+it fails before any model request, which the dashboard shows. To add it, put
+`VENDING_ANTHROPIC_API_KEY` in `.env` and run with `-SetSecrets`. The schedule settings are not in
+the script. Set them on the app:
+`az containerapp update --name ai-group-2-vend --resource-group data_systems_resource_group --set-env-vars AGENT_SCHEDULE_MODE=dry-run`.
+A later deploy keeps them, because `--set-env-vars` only adds. To turn the runs off, change
+the database's setting (`python -m vending.config set agent_schedule_mode off --by <name>`, a bare
+word, so it works in every shell, Windows PowerShell 5.1 too): it reaches every replica at the next
+scheduled time, an old one still running during a deploy too, and a run that has been claimed but
+not started yet.
+
+**Live scheduled runs need the team's agreement first.** A live run spends the competition's money and
+sends a purchase request nobody looks at before it goes. Agree as a team, on GitHub, before anyone sets
+`live`. Do it before the team stops on Sun 29 Nov: from Thu 3 Dec nobody watches the runs. In this order:
+
+1. Migrations 029, 030 and 037 on the team database: `python -m vending.db migrate`, then again: it must say nothing
+   is pending. The worker refuses to schedule on a database that is behind, and the dashboard says so. Apply
+   030 while no submit runs, as 025 below: it waits at most 2 seconds for its lock.
+2. The container, with the mode, the times and the first day together, so nothing left from a test week stays
+   (`AGENT_SCHEDULE_FROM` on or before 2026-12-02):
+   `az containerapp update --name ai-group-2-vend --resource-group data_systems_resource_group --set-env-vars AGENT_SCHEDULE_MODE=live "AGENT_SCHEDULE=wed 14:00-22:00,thu 12:00-20:00" AGENT_SCHEDULE_FROM=2026-12-02`
+   (the worker reads these when it starts, so this makes a new revision).
+3. The database: `python -m vending.config set agent_schedule_mode live --by <name>`.
+4. Check the effective schedule on the active revision: `az containerapp show --name ai-group-2-vend --resource-group data_systems_resource_group --query "properties.template.containers[0].env" -o table` lists the settings, then
+   `az containerapp exec --name ai-group-2-vend --resource-group data_systems_resource_group --command sh` and, in it, `python -m vending.agent_schedule`. It must say `live, from Wed 02 Dec 2026`, the
+   times `wed 14:00-22:00, thu 12:00-20:00`, the database's setting `live`, and no missing migrations
+   ([`docs/agent.md`](agent.md#live-scheduled-runs)). The first live order is the Thu 3 Dec 12:00 ET run.
+
+Turn it off with one command,
+`python -m vending.config set agent_schedule_mode off --by <name>`: it applies from the next scheduled
+time. `python -m vending.config set agent_schedule_mode dry-run --by <name>` keeps the runs, as dry runs.
+The halt switch (`python -m vending.halt on --by <name>`) stops a run that has already started.
+
+**The weekly price check** (`vending/price_schedule.py`, #202) is off the same way, twice: the app's
+`PRICE_CHECK_MODE` env var and the database's `price_check_mode` (`off`, `dry-run` or `live`; the lower runs).
+It runs at `PRICE_CHECK_SCHEDULE` (default `tue 12:00-20:00` ET), before Wednesday's restock run, under its own
+weekly cap, `price_check_weekly_cap_cents` (default 300). It needs migrations 032 to 034 and the model key. To
+turn it on: `az containerapp update --name ai-group-2-vend --resource-group data_systems_resource_group
+--set-env-vars PRICE_CHECK_MODE=live`, then `python -m vending.config set price_check_mode live --by <name>`. To
+run it on Haiku with the Sonnet check: `python -m vending.config set price_search_model claude-haiku-5-5 --by
+<name>` (this also moves the agent's own lookups to Haiku; `price_check_model` stays Sonnet). `python -m
+vending.price_schedule` shows the settings and the latest runs. Turn it off with `python -m vending.config set
+price_check_mode off --by <name>`.
+The deploy of `c1505c2` on 11 Nov, from an older script, set `ANTHROPIC_API_KEY` in the container. `--set-env-vars` only
 adds, so the script now passes `--remove-env-vars` for it when the app still has it (the list is
 `$Retired`). The `anthropic-api-key` secret itself stays in the app, unused by any variable; to
 delete it:
@@ -140,6 +220,11 @@ a migration, a person runs it against Azure, from a laptop with `DATABASE_URL` p
 ```
 python -m vending.db migrate
 ```
+
+Apply migrations 025 (`purchase_submissions.purpose`, for `python -m vending.fill`) and 030
+(`purchase_submissions.schedule_due`, #238) while no submit runs: the agent paused (`python -m vending.halt on --by NAME`) and no fill being sent. It waits at
+most 2 seconds for its lock. If a submit holds the table, it fails with "lock timeout" and changes
+nothing; run it again once the submit is over.
 
 Apply migration 020 before deploying the dashboard that reads the first-fill plan. Use the same
 owner login that ran `python -m vending.pages grant` so the page login inherits read access.
@@ -174,17 +259,18 @@ answers 503 until a person looks. The instructors change our assignment exactly 
 server, and that change is what the competition uses (David, 16 Nov; assumption A16). So a failed
 `slots_check` before the start most likely means the change has come: check it with the
 instructors, then run `python -m vending.slots record`, and replan the day-one fill if it is
-already bought.
+already bought. The change came by 20 Nov, and David says the slots won't change again this
+quarter (`docs/planning/2026-11-20-david-update.md`).
 
 **Our team.** Every answer must name our team, `SLOTS_TEAM` (unset: `group-b`, the name the server
 has given since 12 Nov). An answer for another team, or with no team, is refused, so a swapped key
-or a misconfigured bridge can't hand us the other half of the machine.
+or a misconfigured bridge can't hand us an assignment outside our team.
 
 **The lock.** The assignment is fixed from the start. The lock time is the setting `SLOTS_LOCK_AT`,
 an ISO 8601 time with its offset; unset, it is `2026-12-03T00:00:00-05:00` (midnight Eastern,
 Thu 3 Dec, the first day of Winter Quarter on the Institute's calendar and the start David gave on
-12 Nov). If the instructors move the start (to Wed 2 Dec, say), set it on the Container App, for
-example `2026-12-02T00:00:00-05:00`. Times are taken from the database clock, not the host's.
+12 Nov; settled, assumption A24). To move the lock, set it on the Container App, for example
+`2026-12-02T00:00:00-05:00`. Times are taken from the database clock, not the host's.
 Each process reads these settings itself: when you run `record` or `confirm` from a laptop, set the
 same `SLOTS_LOCK_AT` and `SLOTS_TEAM` as the Container App. Every `record`, `check` and `confirm`
 prints the lock and team it used, so a difference shows.
@@ -236,6 +322,22 @@ https://ai-group-2-vend.bravegrass-0fe81ba9.eastus.azurecontainerapps.io/db
 at `/dashboard/state.json`. `/db` is the DB explorer ([`db-explorer.md`](db-explorer.md)). The
 home page links to both once they are set up. They are `vending/pages.py`.
 
+Beside the dashboard are its charts, each built per request from the same read-only login:
+
+| Route | What it shows |
+|---|---|
+| `/dashboard/money` | The money chart ([`money-chart.md`](money-chart.md)): competition money by day since the ledger's opening |
+| `/dashboard/pnl` | The weekly P&L ([`pnl-report.md`](pnl-report.md)); `?start`, `?end` and `?view` as in the local report |
+| `/dashboard/spend` | Development spend by week and day ([`dev-spend.md`](dev-spend.md)), up to the ledger's opening |
+| `/dashboard/demo/money` | The money chart with its seeded made-up data, under a DEMO banner. No database |
+| `/dashboard/demo/spend` | Dev spend from the team's run notes, under a DEMO banner. No database |
+
+Before the ledger's opening entry (or before an opening recorded ahead), the money chart and the
+P&L show no figures: they say there is no competition money yet, and the money chart links its
+demo. Only the two demo routes draw made-up data. A rendered chart is kept for 60 seconds, so
+people reloading charts can't keep both page connections busy. Views of the charts are not counted
+as visits: `page_visits.page` accepts only `/login`, `/dashboard` and `/db` (migration 016).
+
 **One shared password** (`vending/gate.py`, since 15 Nov 2026). Every page except `/health`
 asks for it first, at `/login`; a browser that gives it stays signed in for 30 days, and
 `/logout` forgets it in that browser only. The sign-in is a signed cookie the server keeps
@@ -285,13 +387,20 @@ on the server.
 table holds a password or a key. **Left out:** the selections not assigned to us (the machine
 stores every selection, and `/db` shows only those in the stored assignment in `poll_selections`
 and `slot_counts`, and none while nothing is stored; the dashboard's JSON counts likewise), the dev machines' hostnames in `model_calls.host`, and the error text of failed tool calls and failed
-runs (`action_log.detail` and `result`, `agent_runs.detail`, where the row failed), because a
+runs (`action_log.detail` and `result`, `agent_runs.detail`, where the row failed, and
+`agent_steps.content` where `is_error` is true), because a
 database error names the host and the user. Refusals keep their text. The pages' own errors show
 one plain sentence; the detail is in the container's log.
 `/db` also hides the machine-wide totals in `polls` (`total_paid_cents` and `total_paid_units`) in
 every row. They may be used only from polls taken before the fall cut (`FALL_CUTOFF`, 18 Nov 2026
 00:00 Eastern when unset; `docs/integrity.md`), and from the cut on the total minus ours is the
 other selections' sales. The explorer can't test a poll's time, so it hides them for every poll.
+The money chart's receipt markers name a slot and product only for selections in the current
+assignment; a line for any other keeps its money in the totals and says only that it isn't ours now.
+
+**Script policies.** The money chart and dev spend carry their data inside the page and fetch
+nothing. Their one inline script runs by its SHA-256 hash in the `Content-Security-Policy`, so no
+other script can run. The P&L has no script; its one form sends a GET back to `/dashboard/pnl`.
 
 ### Setting up the read-only login (once)
 

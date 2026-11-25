@@ -13,6 +13,8 @@ Kevin sent David the open questions from #102 and the 12 Nov notes (`2026-11-12-
 | Thu 3 Dec | The machine goes live with our products | 12 Nov notes, row 2 |
 | **Thu 3 Dec, 23:59** | **The first regular restock request is due.** A **valid** request received by then is filled at the Fri 4 Dec visit | Row 5 |
 
+**Update, 20 Nov.** The redraw happened by 20 Nov, and the slots are final for the quarter. Staff empty and stock the machine on Mon 30 Nov. The machine does not operate until Thu 3 Dec, the start; the email's "1 or 2 Dec" is when stocking is finished. See [the 20 Nov notes](2026-11-20-david-update.md).
+
 ## The answers
 
 | # | Question | David's answer | Status |

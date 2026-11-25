@@ -20,7 +20,7 @@ The copy sits behind the same password as the live page, and its views are not c
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from fractions import Fraction
 from pathlib import Path
@@ -31,10 +31,13 @@ from vending import dashboard
 DEMO, DEMO_STATE = "/dashboard/demo", "/dashboard/demo/state.json"
 LIVE = dashboard.DEMO_LIVE_HREF
 SNAPSHOT = Path(__file__).with_name("snapshot.json")
+# The Products page drawn from made-up data (`vending.products_page.DEMO_ROUTE`), linked from Back stock.
+DEMO_PRODUCTS = "/dashboard/demo/products"
 # Links on the demo page: back to the live page first.
-NAV = (("Live dashboard", LIVE), ("Home", "/"))
+NAV = (("Live dashboard", LIVE), ("Products", DEMO_PRODUCTS), ("Home", "/"))
 
-_TAGS = {"$datetime": datetime.fromisoformat, "$decimal": Decimal, "$fraction": Fraction}
+_TAGS = {"$datetime": datetime.fromisoformat, "$date": date.fromisoformat,
+         "$decimal": Decimal, "$fraction": Fraction}
 
 
 class DemoError(Exception):
@@ -42,13 +45,15 @@ class DemoError(Exception):
 
 
 def encode(value: Any) -> Any:
-    """`value` as plain JSON types: dates, Decimals and Fractions become one-key tagged objects.
+    """`value` as plain JSON types: dates, datetimes, Decimals and Fractions become one-key tagged objects.
 
     Raises TypeError for anything else, so a new kind of value in the snapshot is noticed when the
     file is made, not when the page is served. Tuples become lists, as in the live JSON.
     """
     if isinstance(value, datetime):
         return {"$datetime": value.isoformat()}
+    if isinstance(value, date):
+        return {"$date": value.isoformat()}
     if isinstance(value, Decimal):
         return {"$decimal": str(value)}
     if isinstance(value, Fraction):
@@ -92,9 +97,19 @@ def load(path: Path = SNAPSHOT) -> dict:
     return snap
 
 
+# The demo's run pages (`vending.run_page`), followed by a run id.
+DEMO_RUN = "/dashboard/demo/run/"
+
+
 def page() -> str:
     """The demo page: the live page's `render`, in demo mode."""
-    return dashboard.render(load(), json_href=DEMO_STATE, nav=NAV, demo=True)
+    return dashboard.render(load(), json_href=DEMO_STATE, nav=NAV, demo=True,
+                            charts={"products": DEMO_PRODUCTS, "run": DEMO_RUN})
+
+
+def run_data(run_id: int) -> dict | None:
+    """A run page's data from the snapshot (`run_pages`, by run id), or None when the demo has none for it."""
+    return load().get("run_pages", {}).get(str(run_id))
 
 
 def state_json() -> str:

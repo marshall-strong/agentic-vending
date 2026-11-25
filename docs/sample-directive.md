@@ -142,6 +142,8 @@ Three fixes follow from this, all in how the planner writes the request, not in 
 2. When the slot's contents are unknown, write "remove whatever is in the slot and put it in the closet" in `Pull`, not `-`.
 3. Let the agent pass a short `note` for operations, and send it in the request's `note` field.
 
+Fixes 1 and 2 are now in the planner (#88): each product prints as its catalog name with the SKU beside it (the SKU alone when the catalog has no name), and a product change into a slot whose contents no receipt names says `remove whatever is in it to the closet`. Fix 3 is still open. The directive above is run 2's, as it was sent.
+
 ## Receipt
 
 Pending. Friday 13 Nov's visit will be read by the hourly `sync_requests` job, and the worker's receipt

@@ -118,6 +118,7 @@ class Page:
     root: str
     made_at: datetime
     errors: list[str] = field(default_factory=list)
+    set_aside: list[pr.SetAside] = field(default_factory=list)   # rounds placed in other slots
 
 
 def _clean_size(size: str | None) -> str:
@@ -233,7 +234,7 @@ def build(root: Path, ours: tuple[str, ...], conn_factory: Callable[[], psycopg.
           interloper_dir: Path = INTERLOPER_DIR) -> Page:
     """The page for the rounds under `root`, checked against `ours` (our slots, from `read_our_slots`).
     `conn_factory` reads the catalog requests; None skips them."""
-    rounds = pr.load_all(root, ours)
+    rounds, set_aside = pr.load_rounds(root, ours)
     errors = []
     requests = catalog = None
     if conn_factory is not None:
@@ -247,7 +248,7 @@ def build(root: Path, ours: tuple[str, ...], conn_factory: Callable[[], psycopg.
             errors.append(f"Catalog requests weren't read ({type(error).__name__}). Check DATABASE_URL and "
                           "that the database is up, or pass --no-db.")
     pipe = pipeline(rounds, requests, catalog)
-    return Page(rounds, pipe, interloper(interloper_dir), str(root), datetime.now(timezone.utc), errors)
+    return Page(rounds, pipe, interloper(interloper_dir), str(root), datetime.now(timezone.utc), errors, set_aside)
 
 
 # --- Formatting ---------------------------------------------------------------------------------
@@ -310,7 +311,7 @@ def _px(v: float | Fraction) -> str:
 
 
 def rounds_chart(rounds: list[pr.Round]) -> str:
-    """One row per round: the fill's most-we-pay cost against the $366 cap (left), and projected gross
+    """One row per round: the fill's most-we-pay cost against the day-one cap (left), and projected gross
     profit to the end of the window, base with a low-to-high line (right)."""
     if not rounds:
         return ""
@@ -483,13 +484,16 @@ def _face(r: pr.Round, changed: dict[str, pr.Change], next_door: set[str]) -> st
     return (f'<div class="pcab"><div class="brand">{_e(DEVICE_ID.upper())} &middot; ROUND {_e(r.id.upper())}</div>'
             f'<div class="glass">{"".join(shelves)}</div></div>'
             f'<div class="legend">{legend}</div>'
-            '<p class="sub">Striped selections aren\'t in our current assignment, which the inventory server changes once before the 3 Dec start; the day-one products would then move to the new slots. Each lit slot shows units loaded, the product, the '
+            '<p class="sub">Striped selections aren\'t in our slots (the inventory server\'s assignment). Each lit slot shows units loaded, the product, the '
             'shelf price and, struck through, its floor. <b class="flag req">R</b> needs a catalog request, '
             '<b class="flag int">I</b> the Interloper sells the same drink, <b class="flag bad">!</b> a price or '
             'column problem. A blue dot: changed since the round before.</p>')
 
 
-def _change_list(r: pr.Round, before: pr.Round | None, changed: dict[str, pr.Change]) -> str:
+def _change_list(r: pr.Round, before: pr.Round | None, changed: dict[str, pr.Change], earlier: bool = False) -> str:
+    if before is None and earlier:
+        return ('<p class="dim">The first round placed in our slots. Earlier rounds were placed in other slots, '
+                'so they are listed under Rounds compared, not compared slot by slot.</p>')
     if before is None:
         return '<p class="dim">The first round: nothing earlier to compare with.</p>'
     if not changed:
@@ -720,7 +724,7 @@ def _round(r: pr.Round, before: pr.Round | None, page: Page) -> str:
     return (f'<div class="round" id="round-{tid}">'
             + _tiles(r)
             + f'<section><h2>The machine, round {_e(r.id)} <span class="hint">lit selections are our current assignment</span></h2>'
-              f'<div class="vm-wrap"><div>{_face(r, changed, next_door)}</div><div class="card">{_change_list(r, before, changed)}</div></div></section>'
+              f'<div class="vm-wrap"><div>{_face(r, changed, next_door)}</div><div class="card">{_change_list(r, before, changed, bool(page.set_aside))}</div></div></section>'
             + f'<section><h2>Slot by slot <span class="hint">top shelf first &middot; forecast from the projection, base '
               f'scenario</span></h2>{_slot_table(r, changed, next_door)}</section>'
             + '<div class="grid2">'
@@ -742,7 +746,8 @@ def _round(r: pr.Round, before: pr.Round | None, page: Page) -> str:
 def render(page: Page) -> str:
     rounds = page.rounds
     if not rounds:
-        body = '<p class="empty">No rounds found under ' + _e(page.root) + ".</p>"
+        body = ('<p class="empty">No rounds placed in our slots under ' + _e(page.root) + ".</p>"
+                + (f'<section>{_set_aside_table(page.set_aside)}</section>' if page.set_aside else ""))
         return _wrap(body, "", "Day-one plan")
     latest = rounds[-1]
     radios = "".join(f'<input type="radio" name="round" class="tabin" id="tab-{_tab(r.id)}"'
@@ -759,7 +764,8 @@ def render(page: Page) -> str:
         for r in rounds)
     errors = "".join(f'<p class="empty bad-text">{_e(e)}</p>' for e in page.errors)
     overview = (f'<section><h2>Rounds compared <span class="hint">most-we-pay against the cap, and projected gross profit'
-                f'</span></h2><div class="scroll">{rounds_chart(rounds)}</div>{_overview_table(rounds)}</section>')
+                f'</span></h2><div class="scroll">{rounds_chart(rounds)}</div>{_overview_table(rounds)}'
+                f'{_set_aside_table(page.set_aside)}</section>')
     head = (f'<header class="top"><h1>Day-one plan</h1>'
             f'<span class="meta">Read-only &middot; made {page.made_at.astimezone(EASTERN):%a %d %b %Y %H:%M} ET'
             f' &middot; {len(rounds)} round{"s" if len(rounds) != 1 else ""} from <code>{_e(page.root)}</code></span></header>')
@@ -769,10 +775,28 @@ def render(page: Page) -> str:
             + '<div class="rounds">'
             + "".join(_round(r, rounds[i - 1] if i else None, page) for i, r in enumerate(rounds))
             + "</div>"
-            + '<footer>Computed in code from the round files: no model calls. The $366 day-one cap and the $600 split are '
+            + '<footer>Computed in code from the round files: no model calls. The day-one cap ($400 since 22 Nov, up from $366) and the $600 split are '
               f'proposed in <a href="{CAP_ISSUE}">#113</a>, not yet agreed. Forecasts are the projection script\'s, under '
               'its assumptions; they are estimates, not promises.</footer>')
     return _wrap(body, tab_css, f"Day-one plan, round {latest.id}")
+
+
+def _set_aside_table(aside: list[pr.SetAside]) -> str:
+    """Rounds placed in other slots: their files and their projections' own totals, never their slots."""
+    if not aside:
+        return ""
+    rows = "".join(
+        f'<tr><td>Round {_e(a.id)}</td><td class="sub">{a.saved_at.astimezone(EASTERN):%a %d %b %H:%M}</td>'
+        f'<td><code>{_e(a.plan_file)}</code></td><td class="n">{money(a.fill_most_cents)}</td>'
+        + "".join(f'<td class="n">{money(a.gross_profit_cents.get(k), True)}</td>' for k in pr.SCENARIOS)
+        + f'<td class="n">{len(a.outside)}</td></tr>' for a in aside)
+    return ('<h2 style="margin-top:14px">Rounds placed in other slots <span class="hint">set aside: not shown slot by slot'
+            '</span></h2><div class="scroll"><table class="list"><thead><tr><th>Round</th><th>Saved (ET)</th><th>Plan file</th>'
+            '<th>Fill most</th><th>GP low</th><th>GP base</th><th>GP high</th><th>Slots not ours</th></tr></thead>'
+            f'<tbody>{rows}</tbody></table></div>'
+            '<p class="sub">These rounds name selections outside our slots (the inventory server&rsquo;s assignment), '
+            'most likely because they were made before the 20 Nov redraw. Their totals are the projection files&rsquo; '
+            'own figures, read as written and not checked here; a round placed again in our slots shows above.</p>')
 
 
 def _overview_table(rounds: list[pr.Round]) -> str:
@@ -1018,7 +1042,8 @@ def main(argv: list[str]) -> int:
             print(f"can't read the rounds: {error}", file=sys.stderr)
             return 1
         args.write.write_text(render(page), encoding="utf-8")
-        print(f"wrote {args.write} ({len(page.rounds)} rounds)" + "".join(f"\n  {e}" for e in page.errors))
+        print(f"wrote {args.write} ({len(page.rounds)} rounds"
+              + (f", {len(page.set_aside)} set aside for naming other slots" if page.set_aside else "") + ")" + "".join(f"\n  {e}" for e in page.errors))
         return 0
     httpd = ThreadingHTTPServer((HOST, args.port), _handler(args.rounds, use_db))
     print(f"day-one plan on http://{HOST}:{args.port}  (read-only; Ctrl+C to stop)", flush=True)

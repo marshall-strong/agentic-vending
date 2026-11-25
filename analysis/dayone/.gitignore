@@ -1,0 +1,4 @@
+# Real round files: plans, projections and inputs that map our slots to products. The repo is public
+# and our assignment is private (docs/integrity.md), so they never go in git (README.md, "Where the real files live").
+local/
+*.log

@@ -108,3 +108,6 @@ bench-results/
 # Sales analysis: exported data and generated outputs stay local
 analysis/data/
 analysis/out/
+
+# Local pytest output saved by hand
+/out*.txt

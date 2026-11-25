@@ -62,9 +62,11 @@ def test_first_fill_switches_to_weekly_plan_at_the_lock(conn, tmp_path, monkeypa
     write(tmp_path, "round3", "3", {"day_one": day_one(**{"15": {"why": "New fill reason."}})}, projection())
     new = plan_store.load(conn, tmp_path, "3", "Test Loader")
     catalog(conn, ("WEEKLY", "Weekly drink", "Weekly", None, "20 oz bottle"))
-    run = agent_runs.start(conn, mode="dry-run")
+    run = agent_runs.start(conn, mode="live")
     agent_runs.finish(conn, run, "skipped", plan={"slots": [
         {"slot": slot, "product": "WEEKLY", "fill_to": 5, "reason": "Weekly reason."}]})
+    conn.execute("update agent_runs set started_at = %s, finished_at = %s where id = %s",
+                 (before - timedelta(minutes=1), before, run))
     early = dashboard.snapshot(conn, before)
     assert early["plan"]["data"]["id"] == new
     assert "latest, not picked" in dashboard.render(early)

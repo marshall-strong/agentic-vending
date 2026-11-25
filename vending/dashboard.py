@@ -11,63 +11,86 @@ data as JSON, for a script or another agent.
 Run this way it listens on 127.0.0.1 only, and has no login: open it on the
 machine that runs it. The Container App serves the same page to anyone at
 `/dashboard`, through `vending.pages`, which connects as a login that can only
-read and hides the error text of failures (`snapshot(conn, public=True)`).
+read. Both routes scope the data to the ledger opening and current assignment.
 
 The page, top to bottom:
- - Verdict and tiles: OK / check / problem, the halt switch, the latest run,
-   the order cutoff countdown, the machine's last poll, what has been spent
-   (from the ledger once it has opened; before that, development and test spend),
-   and who has looked at the pages (`vending.visits`).
- - Needs attention: each thing that is wrong or about to be, in a sentence. On the
-   Container App that includes the worker's latest sync round, which the worker passes in
-   (`syncs`, the same dict as its `/health`): the dashboard itself only reads the database.
- - Money (`vending.money_panel`, #48): the balance, spendable and profit since the
-   ledger's opening, where the money has gone, what pending requests could still
-   cost, and the proposed budget (#113). Before the opening it says how to record it.
- - In the machine: a close-up of our selections (the stored assignment,
-   `vending.slots.our_slots`), one shelf at a time, each lane drawn from above
-   (`vending.machine_art`), beside the machine's front for picking the shelf; with
-   no assignment stored it says so instead of guessing. Now shows the tag price
-   (polls) and the product and units on hand (receipts, or a newer count); Next
-   Friday shows the latest plan: the slots it fills, a swap, a pull, a new price.
-   Anything without a record says unknown.
+ - A failure banner at the very top when something is failing now (#220): the worker's latest
+   sync round, the latest agent run, and a tracking check that came back `outside`, one line
+   each in plain words and Eastern time, never the failure's own text.
+ - The status bar, one row of six cells: the verdict (OK / check / problem) with the halt
+   switch and the latest run; when the machine was last polled and the next sync; the order
+   cutoff countdown; spendable (from the ledger once it has opened; before that, only that
+   it is development spend); catalog approvals; and the plan (for the first fill before the slot lock,
+   for the next restock after).
+ - Key dates (`vending.key_dates`): before the start, each date from the instructors with a status
+   from our records (done, due in N days, overdue); from the start, the next restock request and
+   the next tax Saturday.
+ - In the machine, one screen: the machine's whole front (`vending.machine_art`), our
+   selections (the stored assignment, `vending.slots.our_slots`) with their package, count,
+   price and next-restock badge, the rest half as wide and marked "Not ours"; with no assignment
+   stored it says so instead of guessing. Beside it, Needs attention (each thing that is wrong
+   or about to be, in a sentence; on the Container App that includes the worker's latest sync,
+   which the worker passes in as `syncs`, the same dict as its `/health`) and the plan's
+   changes. Picking one of ours shows its shelf's lanes from above and its facts instead; on a
+   phone that is a sheet. Now shows the tag price (polls) and the product and units on hand
+   (receipts, or a newer count); Next restock shows the latest plan: the slots it fills, a
+   swap, a pull, a new price. Anything without a record says unknown.
  - Pricing (`vending.pricing_panel`): for each of our selections, the shelf price, the unit cost
    (receipts, else expected from sourcing), the floor and whether the price is legal, the margin,
    what sold, the plan's next price and why, and the shelf price over the last four weeks.
+ - Money (`vending.money_panel`, #48): the balance, spendable and profit since the
+   ledger's opening, where the money has gone, what pending requests could still
+   cost, and the proposed budget (#113). Before the opening it says how to record it.
+ - Price checks (`vending.price_check_panel`): the weekly price checks, lookup spend, and each store's
+   latest price for every drink in our plan, with stale, not-found, over-max and changed flags.
  - The plan: what changed since the plan before, then one line per slot that
    opens to the agent's reason, what it was, and what the slot holds and sold.
    Then the agent's weekly update and its notes to itself.
+ - Plan history (`vending.plan_history`): one card per week, each plan and update, every changed slot
+   with the agent's reason and the inputs its run read for it.
  - Runs: each run, how it ended, what it cost, and which slots its plan changed, with the steps
-   it took (`agent_steps`): its reasoning, each tool call and what came back.
+   it took (`agent_steps`): its reasoning, each tool call and what came back. Each live run links to
+   its own page (`vending.run_page`), which follows it as it happens.
+ - Forecast vs actual (`vending.forecast_panel`), under the report card: per week and slot, what the
+   agent expected to sell (the rate its plan recorded) against what sold.
  - Tool calls: the last calls from `action_log`, filterable to writes or problems.
  - Requests and back stock: purchase requests, every catalog request with counts by status and
    the places left under the bridge's cap on open requests, and what is in the closet.
+ - The footer: one small line on who has looked at the pages (`vending.visits`).
 """
 
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
+import os
 import re
 import sys
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, localcontext
 from fractions import Fraction
 from functools import partial
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 from typing import Any
 
 import psycopg
+from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import set_json_loads
 
-from vending import capacity, db, machine_art, money_panel, plan_rounds, settings, slot_counts, visits
-from vending import pricing_panel
+from vending import (capacity, db, leaderboards, machine_art, midweek_wake, money_panel, plan_rounds, report_card,
+                     settings, slot_counts, tracking, visits)
+from vending import agent_runs, agent_schedule, key_dates, price_schedule, pricing_panel, tracking_daily
+from vending import plan_history, price_check_panel
+from vending import forecast_panel  # forecast vs actual, beside the report card
 from vending import stock as stock_mod
+from vending import planner
 from vending.planner import IN_STORE_CUTOFF
-from vending.slots import DEVICE_ID, SlotsNotRecorded, lock_at, our_slots
+from vending.slots import DEVICE_ID, RECORD_HINT, SlotsNotRecorded, lock_at, our_slots
 from vending.tools import machine_state
 from vending.mascot import svg as mascot_svg  # after the rest: other PRs edit the lines above
 
@@ -93,8 +116,6 @@ SYNC_EXITS = {1: "finished with problems; the container's log has them",
 REQUESTS_SHOWN = 5
 # Every transaction on the dashboard's connection is read-only; Postgres refuses any write.
 READ_ONLY = "-c default_transaction_read_only=on"
-# The runs the Status and Plan panels follow. Replays of past weeks show only under Runs.
-WATCHED_MODES = ("live", "dry-run")
 # Host headers the server answers, so another site can't rebind its name to us and read the page.
 LOCAL_HOSTS = ("127.0.0.1", "localhost")
 # A run still `running` after this long has almost certainly died.
@@ -103,8 +124,16 @@ STALE_RUN = timedelta(hours=2)
 RECENT = timedelta(hours=24)
 # Halted this close to the cutoff means no request can go out in time.
 CUTOFF_SOON = timedelta(hours=24)
+# The worker's hourly sync runs this many minutes past the hour (UTC), just after the course staff's
+# poll on the hour: `SYNC_AT_MINUTE`, as `vending.worker` reads it, else this.
+SYNC_AT_MINUTE = 5
+# The instructors must approve every product for the first fill by Wed 25 Nov 2026. The status bar says
+# so until the end of that day, Eastern. The date lives with the other key dates (`vending.key_dates`).
+APPROVALS_DUE = key_dates.CATALOG.due
 # The machine's face: 5 shelves of 8 selections. Row r, column c is selection "rc".
 SHELVES, COLUMNS = machine_art.SHELVES, machine_art.COLUMNS
+# The mark on the wildcard slot's rows (#166): the one fixed slot that tests products.
+WILD = machine_art.WILD_PILL
 # What a free-text product name says about its package, for a lane named by a count.
 _package = machine_art.package_from_name
 
@@ -166,14 +195,14 @@ def _isolated(conn: psycopg.Connection, read: Callable[[], Any], timeout_ms: int
         raise Unavailable(type(error).__name__) from error
 
 
-def _rows(conn: psycopg.Connection, sql: str, params: tuple = ()) -> list[dict]:
-    return _guarded(conn, lambda: conn.cursor(row_factory=dict_row).execute(sql, params).fetchall())
+def _rows(conn: psycopg.Connection, query: str | sql.Composable, params: tuple = ()) -> list[dict]:
+    return _guarded(conn, lambda: conn.cursor(row_factory=dict_row).execute(query, params).fetchall())
 
 
-def _optional(conn: psycopg.Connection, sql: str, params: tuple = ()) -> dict | None:
+def _optional(conn: psycopg.Connection, query: str | sql.Composable, params: tuple = ()) -> dict | None:
     """One row, or None when there is none or its table isn't there yet."""
     try:
-        rows = _rows(conn, sql, params)
+        rows = _rows(conn, query, params)
     except Missing:
         return None
     return rows[0] if rows else None
@@ -213,23 +242,56 @@ def _eastern(value: datetime) -> datetime:
         return value
 
 
-def _status(conn: psycopg.Connection, now: datetime) -> dict:
+# action_log has no run ID. Before opening, keep only real operator and agent writes by name.
+PRE_OPENING_WRITES = (
+    "config.set", "halt",
+    "ledger.adjustment", "ledger.capital", "ledger.opening", "ledger.tax_remitted",
+    "pages.grant",
+    "plan_store.load", "plan_store.pick",  # Operator commands in vending.plan_store.
+    "product_requests.resolve", "request_backlog.add", "request_backlog.drop", "request_backlog.move",
+    "request_catalog_product", "set_wildcard_slot", "slot_counts", "slots.record",
+    "sourcing.remove", "sourcing.set", "submissions.resolve", "submit_desired_state",
+)
+ACTIVITY_VISIBLE = "(at <= %s and (at >= %s or (kind = 'write' and tool = any(%s))))"
+
+
+def _run_detail(public: bool, alias: str | None = None) -> sql.Composable:
+    """The `detail` column of `agent_runs`, as a public page or the team's own view selects it."""
+    status, detail = (sql.Identifier(*filter(None, (alias, name))) for name in ("status", "detail"))
+    return sql.SQL("{} as detail").format(public_run_detail(status, detail) if public else detail)
+
+
+def _status(conn: psycopg.Connection, now: datetime, opening: datetime | None, public: bool = False) -> dict:
     flag = _optional(conn, "select value, updated_at, updated_by from config where key = 'halted'")
     # Fails closed like `vending.config.is_halted`: anything but JSON false is halted.
     halted = flag is None or flag["value"] is not False
-    run = _optional(conn, "select id, started_at, finished_at, mode, model, status, detail, cost_usd"
-                          " from agent_runs where mode = any(%s) order by started_at desc, id desc limit 1",
-                    (list(WATCHED_MODES),))
+    run = _optional(conn, sql.SQL("select id, started_at, finished_at, mode, model, status, {}, cost_usd"
+                                  " from agent_runs where mode = 'live' and started_at <= %s"
+                                  " order by started_at desc, id desc limit 1").format(_run_detail(public)), (now,))
     if run is None:   # no runs, or an agent_runs older than cost_usd: try without it
-        run = _optional(conn, "select id, started_at, finished_at, mode, model, status, detail"
-                              " from agent_runs where mode = any(%s) order by started_at desc, id desc limit 1",
-                        (list(WATCHED_MODES),))
+        run = _optional(conn, sql.SQL("select id, started_at, finished_at, mode, model, status, {}"
+                                      " from agent_runs where mode = 'live' and started_at <= %s"
+                                      " order by started_at desc, id desc limit 1").format(_run_detail(public)), (now,))
     if run and run["status"] == "running" and now - run["started_at"] > STALE_RUN:
         run["stale"] = True
-    last = _optional(conn, "select at, kind, tool, outcome from action_log order by at desc, id desc limit 1")
+    # The latest run still `running` past the stale bound (`STALE_RUN`), whatever the newest run
+    # is: a run the worker probably lost stays on the banner while a retry runs, and only a run
+    # finishing resolves it (`build_alerts`).
+    stuck = _optional(conn, "select id, started_at from agent_runs"
+                            " where mode = 'live' and started_at <= %s and started_at < %s"
+                            " and status = 'running'"
+                            " order by started_at desc, id desc limit 1", (now, now - STALE_RUN))
+    # The latest run that FINISHED, whatever it ended as. A failure banner stays until a later run
+    # finishes successfully, so a retry that is still running must not hide the run before it.
+    last_finished = _optional(conn, "select id, started_at, finished_at, status from agent_runs"
+                                    " where mode = 'live' and started_at <= %s and status <> 'running'"
+                                    " order by started_at desc, id desc limit 1", (now,))
+    last = _optional(conn, f"select at, kind, tool, outcome from action_log where {ACTIVITY_VISIBLE}"
+                           " order by at desc, id desc limit 1", (now, opening, list(PRE_OPENING_WRITES)))
     return {"halted": halted, "halt_changed_at": flag and flag["updated_at"],
             "halt_changed_by": flag and flag["updated_by"], "latest_run": run,
-            "last_action": last, "next_cutoff": next_cutoff(now)}
+            "last_finished": last_finished, "stuck_run": stuck, "last_action": last,
+            "next_cutoff": next_cutoff(now)}
 
 
 def _our_slots(conn: psycopg.Connection) -> dict:
@@ -246,23 +308,32 @@ def _our_slots(conn: psycopg.Connection) -> dict:
         return {"ok": False, "why": str(error)}
 
 
+def _wildcard(conn: psycopg.Connection, ours: tuple[str, ...]) -> str | None:
+    """The wildcard slot (config `wildcard_slot`, set once, #166), when it is one of ours; else None.
+    A wildcard the stored assignment doesn't give us is never marked."""
+    row = _optional(conn, "select value from config where key = 'wildcard_slot'")
+    value = row["value"] if row else None
+    return value if isinstance(value, str) and value in ours else None
+
+
 def our_selections(snap: dict) -> tuple[str, ...]:
     """Our selections as the snapshot read them; empty when no assignment is stored."""
     ours = snap.get("ours") or {}
     return tuple(ours["data"]) if ours.get("ok") else ()
 
 
-def _plan(conn: psycopg.Connection, ours: tuple[str, ...] = ()) -> dict | None:
+def _plan(conn: psycopg.Connection, ours: tuple[str, ...], now: datetime,
+          assignment_at: datetime | None) -> dict | None:
     columns = "id, started_at, finished_at, mode, model, status, plan, team_update, notes"
-    found = _rows(conn, f"select {columns} from agent_runs where plan is not null and mode = any(%s)"
-                        " order by started_at desc, id desc limit 1", (list(WATCHED_MODES),))
+    found = _rows(conn, f"select {columns} from agent_runs where plan is not null and mode = 'live'"
+                        " and started_at <= %s order by started_at desc, id desc limit 1", (now,))
     if not found:
         return None
     latest = found[0]
-    # Compared only with a plan of the same mode: a dry run against a live plan says nothing.
-    previous = _optional(conn, f"select {columns} from agent_runs where plan is not null and mode = %s"
-                               " and (started_at, id) < (%s, %s) order by started_at desc, id desc limit 1",
-                         (latest["mode"], latest["started_at"], latest["id"]))
+    previous = _optional(conn, f"select {columns} from agent_runs where plan is not null and mode = 'live'"
+                               " and (started_at, id) < (%s, %s)"
+                               " order by started_at desc, id desc limit 1",
+                         (latest["started_at"], latest["id"]))
     now_slots = _by_slot(latest["plan"])
     before = _by_slot(previous["plan"]) if previous else {}
     # One row per selection assigned to us now, in the assignment's order. A stored plan can name
@@ -271,10 +342,18 @@ def _plan(conn: psycopg.Connection, ours: tuple[str, ...] = ()) -> dict | None:
               "changed": previous is not None and _what(now_slots.get(slot)) != _what(before.get(slot))}
              for slot in ours]
     plan = latest["plan"] if isinstance(latest["plan"], dict) else {}
+    reason, update, notes = plan.get("reason"), latest["team_update"], latest["notes"]
+    if _older_assignment(latest["started_at"], assignment_at):
+        reason = OLD_ASSIGNMENT
+        update = notes = None
+    for side, run in (("now", latest), ("before", previous)):
+        if run and _older_assignment(run["started_at"], assignment_at):
+            for row in slots:
+                if row[side] and row[side].get("reason"):
+                    row[side] = {**row[side], "reason": OLD_ASSIGNMENT}
     return {"run": {k: latest[k] for k in ("id", "started_at", "finished_at", "mode", "model", "status")},
             "previous_run": previous and previous["id"],
-            "visit": plan.get("visit"), "reason": plan.get("reason"),
-            "update": latest["team_update"], "notes": latest["notes"], "slots": slots}
+            "visit": plan.get("visit"), "reason": reason, "update": update, "notes": notes, "slots": slots}
 
 
 _FILE_REFERENCE = re.compile(r"(?i)\bfile:|(?<!\w)[a-z]:[\\/]|\\\\|(?<![\w:/])/(?:[^/\s]+/)")
@@ -288,7 +367,7 @@ def _plan_text(value: str | None) -> str | None:
     return "(local file reference omitted)" if _FILE_REFERENCE.search(text) else text
 
 
-def _first_fill(conn: psycopg.Connection, ours: tuple[str, ...]) -> dict | None:
+def _first_fill(conn: psycopg.Connection, ours: tuple[str, ...], assignment_at: datetime | None) -> dict | None:
     with conn.cursor(row_factory=dict_row) as cur:
         # Use the same JSON decoder as the laptop-file loader.
         set_json_loads(json.loads, context=cur)
@@ -298,19 +377,21 @@ def _first_fill(conn: psycopg.Connection, ours: tuple[str, ...]) -> dict | None:
         return None
     current = {"id": row["id"], "picked": row["picked"], "slots": []}
     if not ours:
-        return {**current, "message": "Our slot assignment is not available."}
+        return {**current, "message": NO_ASSIGNMENT}
     if set(row["slots"]) != set(ours):
-        return {**current, "message": "planned for an earlier slot assignment: load a new plan"}
+        return {**current, "message": PLAN_ASSIGNMENT_CHANGED}
     checked = plan_rounds.parse_round(row["label"], row["plan"], row["projection"], ours, saved_at=row["loaded_at"])
+    older = _older_assignment(row["loaded_at"], assignment_at)
     return {**current, "fill_expected_cents": checked.fill_expected_cents,
             "fill_most_cents": checked.fill_most_cents, "fill_cap_cents": plan_rounds.FILL_CAP_CENTS,
             "slots": [{"slot": s.slot, "sku": s.sku, "product": _plan_text(s.product), "price_cents": s.price_cents,
-                       "units": s.units, "reason": _plan_text(s.why), "fill_check": s.fill_check,
+                       "units": s.units, "reason": OLD_ASSIGNMENT if older and s.why else _plan_text(s.why),
+                       "fill_check": s.fill_check,
                        "checks": {"floor_cents": s.floor_cents, "legal_price": s.legal_price,
                                   "capacity": s.capacity, "capacity_assumed": s.capacity_assumed,
                                   "expected_fill_share": _dollars(s.expected_cents),
                                   "max_fill_share": _dollars(s.most_cents),
-                                  "refusals": [_plan_text(message) for message in s.refusals]}}
+                                  "refusals": [] if older else [_plan_text(message) for message in s.refusals]}}
                       for s in checked.slots.values()]}
 
 
@@ -323,19 +404,26 @@ def _tags(conn: psycopg.Connection, now: datetime) -> dict:
 
 
 def _runs(conn: psycopg.Connection, now: datetime, tags: dict | None = None,
-          ours: tuple[str, ...] = ()) -> list[dict]:
+          ours: tuple[str, ...] = (), *, modes: tuple[str, ...] = ("live",), public: bool = False) -> list[dict]:
     """The last runs, newest first, each with the slots its plan changed from the plan before it.
 
     The newest run with a plan compares a "keep" against `tags`, the prices on the tags now, as
     the Plan panel does; older runs have no record of their tag prices.
     """
-    rows = _rows(conn, """
-        select r.id, r.started_at, r.finished_at, r.mode, r.model, r.status, r.detail, r.cost_usd,
+    rows = _rows(conn, sql.SQL("""
+        select r.id, r.started_at, r.finished_at, r.mode, r.model, r.status, {detail}, r.cost_usd,
                r.request_id, r.team_update, r.notes, r.plan,
+               -- The scheduled time that started it: weekly or midweek (`agent_schedule.kind`, migration 037;
+               -- read through jsonb so a database without 037 still reads, as weekly), or none for a run by hand.
+               (select coalesce(to_jsonb(s) ->> 'kind', 'weekly') from agent_schedule s
+                 where s.run_id = r.id limit 1) as scheduled,
                (select p.plan from agent_runs p
-                 where p.mode = r.mode and p.plan is not null and (p.started_at, p.id) < (r.started_at, r.id)
+                 where p.mode = r.mode and p.plan is not null
+                   and (p.started_at, p.id) < (r.started_at, r.id)
                  order by p.started_at desc, p.id desc limit 1) as previous_plan
-          from agent_runs r order by r.started_at desc, r.id desc limit %s""", (RUN_ROWS,))
+          from agent_runs r where r.mode = any(%s) and r.started_at <= %s
+         order by r.started_at desc, r.id desc limit %s""").format(detail=_run_detail(public, "r")),
+                 (list(modes), now, RUN_ROWS))
     steps = _steps(conn, [r["id"] for r in rows])
     newest = True
     for r in rows:
@@ -413,13 +501,13 @@ def _sales(conn: psycopg.Connection, now: datetime) -> dict:
                       for s in reply.data}}
 
 
-def _stock(conn: psycopg.Connection) -> dict:
+def _stock(conn: psycopg.Connection, now: datetime) -> dict:
     """What each slot and the closet hold, from fulfilled receipts and polls (`vending.stock`).
 
     "sold" still counts units sold across a product change that can't be split
     (`SlotCount.unattributed`) as the slot's, as before #172; labelling them is
     #172 item 4."""
-    found = _guarded(conn, lambda: stock_mod.stock(conn))
+    found = _guarded(conn, lambda: stock_mod.stock(conn, until=now))
     return {"slots": {s.slot: {"product": s.product, "on_hand": s.units, "loaded": s.loaded,
                                "sold": s.sold + s.unattributed,
                                "lost": s.lost, "since": s.since, "last_moved": s.last_moved,
@@ -451,18 +539,52 @@ def _dollars(cents: Fraction | None) -> str | None:
     return str(value.quantize(Decimal("0.01"), ROUND_HALF_UP))
 
 
-def _spend(conn: psycopg.Connection, now: datetime) -> dict:
+def _purchase_rows(conn: psycopg.Connection, opening: datetime | None, now: datetime) -> tuple[list[dict], int]:
+    rows = _rows(conn, """select request_id, submitted_at, off_cycle, status, total_paid, decision_note,
+                                 fulfilled_at, updated_at
+                          from purchase_requests order by submitted_at desc, request_id desc""")
+    receipts: dict[str, list[dict]] = {}
+    if opening is not None and any(r["status"] == "fulfilled" for r in rows):
+        for line in _guarded(conn, lambda: stock_mod.receipt_lines(conn)):
+            receipts.setdefault(line["request_id"], []).append(line)
+    visible, hidden = [], 0
+    for row in rows:
+        status = row["status"]
+        fulfilled_at = row.pop("fulfilled_at")
+        updated_at = row.pop("updated_at")
+        lines = receipts.get(row["request_id"], [])
+        live_lines = [line for line in lines if line["at"] is not None and opening <= line["at"] <= now]
+        if status == "fulfilled":
+            decision_at = min((line["at"] for line in lines if line["at"] is not None),
+                              default=fulfilled_at or row["submitted_at"])
+            show = bool(live_lines) if lines else (
+                opening is not None and fulfilled_at is not None and opening <= fulfilled_at <= now)
+        else:
+            decision_at = updated_at or row["submitted_at"]
+            show = status == "pending" or (opening is not None and opening <= decision_at <= now)
+        if show:
+            if live_lines and len(live_lines) < len(lines):
+                row["total_paid"] = sum((line["total_paid"] or 0 for line in live_lines), Decimal(0))
+            visible.append({**row, "lines": len(live_lines),
+                            "units_loaded": sum(line["units_loaded"] or 0 for line in live_lines),
+                            "unavailable": sum(line["outcome"] == "unavailable" for line in live_lines),
+                            "alternates": sum(line["outcome"] == "alternate" for line in live_lines)})
+        elif decision_at <= now and (opening is None or decision_at < opening):
+            hidden += 1
+    return visible, hidden
+
+
+def _spend(conn: psycopg.Connection, now: datetime, opening: datetime, purchases: list[dict]) -> dict:
     model = _rows(conn, """
         select count(*) as runs, coalesce(sum(cost_usd), 0) as total,
                coalesce(sum(cost_usd) filter (where started_at > %s), 0) as last_7_days,
                count(*) filter (where cost_usd is null and status <> 'running') as unpriced
-          from agent_runs where mode = any(%s)""", (now - timedelta(days=7), list(WATCHED_MODES)))[0]
-    drinks = _rows(conn, """
-        select coalesce(sum(total_paid) filter (where status = 'fulfilled'), 0) as paid,
-               count(*) filter (where status = 'fulfilled') as fulfilled,
-               count(*) filter (where status = 'pending') as pending,
-               count(*) filter (where off_cycle and status <> 'rejected') as midweek
-          from purchase_requests""")[0]
+          from agent_runs where mode = 'live' and started_at between %s and %s""",
+                  (now - timedelta(days=7), opening, now))[0]
+    fulfilled = [r for r in purchases if r["status"] == "fulfilled"]
+    drinks = {"paid": sum((r["total_paid"] or 0 for r in fulfilled), Decimal(0)), "fulfilled": len(fulfilled),
+              "pending": sum(r["status"] == "pending" for r in purchases),
+              "midweek": sum(r["off_cycle"] and r["status"] != "rejected" for r in purchases)}
     return {"model": model, "drinks": drinks}
 
 
@@ -472,15 +594,18 @@ def _money_panel(conn: psycopg.Connection, now: datetime) -> dict:
     costs this panel, not the page. Other panels don't catch it yet: a cancelled read there still
     fails the whole snapshot."""
     try:
-        return _guarded(conn, lambda: money_panel.read(conn, now))
+        data = _guarded(conn, lambda: money_panel.read(conn, now))
+        if "notes" in data:
+            data["notes"] = [note for note in data["notes"] if not note.endswith("development spend, not in the balance")]
+        return data
     except psycopg.errors.QueryCanceled as error:
         raise Unavailable("reading the ledger took too long and was stopped; the rest of the page is "
                           "current, and the next refresh tries again") from error
 
 
-def _recent_calls(conn: psycopg.Connection, now: datetime) -> dict:
-    rows = _rows(conn, "select kind, outcome, count(*) as n from action_log where at > %s group by kind, outcome",
-                 (now - RECENT,))
+def _recent_calls(conn: psycopg.Connection, now: datetime, opening: datetime | None) -> dict:
+    rows = _rows(conn, f"select kind, outcome, count(*) as n from action_log where at > %s and {ACTIVITY_VISIBLE}"
+                       " group by kind, outcome", (now - RECENT, now, opening, list(PRE_OPENING_WRITES)))
     counts = {"calls": 0, "writes": 0, "refused": 0, "failed": 0}
     for r in rows:
         counts["calls"] += r["n"]
@@ -495,56 +620,234 @@ def snapshot(conn: psycopg.Connection, now: datetime | None = None, public: bool
     """Everything the page shows, from one consistent moment. Reads only.
 
     JSON numbers come back as Decimal, so a price stored as a number stays exact.
-    `public` is for a page anyone can open: the error text of failures and the selections not
-    assigned to us are left out. `syncs` is the worker's latest sync round, as its `/health` shows
+    The live view has the same filters on every route. On the public page, panel read errors
+    go to stderr. `syncs` is the worker's latest sync round, as its `/health` shows
     it (`vending.worker.State.public`: outcomes and exit codes, never error text). The worker
     keeps that in memory, not in the database, so only a page the worker serves has it; run
     on its own, the dashboard has None and says nothing about the syncs.
     """
-    now = now or datetime.now(timezone.utc)
     set_json_loads(partial(json.loads, parse_float=Decimal), context=conn)
     with conn.transaction():
         conn.execute("set transaction isolation level repeatable read, read only")
-        snap = _snapshot(conn, now)
+        # Event timestamps come from Postgres. Use its clock for the same transaction's cutoff.
+        now = now or conn.execute("select transaction_timestamp()").fetchone()[0]
+        snap, assignment_at = _snapshot(conn, now, public, syncs)
     snap["syncs"] = syncs
-    if public:
-        hide_errors(snap)
-        only_ours(snap)
+    hide_errors(snap, public=public)
+    only_ours(snap, assignment_at)
     snap["attention"] = attention(snap)
+    snap["alerts"] = build_alerts(snap)
     return snap
 
 
 # Shown in place of a failure's text on a public page.
 HIDDEN = "(error text isn't shown on this public page; it is in the database and the container's log)"
+PUBLIC_PANEL_ERROR = "This part of the page can't be read right now."
 
 
-def hide_errors(snap: dict) -> None:
+def public_run_detail(status: sql.Composable, detail: sql.Composable) -> sql.Composable:
+    """What a public page shows of an `agent_runs.detail`, as SQL over the row's `status` and `detail`.
+
+    A failed run's detail is a raw error: `HIDDEN` replaces it. A run that submitted and then stopped
+    on something else (`vending.agent._settle`) keeps its confirmation and loses what follows
+    `agent_runs.AFTERWARDS`, which can be a database error naming the host and the user. Worked out
+    in Postgres, so the dropped text never leaves it. The public dashboard (`snapshot`) and the
+    public explorer (`vending.pages.HIDE`) both read the column through this.
+    """
+    return sql.SQL(
+        "case when {status} = 'failed' and {detail} is not null then {hidden}"
+        " when {status} = 'submitted' and starts_with({detail}, {submitted}) and strpos({detail}, {afterwards}) > 0"
+        " then left({detail}, strpos({detail}, {afterwards}) - 1)"
+        " else {detail} end").format(
+        status=status, detail=detail, hidden=sql.Literal(HIDDEN),
+        submitted=sql.Literal(agent_runs.SUBMITTED), afterwards=sql.Literal(agent_runs.AFTERWARDS))
+
+
+def hide_errors(snap: dict, *, public: bool = False) -> None:
     """Replace the free text of every failure with `HIDDEN`, in place.
 
-    A failed tool call or run stores the raw error, and a database error names the host and the
-    user. A refusal keeps its text: we wrote it, and it says what to do next. Done on the
-    snapshot, before Needs attention is built, so the page and `/state.json` both get it.
+    A failed tool call or run stores the raw error, and a database error can name the host and
+    the user. So a failed run's detail, a failed call's detail and the content of every step
+    marked `is_error` (whatever its kind) are replaced. A refusal keeps its text. On the public
+    page, a panel's read error goes to stderr, and a run's detail was already read through
+    `public_run_detail`. Clean the snapshot before building Needs attention so both the page and
+    `/state.json` get the same text.
     """
-    run = snap["status"].get("latest_run")
-    if run and run.get("status") == "failed" and run.get("detail"):
-        run["detail"] = HIDDEN
-    for panel, column, failed in (("runs", "status", "failed"), ("activity", "outcome", "failed")):
-        if snap[panel]["ok"]:
-            for row in snap[panel]["data"]:
-                if row.get(column) == failed and row.get("detail"):
-                    row["detail"] = HIDDEN
+    runs = snap["runs"]["data"] if snap["runs"]["ok"] else []
+    for run in (snap["status"].get("latest_run"), *runs):
+        if run and run.get("detail") and run["status"] == "failed":
+            run["detail"] = HIDDEN
+    if snap["activity"]["ok"]:
+        for row in snap["activity"]["data"]:
+            if row["outcome"] == "failed" and row["detail"]:
+                row["detail"] = HIDDEN
+    for run in runs:
+        for step in run["steps"]:
+            if step["is_error"]:
+                step["content"] = HIDDEN
+    # The incident log never reads a failure's text (`vending.report_card`); its row says `error`.
+    if (incidents := snap.get("incidents")) and incidents["ok"]:
+        for row in incidents["data"].get("rows", []):
+            if row["error"]:
+                row["note"] = HIDDEN
+    if public:
+        hide_panel_errors(snap)
 
 
-def only_ours(snap: dict) -> None:
-    """Drop every selection not assigned to us (the stored assignment) from the counts and stock, in place.
+def hide_panel_errors(snap: dict, where: str = "dashboard") -> None:
+    """On a public page: each panel's read error goes to stderr, and the panel says `PUBLIC_PANEL_ERROR`."""
+    for name, panel in snap.items():
+        if not isinstance(panel, dict) or panel.get("ok") is not False or "why" not in panel:
+            continue
+        why = panel["why"]
+        if why != PUBLIC_PANEL_ERROR:
+            print(f"{where}: {name}: {why}", file=sys.stderr, flush=True)
+            panel["why"] = PUBLIC_PANEL_ERROR
 
-    `slot_counts.latest` returns every selection counted (a photo count covers the whole
-    machine), and `vending.stock` every slot our fulfilled receipts name, which after a
-    reassignment includes slots that aren't ours any more. The page only draws ours; the JSON
-    would still carry the rest. With no assignment stored, none is ours, so every count, every
-    slot's stock and every warning that names a slot is dropped. The closet isn't a selection,
-    so it stays.
-    """
+
+OLD_ASSIGNMENT = "Text omitted from before the current slot assignment."
+OUTSIDE_ASSIGNMENT = "Tool payload omitted for a selection outside the current slot assignment."
+POLL_REPLY_OMITTED = "Saved poll reply omitted because its selections could not be scoped."
+NO_ASSIGNMENT = "Our slot assignment is not available."
+PLAN_ASSIGNMENT_CHANGED = "planned for an earlier slot assignment: load a new plan"
+ASSIGNMENT_RECORDED = "Slot assignment recorded. See the current assignment on this page."
+_ASSIGNMENT_NOTICES = frozenset({OLD_ASSIGNMENT, OUTSIDE_ASSIGNMENT, POLL_REPLY_OMITTED, NO_ASSIGNMENT,
+                                PLAN_ASSIGNMENT_CHANGED, ASSIGNMENT_RECORDED, RECORD_HINT})
+_DROP = object()
+_SLOT_KEYS = {"slot", "selection", "into_slot", "wildcard_slot"}
+_SLOT_LISTS = {"slots", "selections", "assigned_slots", "our_slots"}
+_POLL_REPLY_TOOLS = {"get_account_balance", "get_briefing", "get_machine_state", "get_pnl", "get_sales_history"}
+_POLL_ROW_FIELDS = {"slot", "product", "price", "units", "revenue", "revenue_ex_tax",
+                    "lifetime_units", "units_sold_in_window", "units_sold_since_load", "units_per_day",
+                    "stock_on_hand", "effective_stock", "recent_units"}
+
+
+def _older_assignment(at: datetime, assignment_at: datetime | None) -> bool:
+    return assignment_at is None or at < assignment_at
+
+
+def _scope_payload(value: Any, ours: set[str], key: str = "") -> Any:
+    """Drop structured records naming an unassigned selection, including nested tool arguments and results."""
+    if isinstance(value, list):
+        items = [item for item in value
+                 if key not in _SLOT_LISTS or isinstance(item, (dict, list)) or str(item) in ours]
+        return [item for item in (_scope_payload(item, ours) for item in items) if item is not _DROP]
+    if not isinstance(value, dict):
+        return value
+    setting = value.get("key")
+    if isinstance(setting, str) and setting in _SLOT_KEYS and "value" in value and str(value["value"]) not in ours:
+        return _DROP
+    if any(str(value[k]) not in ours for k in _SLOT_KEYS & value.keys() if value[k] is not None):
+        return _DROP
+    scoped = {}
+    for k, v in value.items():
+        if len(k) == 2 and k[0] in "12345" and k[1] in "12345678" and k not in ours:
+            continue
+        kept = _scope_payload(v, ours, k)
+        if kept is not _DROP:
+            scoped[k] = kept
+    if scoped != value:
+        # A summary can describe a selection dropped from the structured part.
+        for field in ("message", "detail", "reason", "note", "text", "warnings", "directive", "decision_note", "notes"):
+            scoped.pop(field, None)
+    return scoped
+
+
+def _scope_poll_reply(value: Any, ours: set[str]) -> Any:
+    """Keep per-slot figures from structured replies. Saved prose and totals may mix selections."""
+    if not isinstance(value, dict):
+        return _DROP
+    for key in ("structuredContent", "result"):
+        if key in value:
+            value = value[key]
+            if not isinstance(value, dict):
+                return _DROP
+    rows = value.get("data")
+    if isinstance(rows, dict):   # get_briefing wraps its per-slot figures in the briefing
+        rows = rows.get("slots")
+    if not isinstance(rows, list):
+        return _DROP
+    return {"data": [{key: value for key, value in row.items()
+                      if key in _POLL_ROW_FIELDS and not isinstance(value, (dict, list))}
+                     for row in rows if isinstance(row, dict) and str(row.get("slot")) in ours]}
+
+
+def _outside_assignment(text: str, ours: set[str]) -> bool:
+    return text not in _ASSIGNMENT_NOTICES and bool(stock_mod._slots_named(text) - ours)
+
+
+def _scope_text(value: Any, ours: set[str]) -> Any:
+    """Redact free text in the display copy, leaving values such as prices and slot codes typed."""
+    if isinstance(value, str):
+        return OUTSIDE_ASSIGNMENT if _outside_assignment(value, ours) else value
+    if isinstance(value, (list, tuple)):
+        items = (_scope_text(item, ours) for item in value
+                 if not isinstance(item, str) or not _outside_assignment(item, ours))
+        return tuple(items) if isinstance(value, tuple) else list(items)
+    if isinstance(value, dict):
+        scoped = {}
+        for key, item in value.items():
+            # A payload can use prose as a map label. Its value belongs to that label.
+            if isinstance(key, str) and " " in key and _outside_assignment(key, ours):
+                continue
+            # These values name the audit tool and the configuration field, respectively.
+            if (key == "tool" and item == "slots.record") or (
+                    key == "key" and isinstance(item, str) and item in _SLOT_KEYS):
+                scoped[key] = item
+            else:
+                scoped[key] = _scope_text(item, ours)
+        return scoped
+    return value
+
+
+def _scope_numbered(value: Any, ours: set[str]) -> Any:
+    """`value` with any text that names a numbered selection outside `ours` replaced."""
+    if isinstance(value, str):
+        named = {n for n in stock_mod._slots_named(value) if n.isdigit()}
+        return OUTSIDE_ASSIGNMENT if named - ours else value
+    if isinstance(value, list):
+        return [_scope_numbered(item, ours) for item in value]
+    if isinstance(value, dict):
+        return {key: _scope_numbered(item, ours) for key, item in value.items()}
+    return value
+
+
+def scope_run(run: dict, ours: set[str], assignment_at: datetime | None) -> None:
+    """Scope one run and its steps to the current assignment, in place: the Runs panel's rule, and the live
+    run page's (`vending.run_page`). A run from before the assignment loses its text and steps; text naming
+    a selection outside `ours` is replaced; a saved poll reply keeps only our rows' figures."""
+    if _older_assignment(run["started_at"], assignment_at):
+        if any(run.get(k) for k in ("detail", "team_update", "notes", "steps")):
+            run["detail"] = HIDDEN if run["status"] == "failed" else OLD_ASSIGNMENT
+        run["team_update"] = run["notes"] = None
+        run["steps"] = []
+    run.update(_scope_text({key: value for key, value in run.items() if key != "steps"}, ours))
+    for step in run["steps"]:
+        if step["kind"] not in ("tool_call", "tool_result") or step["is_error"]:
+            step["content"] = _scope_text(step["content"], ours)
+            continue
+        poll_reply = step["kind"] == "tool_result" and step["tool"] in _POLL_REPLY_TOOLS
+        try:
+            value = json.loads(step["content"], parse_float=Decimal)
+        except ValueError:
+            if poll_reply:
+                step["content"] = POLL_REPLY_OMITTED
+            elif step["content"].lstrip().startswith(("{", "[")):
+                step["content"] = "Incomplete tool payload omitted."
+            else:
+                step["content"] = _scope_text(step["content"], ours)
+            continue
+        scoped = _scope_poll_reply(value, ours) if poll_reply else _scope_payload(value, ours)
+        if scoped is _DROP:
+            step["content"] = POLL_REPLY_OMITTED if poll_reply else OUTSIDE_ASSIGNMENT
+        else:
+            scoped = _scope_text(scoped, ours)
+            if scoped != value:
+                step["content"] = to_json(scoped)
+
+
+def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
+    """Scope the live dashboard to the current assignment before either response is built."""
     ours = set(our_selections(snap))
     if snap["counts"]["ok"]:
         snap["counts"]["data"] = {s: c for s, c in snap["counts"]["data"].items() if s in ours}
@@ -553,6 +856,105 @@ def only_ours(snap: dict) -> None:
         stock["slots"] = {s: v for s, v in stock["slots"].items() if s in ours}
         # Only warnings about our selections or the closet (`vending.stock.warning_is_ours`).
         stock["warnings"] = [w for w in stock["warnings"] if stock_mod.warning_is_ours(w, ours)]
+    if (sales := snap.get("sales")) and sales["ok"]:
+        slots = sales["data"]["slots"]
+        sales["data"]["slots"] = {s: v for s, v in slots.items() if s in ours}
+    if (runs := snap.get("runs")) and runs["ok"]:
+        for run in runs["data"]:
+            scope_run(run, ours, assignment_at)
+    if (activity := snap.get("activity")) and activity["ok"]:
+        for row in activity["data"]:
+            if _older_assignment(row["at"], assignment_at):
+                if row["arguments"] or row["detail"]:
+                    row["arguments"] = {}
+                    row["detail"] = HIDDEN if row["outcome"] == "failed" else OLD_ASSIGNMENT
+            else:
+                args = _scope_payload(row["arguments"], ours)
+                if args != row["arguments"]:
+                    row["arguments"] = {} if args is _DROP else args
+                    row["detail"] = HIDDEN if row["outcome"] == "failed" else OUTSIDE_ASSIGNMENT
+                elif (row["kind"] == "read" and row["tool"] in _POLL_REPLY_TOOLS
+                      and row["detail"] and row["detail"] != HIDDEN):
+                    row["detail"] = POLL_REPLY_OMITTED
+            # The assignment audit writer includes both the old and the new slot lists.
+            if row["tool"] == "slots.record":
+                row["detail"] = HIDDEN if row["outcome"] == "failed" else ASSIGNMENT_RECORDED
+    if (incidents := snap.get("incidents")) and incidents["ok"]:
+        for row in incidents["data"].get("rows", []):
+            if row["note"] and row["note"] != HIDDEN and _older_assignment(row["at"], assignment_at):
+                row["note"] = OLD_ASSIGNMENT
+    run = snap.get("status", {}).get("latest_run")
+    if run and run["detail"] and run["detail"] != HIDDEN and _older_assignment(run["started_at"], assignment_at):
+        run["detail"] = OLD_ASSIGNMENT
+    for name, panel in snap.items():
+        # Key dates' texts are fixed messages, dates and counts that name no selection; scoping them would
+        # hide the slot check's instructions exactly when no assignment can be read. The tracking check's
+        # are our fixed words and the four verdicts (`tracking_daily.latest`), which name no selection either.
+        if name not in ("runs", "pricing", "report_cards", "key_dates", "tracking", "forecast") or not panel["ok"]:
+            snap[name] = _scope_text(panel, ours)
+    if (cards := snap.get("report_cards")) and cards["ok"]:
+        # Its text is the scorer's and ours, about a plan already cut to our assignment
+        # (`report_card._as_replay_plan`), and says "every slot" freely: only a numbered selection
+        # that isn't ours is redacted.
+        snap["report_cards"] = _scope_numbered(cards, ours)
+    if (forecast := snap.get("forecast")) and forecast["ok"]:
+        # Its rows are our slots only (`forecast_panel.read`); its text is ours and each stored rate's basis.
+        snap["forecast"] = _scope_numbered(forecast, ours)
+    if (pricing := snap.get("pricing")) and pricing["ok"]:
+        for row in pricing["data"]["rows"]:
+            for price in (row, row["next"]):
+                if price:
+                    # Price checks are generated from our own figures and fixed messages.
+                    fields = {key: value for key, value in price.items() if key not in ("next", "problems")}
+                    price.update(_scope_text(fields, ours))
+
+
+# The worker's scheduled agent runs (`vending.agent_schedule`), read from the table, not the worker's /health,
+# so turning the schedule off hides none. Two reads, so neither crowds out the other: the newest row, however
+# old, and every failed, missed or halted row of the last week, with any still `running`, and, however old, any
+# whose agent run still says `running` in agent_runs after the schedule recorded its ending (that ending
+# couldn't be written there). No `detail`: a failed one's can hold an error. What a run sent: its agent run's
+# request ID and the submission that carried it (the newest, if a person resolved an older attempt onto it), or,
+# from the submissions saved for its time (`purchase_submissions.schedule_due`), an accepted request or any still
+# `sending` or `unknown`: so a run whose ending was lost still says what it sent, or may have sent.
+# A run meant to be live that didn't run live (a check made it a dry run, or it never started: stopped at the
+# lease, or the lease busy) carries why (`cause`: the scheduler's own sentence, never an error), and stays until a
+# later live run has started. So does a live time that waited all its window and was missed (`LIVE_MISSED`).
+# And the database's `agent_schedule_mode`, to say when it isn't a mode, or says `live`.
+MEANT_LIVE_SKIP = ("s.outcome = 'skipped' and (s.detail like 'Run as a dry run, not live:%%'"
+                   " or (s.mode = 'live' and s.started_at is null))")
+LIVE_MISSED_ROW = "s.outcome = 'missed' and s.detail like 'LIVE RUN MISSED:%%'"
+SCHEDULED_COLUMNS = ("s.due_at, s.latest_at, s.kind, s.mode, s.claimed_at, s.outcome, s.run_id,"
+                     " r.status as agent_status,"
+                     " coalesce(r.request_id, (select p.request_id from purchase_submissions p"
+                     "  where p.schedule_due = s.due_at and p.status = 'accepted' order by p.id desc limit 1))"
+                     " as request_id,"
+                     " (select max(p.id) from purchase_submissions p where p.request_id = coalesce(r.request_id,"
+                     "  (select q.request_id from purchase_submissions q where q.schedule_due = s.due_at"
+                     "   and q.status = 'accepted' order by q.id desc limit 1))) as submission,"
+                     " array(select p.id::text || ' (' || p.status || ')' from purchase_submissions p"
+                     "  where p.schedule_due = s.due_at and p.status in ('sending', 'unknown') order by p.id)"
+                     " as unsettled,"
+                     f" case when ({MEANT_LIVE_SKIP}) or ({LIVE_MISSED_ROW}) then left(s.detail, 400) end as cause"
+                     " from agent_schedule s left join agent_runs r on r.id = s.run_id")
+SCHEDULED_LATEST_SQL = f"select {SCHEDULED_COLUMNS} order by s.due_at desc limit 1"
+SCHEDULED_INCIDENTS_SQL = (f"select {SCHEDULED_COLUMNS}"
+                           " where (s.due_at > %s and s.outcome in ('failed', 'missed', 'halted'))"
+                           " or s.outcome = 'running' or (s.outcome <> 'running' and r.status = 'running')"
+                           " or exists (select from purchase_submissions p where p.schedule_due = s.due_at"
+                           "  and p.status in ('sending', 'unknown'))"
+                           f" or ({MEANT_LIVE_SKIP} and not exists (select from agent_schedule later"
+                           "  where later.due_at > s.due_at and later.mode = 'live' and later.started_at is not null"
+                           "  and later.outcome in ('submitted', 'skipped')))"
+                           " order by s.due_at desc limit 50")
+SCHEDULED_SETTING_SQL = "select value from config where key = %s"
+# The newest scheduled time whose run started (`started_at`, written in the lease's transaction) and has ended: what
+# clears a missed time from the failure banner (`_missed_scheduled_run`).
+SCHEDULED_LAST_RAN_SQL = ("select due_at from agent_schedule where started_at is not null and outcome <> 'running'"
+                          " order by due_at desc limit 1")
+# Every catalog request, newest first: the Requests panel's list, and the Products page's (#55).
+CATALOG_REQUESTS_SQL = ("select id, requested_at, name, size, status, sku, decision_note"
+                        " from product_requests order by requested_at desc, id desc")
 
 
 def _catalog_counts(catalog: dict) -> dict:
@@ -572,52 +974,121 @@ def _catalog_counts(catalog: dict) -> dict:
                                  "unsettled": by_status["sending"] + by_status["unknown"]}}
 
 
-def _snapshot(conn: psycopg.Connection, now: datetime) -> dict:
+def _tracking_alert(conn: psycopg.Connection) -> dict | None:
+    """The newest answered tracking check (`tracking_checks`, migration 021) whose verdicts can be
+    read, and which of them said `outside`, or None when no readable check has been answered yet.
+    A newest check whose `results` aren't the bridge's documented verdicts names nothing and is
+    skipped, so a corrupt or undocumented answer cannot clear a known `outside` alert: the newest
+    valid check decides, the same one the incident log reads. Only the verdicts and times are read:
+    the stored request and answer are the bridge's, and never shown or sent."""
+    rows = _rows(conn, "select id, sent_at, answered_at, results from tracking_checks"
+                       " where results is not null and jsonb_typeof(results) = 'object'"
+                       " order by coalesce(answered_at, sent_at) desc, id desc limit 5")
+    for row in rows:
+        # `results` is the bridge's JSON, so it goes through the shared allowlist (`tracking.verdicts`):
+        # only the four documented keys, each only `within`/`outside`, reach the public JSON and the
+        # banner. A row the allowlist leaves empty names nothing and is skipped; a real check is
+        # stored with all four (`tracking._results`), so the first row usually decides.
+        results = tracking.verdicts(row["results"])
+        if not results:
+            continue
+        return {"checked_at": row["answered_at"] or row["sent_at"],
+                "outside": [k for k in tracking.RESULTS if results.get(k) == "outside"],
+                "results": results}
+    return None
+
+
+def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False,
+              syncs: dict | None = None) -> tuple[dict, datetime | None]:
     ours = _our_slots(conn)
     slots = tuple(ours["data"]) if ours["ok"] else ()
-    catalog = _panel(lambda: _rows(
-        conn, "select id, requested_at, name, size, status, sku, decision_note"
-              " from product_requests order by requested_at desc, id desc"))
+    assigned = _optional(conn, "select first_read_at from slot_assignment where id = 1") if slots else None
+    assignment_at = assigned["first_read_at"] if assigned else None
+    try:
+        opening = _guarded(conn, lambda: stock_mod.opening_at(conn))
+    except Missing:
+        opening = None   # A partial migration cannot establish the live boundary.
+    live_since = opening if opening is not None and opening <= now else None
+    purchases = _panel(lambda: _purchase_rows(conn, live_since, now))
+    comparison = "<" if live_since else "<="
+    model_test_count = _optional(conn, f"select count(*) as n from agent_runs where mode in ('dry-run', 'replay')"
+                                       f" and started_at {comparison} %s",
+                                 (live_since or now,))
+    catalog = _panel(lambda: _rows(conn, CATALOG_REQUESTS_SQL))
+    scheduled = _panel(lambda: _isolated(conn, lambda: _scheduled(conn, now)))
+    if live_since is None:
+        spend = {"ok": True, "data": None}
+    elif purchases["ok"]:
+        spend = _panel(lambda: _spend(conn, now, live_since, purchases["data"][0]))
+    else:
+        spend = {"ok": False, "why": "No live spend available."}
+    cards = _panel(lambda: _isolated(conn, lambda: report_card.report_cards(conn, now)))
     snap = {
         "as_of": now,
         "ours": ours,
-        "status": _status(conn, now),
-        "plan": _panel(lambda: _plan(conn, slots)),
-        "runs": _panel(lambda: _runs(conn, now, _tags(conn, now), slots)),
+        "wildcard": _wildcard(conn, slots),
+        "status": _status(conn, now, live_since, public),
+        "plan": _panel(lambda: _plan(conn, slots, now, assignment_at)),
+        "runs": _panel(lambda: _runs(conn, now, _tags(conn, now), slots, public=public)),
         "activity": _panel(lambda: _rows(
-            conn, "select id, at, kind, tool, outcome, detail, arguments from action_log"
-                  " order by at desc, id desc limit %s", (ACTIVITY_ROWS,))),
-        "recent_calls": _panel(lambda: _recent_calls(conn, now)),
+            conn, f"select id, at, kind, tool, outcome, detail, arguments from action_log where {ACTIVITY_VISIBLE}"
+                  " order by at desc, id desc limit %s", (now, live_since, list(PRE_OPENING_WRITES), ACTIVITY_ROWS))),
+        "recent_calls": _panel(lambda: _recent_calls(conn, now, live_since)),
         "sales": _panel(lambda: _sales(conn, now)),
-        "stock": _panel(lambda: _stock(conn) if ours["ok"] else _closet_only(conn)),
+        "stock": (_panel(lambda: _stock(conn, now) if ours["ok"] else _closet_only(conn)) if live_since
+                  else {"ok": True, "data": {"slots": {}, "closet": [], "warnings": []}}),
         "counts": (_panel(lambda: _guarded(conn, lambda: slot_counts.latest(conn))) if ours["ok"] else
                    {"ok": True, "data": {}}),
-        "spend": _panel(lambda: _spend(conn, now)),
+        "spend": spend,
         "visits": _panel(lambda: _isolated(conn, lambda: visits.counts(conn, now))),
         "money": _panel(lambda: _money_panel(conn, now)),
-        "purchase_requests": _panel(lambda: _rows(conn, """
-            select r.request_id, r.submitted_at, r.off_cycle, r.status, r.total_paid, r.decision_note,
-                   count(l.line_no) as lines,
-                   coalesce(sum(l.units_loaded), 0) as units_loaded,
-                   count(*) filter (where l.outcome = 'unavailable') as unavailable,
-                   count(*) filter (where l.outcome = 'alternate') as alternates
-              from purchase_requests r left join purchase_lines l using (request_id)
-             group by r.request_id order by r.submitted_at desc, r.request_id desc limit %s""", (REQUEST_ROWS,))),
+        "leaderboards": _panel(lambda: _isolated(conn, lambda: leaderboards.read(conn, now))),
+        "report_cards": cards,
+        "incidents": _panel(lambda: _isolated(conn, lambda: report_card.incidents(
+            conn, now, cards["data"] if cards["ok"] else None))),
+        "forecast": _panel(lambda: _isolated(conn, lambda: forecast_panel.read(
+            conn, now, cards["data"] if cards["ok"] else None))),
+        "tracking": _panel(lambda: _isolated(conn, lambda: tracking_daily.panel(conn, now))),
+        "tracking_alert": _panel(lambda: _isolated(conn, lambda: _tracking_alert(conn))),
+        "purchase_requests": ({"ok": True, "data": purchases["data"][0][:REQUEST_ROWS]}
+                              if purchases["ok"] else purchases),
         "catalog_requests": catalog,
         "catalog_counts": _catalog_counts(catalog),
+        "midweek_wakeup": _panel(lambda: _guarded(conn, lambda: midweek_wake.current(conn, now))),
+        "scheduled_runs": scheduled,
+        "price_checks": _panel(lambda: _isolated(conn, lambda: _price_checks(conn))),
+        # Open purchase submissions: while any is left, no purchase request can be sent.
+        "submissions": _panel(lambda: _rows(
+            conn, "select id, at, status from purchase_submissions where status in ('sending', 'unknown')"
+                  " order by id")),
     }
     try:
-        before_lock = now < lock_at()
+        lock = lock_at()
     except settings.SettingsError:
         # The assignment panel explains the bad setting. Keep the weekly view available.
-        before_lock = False
+        lock = None
+    before_lock = lock is not None and now < lock
+    # The ledger-opening boundary the failure banner applies to run and tracking alerts: a failure
+    # from before the opening is development spend, not a competition incident. None until it opens.
+    snap["opened_at"] = live_since
+    snap["key_dates"] = key_dates.panel(conn, now, opening, slots, snap["catalog_counts"], lock,
+                                        lambda read: _isolated(conn, read))
     if before_lock:
         snap["weekly_plan"] = snap["plan"]
-        snap["plan"] = _panel(lambda: _isolated(conn, lambda: _first_fill(conn, slots)))
+        snap["plan"] = _panel(lambda: _isolated(conn, lambda: _first_fill(conn, slots, assignment_at)))
+    hidden_runs = model_test_count["n"] if model_test_count else 0
+    hidden_purchases = purchases["data"][1] if purchases["ok"] else 0
+    if hidden_runs or hidden_purchases:
+        snap["runs"]["hidden_tests"] = {"runs": hidden_runs, "purchases": hidden_purchases}
     snap["products"] = _products(conn, machine_art.lane_products(snap, slots))
     _check_plan_fills(snap)
     snap["pricing"] = _pricing(conn, now, snap)
-    return snap
+    snap["price_check_panel"] = _panel(lambda: _isolated(conn, lambda: price_check_panel.read(
+        conn, now, price_check_panel.plan_drinks(snap), (syncs or {}).get("price_check"))))
+    snap["plan_history"] = _panel(lambda: _isolated(conn, lambda: plan_history.read(
+        conn, now, slots, assignment_at, old_text=OLD_ASSIGNMENT,
+        cards=(cards["data"] or {}).get("weeks") if cards["ok"] else None)))
+    return snap, assignment_at
 
 
 def _pricing(conn: psycopg.Connection, now: datetime, snap: dict) -> dict:
@@ -713,6 +1184,20 @@ def attention(snap: dict) -> list[dict]:
 
     if (failing := _failing_syncs(snap.get("syncs"), now)) is not None:
         add("bad", failing)
+    for scheduled in _scheduled_runs(snap.get("scheduled_runs"), snap.get("syncs"), now):
+        add(*scheduled)
+    for line in _price_check_lines(snap.get("price_checks")):
+        add(*line)
+
+    open_submissions = snap.get("submissions") or {"ok": True, "data": []}
+    if open_submissions["ok"] and open_submissions["data"]:
+        first = open_submissions["data"][0]
+        named = ", ".join(f"{r['id']} ({r['status']}, {_span(now - r['at'])} ago)" for r in open_submissions["data"])
+        add("bad", f"Orders are blocked: purchase submission {named} may already be on the bridge, so the agent "
+                   "can't send another request until a person settles it. Find out whether the bridge filed it "
+                   "(ask the instructors if no request ID is known), then run "
+                   f"`python -m vending.submissions resolve {first['id']} "
+                   "--request-id ID --by NAME` or `--not-filed --by NAME`.")
 
     catalog = snap["catalog_requests"]
     if catalog["ok"]:
@@ -724,6 +1209,11 @@ def attention(snap: dict) -> list[dict]:
     money = snap.get("money")
     if money and money["ok"]:
         for level, text in money_panel.attention(money["data"]):
+            add(level, text)
+
+    tracking = snap.get("tracking")
+    if tracking and tracking["ok"]:
+        for level, text in tracking_daily.attention(tracking["data"]):
             add(level, text)
 
     plan = snap.get("plan") or {}
@@ -745,6 +1235,12 @@ def attention(snap: dict) -> list[dict]:
     pricing = snap.get("pricing")
     if pricing and pricing["ok"] and pricing["data"].get("wildcard_stale"):
         add("warn", pricing_panel.WILDCARD_STALE)
+    wake = snap.get("midweek_wakeup")
+    if wake and wake.get("ok") and wake["data"]:
+        r = wake["data"]
+        add("info" if r["requested_at"] else "warn", "Midweek wake-up: " + r["reason"]
+            + (" A midweek run was requested." if r["requested_at"]
+               else " A midweek run has not been requested yet."))
     if pricing and pricing["ok"]:
         for r in pricing["data"]["rows"]:
             if r["legal"] is False:
@@ -757,7 +1253,10 @@ def attention(snap: dict) -> list[dict]:
 
     for key, name in (("plan", "Plan"), ("runs", "Runs"), ("activity", "Tool calls"), ("sales", "Sales"),
                       ("stock", "Stock"), ("purchase_requests", "Purchase requests"),
-                      ("catalog_requests", "Catalog requests"), ("money", "Money")):
+                      ("catalog_requests", "Catalog requests"), ("submissions", "Purchase submissions"),
+                      ("money", "Money"),
+                      ("leaderboards", "Leaderboards"), ("report_cards", "Report card"),
+                      ("incidents", "Incident log"), ("tracking", "Tracking check")):
         if key in snap and not snap[key]["ok"]:
             add("info", f"{name} isn't available: {snap[key]['why']}")
 
@@ -772,22 +1271,334 @@ def _failing_syncs(syncs: dict | None, now: datetime) -> str | None:
     A job that crashed, timed out or was still running has no exit code; the worker counts it as
     failing too (`State.healthy`), so it is named with its outcome.
     """
-    if not syncs or not syncs.get("rounds"):
+    jobs = report_card.failed_sync_jobs(syncs)
+    if jobs is None:
         return None
-    failed = [r for r in syncs.get("results") or [] if r.get("exit_code") != 0]
-    if not failed:
-        return None
-    jobs = ", ".join(f"`{r.get('job')}` " + (f"exit {r['exit_code']}" if r.get("exit_code") is not None
-                                             else str(r.get("outcome") or "no exit code"))
-                     for r in failed)
     when = ""
-    try:
-        when = f" ({_span(now - datetime.fromisoformat(syncs['last_round_at']))} ago)"
-    except (KeyError, TypeError, ValueError):
-        pass
+    if (round_at := report_card.sync_round_at(syncs)) is not None:
+        when = f" ({_span(now - round_at)} ago)"
+    failed = [r for r in (syncs.get("results") or []) if r.get("exit_code") != 0]
     codes = sorted({r["exit_code"] for r in failed if r.get("exit_code") in SYNC_EXITS})
     meaning = "".join(f" Exit {c}: {SYNC_EXITS[c]}." for c in codes)
-    return f"The worker's latest sync round{when} failed: {jobs}.{meaning} See `/health`."
+    return f"The worker's latest hourly sync{when} failed: {jobs}.{meaning} See `/health`."
+
+
+# --- Failure banner ------------------------------------------------------------------------------
+
+# The banner's lead words per alert kind (`build_alerts`).
+ALERT_LABELS = {"sync_failed": "Sync round failed", "run_failed": "Agent run failed",
+                "run_halted": "Agent run halted", "run_stuck": "Agent run stuck",
+                "tracking_outside": "Tracking check outside", "missed_run": "Scheduled run missed"}
+# Each banner line's group (`data-kind` on the line): during an outage the refresh handler
+# (`SCRIPT`) adds, replaces or removes only the sync line - the one the worker can name without
+# the database - and the run and tracking lines stay until a refresh that read the database.
+ALERT_GROUPS = {"sync_failed": "sync", "run_failed": "run", "run_halted": "run",
+                "run_stuck": "run", "tracking_outside": "tracking", "missed_run": "run"}
+
+
+def build_alerts(snap: dict) -> list[dict]:
+    """What the page-top banner says now: the worker's latest sync round, the latest agent run,
+    and the newest tracking check's verdict. One line each, plain words the code wrote and a
+    time — never a failure's own text, which can quote a row or name the host; the detail stays
+    in the database, `/health` and the container's log. Built from the snapshot alone, so it
+    reads nothing, and `/state.json` carries the same list as `alerts`.
+
+    Run and tracking alerts cover the live competition only: the moment they name must be at or
+    after the ledger's opening (`opened_at`), so a development failure from before it never
+    banners. A sync round is current state, so it banners whenever it ran. A run's failure stays
+    on the banner until a later run FINISHES successfully: a retry that is still running doesn't
+    clear it.
+    """
+    out: list[dict] = []
+
+    def add(kind: str, at: datetime | None, text: str) -> None:
+        out.append({"kind": kind, "at": at, "text": text})
+
+    if (jobs := report_card.failed_sync_jobs(snap.get("syncs"))) is not None:
+        add("sync_failed", report_card.sync_round_at(snap.get("syncs")),
+            f"The worker's latest sync round failed: {jobs}. See `/health`.")
+
+    opened = snap.get("opened_at")
+    status = snap.get("status") or {}
+    run, done = status.get("latest_run"), status.get("last_finished")
+    if run and run.get("stale"):
+        alerts = [("run_stuck", run["started_at"], run["started_at"],
+                   f"Run #{run['id']} has said `running` for {_span(snap['as_of'] - run['started_at'])}: "
+                   "the process probably died.")]
+    elif (stuck := status.get("stuck_run")) and not (done and done["started_at"] > stuck["started_at"]):
+        # The newest run isn't stuck (a newer one started), but an older run is still `running`
+        # past the stale bound and no run has finished since it started: the retry the team began
+        # doesn't resolve it - only a run finishing does.
+        alerts = [("run_stuck", stuck["started_at"], stuck["started_at"],
+                   f"Run #{stuck['id']} has said `running` for {_span(snap['as_of'] - stuck['started_at'])}: "
+                   "the process probably died.")]
+    elif run and run["status"] in ("failed", "halted"):
+        kind, at, text = _run_alert(run, status)
+        alerts = [(kind, run["started_at"], at, text)]
+    elif done and done["status"] in ("failed", "halted"):
+        # The latest run is still going (or none has started): the last finished run's failure
+        # stays visible until a run finishes successfully.
+        kind, at, text = _run_alert(done, status)
+        alerts = [(kind, done["started_at"], at, text)]
+    else:
+        alerts = []
+    for kind, began, at, text in alerts:
+        # The boundary is when the run started: a run from before the opening is development,
+        # whatever happened to it later; the line itself shows when it ended.
+        if opened is not None and (began is None or began >= opened):
+            add(kind, at, text)
+
+    if (check := snap.get("tracking_alert")) and check["ok"] and check["data"] and check["data"]["outside"]:
+        at = check["data"]["checked_at"]
+        if opened is not None and (at is None or at >= opened):
+            outside = ", ".join(check["data"]["outside"])
+            add("tracking_outside", at,
+                f"The bridge's tracking check said {outside} outside: our figures and the bridge's counts "
+                "disagree. Compare with `python -m vending.tracking show`.")
+
+    if (missed := _missed_scheduled_run(snap)) is not None:
+        out.append(missed)
+    return out
+
+
+def _run_alert(run: dict, status: dict) -> tuple[str, datetime, str]:
+    """The banner line for a finished run that failed or ended halted: when the run ended (a
+    finished run's `finished_at`, else when it started), and, for a halt, the switch as it is now
+    (`config`), not as it was when the run ended — a halt the team has since turned off says so."""
+    at = run.get("finished_at") or run["started_at"]
+    if run["status"] == "failed":
+        return "run_failed", at, f"Run #{run['id']} failed. See Runs below."
+    switch = "The halt switch is on." if status.get("halted") else "The halt switch is off now."
+    return "run_halted", at, f"Run #{run['id']} ended halted. {switch}"
+
+
+def _missed_scheduled_run(snap: dict) -> dict | None:
+    """The banner line for the newest scheduled or midweek time that was due and never ran by its latest start
+    (`agent_schedule.outcome = 'missed'`, from the scheduled runs' panel: the newest row and the last week's
+    problems). Live period only, as the run lines: its time must be at or after the ledger's opening. It clears
+    once a later scheduled run has started and ended (`last_ran`, the panel's own read, so a newer row still
+    running can't push it out of view). A run refused at a busy lease never started, so it clears nothing.
+    Plain words only, never the row's detail."""
+    opened = snap.get("opened_at")
+    panel = snap.get("scheduled_runs")
+    data = panel.get("data") if isinstance(panel, dict) and panel.get("ok") else None
+    if opened is None or not isinstance(data, dict):
+        return None
+    rows = [r for r in [data.get("latest"), *(data.get("incidents") or [])]
+            if isinstance(r, dict) and isinstance(r.get("due_at"), datetime)]
+    missed = [r for r in rows if r.get("outcome") == "missed" and r["due_at"] >= opened]
+    if not missed:
+        return None
+    row = max(missed, key=lambda r: r["due_at"])
+    ran = data.get("last_ran")
+    if isinstance(ran, datetime) and ran > row["due_at"]:
+        return None
+    midweek = row.get("kind") == agent_schedule.MIDWEEK
+    due = _eastern(row["due_at"])
+    what = (f"The midweek run requested {due:%a %d %b}, {due.hour % 12 or 12}:{due:%M %p} ET" if midweek
+            else f"The scheduled run due {due:%a %d %b}, {due.hour % 12 or 12}:{due:%M %p} ET")
+    latest = row.get("latest_at")
+    if isinstance(latest, datetime):
+        last = _eastern(latest)
+        by = f" by its latest start, {last:%a %d %b}, {last.hour % 12 or 12}:{last:%M %p} ET"
+    else:
+        by = " in its window"
+    return {"kind": "missed_run", "at": row["due_at"],
+            "text": f"{what} never started{by}. `python -m vending.agent_schedule` says why."}
+
+
+def outage_alerts(syncs: dict | None) -> list[dict]:
+    """The banner lines answerable with no database: the worker's own latest sync round, the same
+    line the live banner shows. The run and tracking lines need the database, so an outage banner
+    names only the sync round."""
+    return build_alerts({"syncs": syncs, "status": {}, "tracking_alert": None})
+
+
+def outage_page(message: str, alerts: list[dict], outage: bool = False) -> str:
+    """The page `/dashboard` answers with when the database can't be read: why the rest is missing,
+    plus the failure banner the worker knows on its own (`outage_alerts`). The page's refresh
+    handler swaps this banner's sync line in during an outage (`SCRIPT`), so a failed sync round
+    shows without Postgres. `outage` marks the page (`data-sync-ok`) when this is the worker's
+    real outage reply - the database couldn't be read, and the syncs handed over are the worker's
+    own - so the handler can tell it from any other error reply, and from an outage with nothing
+    failing (a recovered sync round, the database still down), which clears a stale line instead
+    of throwing and keeping it. A generic 500 - a bug drawing the page, not an outage - carries
+    neither the marker nor the banner, and what is shown stays."""
+    body = (f'<header class="top">{mascot_svg("problem")}<h1>Agent dashboard</h1>'
+            f'<span class="verdict problem">No data</span></header>'
+            f'<ul class="attention"><li class="bad"><span class="dot">!</span><span>'
+            f"Can't read the database: {_e(message)}. This page tries again every {REFRESH_SECONDS} s."
+            '</span></li></ul>')
+    marker = ' data-sync-ok="1"' if outage else ""
+    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            f'<meta name="viewport" content="width=device-width, initial-scale=1">'
+            f'<meta http-equiv="refresh" content="{REFRESH_SECONDS}">'
+            f'<title>Problem &middot; Agent dashboard</title>'
+            f'<style>{STYLE}</style></head><body><main{marker}>{_alerts_html(alerts)}{body}</main></body></html>')
+
+
+def _scheduled(conn: psycopg.Connection, now: datetime) -> dict:
+    """The scheduled runs' panel: the newest row, the last week's problems, and whether the database's
+    `agent_schedule_mode` is one of the three words (`setting_ok`). A database missing migrations says only that
+    (`behind`): no scheduled run can start until they are applied, and the rows may not be readable."""
+    from vending import db
+
+    behind = db.pending(conn)
+    if behind:
+        return {"behind": behind, "latest": None, "incidents": [], "setting_ok": True, "setting_live": False}
+    latest = _rows(conn, SCHEDULED_LATEST_SQL)
+    setting = _rows(conn, SCHEDULED_SETTING_SQL, (agent_schedule.DB_MODE_KEY,))
+    ran = _rows(conn, SCHEDULED_LAST_RAN_SQL)
+    return {"latest": latest[0] if latest else None,
+            "incidents": _rows(conn, SCHEDULED_INCIDENTS_SQL, (now - agent_schedule.LOOKBACK,)),
+            "last_ran": ran[0]["due_at"] if ran else None,
+            "setting_ok": not setting or agent_schedule.valid_database_mode(setting[0]["value"]),
+            "setting_live": bool(setting) and setting[0]["value"] == "live"}
+
+
+# How Needs attention reads a scheduled agent run (`vending.agent_schedule`), by its outcome.
+SCHEDULED = {"submitted": ("info", "submitted a restock request"),
+             "failed": ("bad", "failed"), "missed": ("bad", "was missed: no run started in its window"),
+             "halted": ("warn", "was halted: the halt switch was on"), "skipped": ("info", "skipped"),
+             "running": ("info", "is running now")}
+# Each of these stays in Needs attention for a week (`agent_schedule.LOOKBACK`), whatever ran after it.
+SCHEDULED_PROBLEMS = ("failed", "missed", "halted")
+
+
+def _scheduled_line(row: dict, now: datetime) -> tuple[str, str] | None:
+    """(level, sentence) on one `agent_schedule` row, or None for an outcome it doesn't know. It says whether the
+    run was live or a dry run, and, once it has ended, what it sent: the request and submission, or nothing."""
+    outcome = row.get("outcome")
+    if outcome not in SCHEDULED or (outcome == "submitted" and row.get("mode") != "live"):
+        return None
+    level, what = SCHEDULED[outcome]
+    claimed = row.get("claimed_at")
+    if outcome == "running" and isinstance(claimed, datetime) and now - claimed > agent_schedule.STUCK_AFTER:
+        level, what = "bad", (f"has said `running` for {_span(now - claimed)}, past the agent's deadline: "
+                              "the worker probably stopped mid-run")
+    if outcome == "skipped" and row.get("mode") == "off":
+        what = f"skipped: `{agent_schedule.DB_MODE_KEY}` is off in the database"
+    cause = row.get("cause")
+    if outcome == "skipped" and isinstance(cause, str) and cause:
+        level, what = "warn", f"didn't run live: {cause.rstrip('.')}"
+    if outcome == "missed" and isinstance(cause, str) and cause:
+        what = f"was missed: {cause.rstrip('.')}"
+    if outcome != "running" and row.get("agent_status") == "running":
+        level, what = "bad", (f"ended {outcome}, but its agent run still says running in agent_runs: its ending "
+                              "couldn't be recorded there. Record it by hand once you know how it ended")
+    midweek = row.get("kind") == agent_schedule.MIDWEEK
+    try:
+        due = _eastern(row["due_at"])
+        when = f" {'requested' if midweek else 'due'} {due:%a %d %b}, {due.hour % 12 or 12}:{due:%M %p} ET"
+    except (KeyError, TypeError, ValueError, AttributeError):
+        when = ""
+    kind = {"dry-run": "dry run", "live": "live run"}.get(row.get("mode"), "run")
+    run = f" (agent run {int(row['run_id'])})" if isinstance(row.get("run_id"), int) else ""
+    if midweek and what == SCHEDULED["submitted"][1]:
+        what = "submitted a midweek visit request"
+    sent = ""
+    request, submission, unsettled = row.get("request_id"), row.get("submission"), row.get("unsettled") or []
+    if request:
+        sent = f" Sent: request {request}" + (f" (submission {int(submission)})" if isinstance(submission, int)
+                                              else "") + "."
+    elif unsettled:
+        level = "bad"
+        first = str(unsettled[0]).split(" ")[0]
+        sent = (f" May have sent: submission {', '.join(str(u) for u in unsettled)}; a person finds out whether "
+                f"the bridge filed it and settles it with `python -m vending.submissions resolve {first}`.")
+    elif outcome != "running":
+        sent = " Nothing sent."
+    see = "" if outcome in ("running", "submitted") else " `python -m vending.agent_schedule` says why."
+    return level, f"The {'midweek' if midweek else 'scheduled'} {kind}{when} {what}{run}.{sent}{see}"
+
+
+# The worker's weekly price check (`vending.price_schedule`): its newest row, read from the table. No `detail`: a
+# failed one's can hold an error.
+PRICE_CHECK_SQL = ("select due_at, mode, outcome, compare, drinks, changed, failures, cost_usd"
+                   " from price_check_runs order by due_at desc limit 1")
+
+
+def _price_checks(conn: psycopg.Connection) -> dict | None:
+    """The weekly price check's newest run, or None when there is none (or the table isn't there yet)."""
+    return _optional(conn, PRICE_CHECK_SQL)
+
+
+def _price_check_lines(panel: dict | None) -> list[tuple[str, str]]:
+    """Needs attention's line on the weekly price check: its last run, only when it ended partial, failed, halted
+    or missed, with what it did (cost, drinks looked up, prices changed, drinks without a usable price)."""
+    row = panel.get("data") if isinstance(panel, dict) and panel.get("ok") else None
+    if not isinstance(row, dict) or row.get("outcome") not in price_schedule.PROBLEMS:
+        return []
+    outcome = row["outcome"]
+    level = "warn" if outcome in ("partial", "halted") else "bad"
+    what = {"partial": "left some drinks without a usable price", "failed": "failed",
+            "halted": "didn't run: the halt switch was on", "missed": "was missed: no run started in its window"}[outcome]
+    try:
+        due = _eastern(row["due_at"])
+        when = f" due {due:%a %d %b}, {due.hour % 12 or 12}:{due:%M %p} ET"
+    except (KeyError, TypeError, ValueError, AttributeError):
+        when = ""
+    did = ""
+    if row.get("drinks") is not None:
+        cost = row.get("cost_usd")
+        did = (f" It {'compared every store' if row.get('compare') else 're-checked primary stores'}: "
+               f"{row['drinks']} drinks looked up, {row.get('changed') or 0} prices changed, "
+               f"{row.get('failures') or 0} without a usable price"
+               + (f", ${cost:.2f}" if cost is not None else "") + ".")
+    return [(level, f"The weekly price check{when} {what}.{did} `python -m vending.price_schedule` says why; "
+                    "`python -m vending.price_search SKU --history` shows a drink's lookups.")]
+
+
+SCHEDULE_UNAVAILABLE = ("Scheduled agent run status unavailable: the `agent_schedule` table couldn't be read "
+                        "just now. `python -m vending.agent_schedule` shows the rows.")
+
+
+def _scheduled_runs(panel: dict | None, syncs: dict | None, now: datetime) -> list[tuple[str, str]]:
+    """Needs attention's lines on the scheduled agent runs: a wrong setting (from the worker's /health, or the
+    database's `agent_schedule_mode`), the newest run whatever its outcome and age, and every failed, missed
+    or halted run of the last week and every stuck one (from `agent_schedule`). A panel that couldn't be read
+    says so. Nothing when there is no panel (an old snapshot) or no row yet."""
+    out: list[tuple[str, str]] = []
+    schedule = (syncs or {}).get("agent_schedule")
+    if isinstance(schedule, dict) and schedule.get("mode") == "invalid":
+        out.append(("bad", "Scheduled agent runs are off because a setting is wrong (`AGENT_SCHEDULE_MODE`, "
+                           "`AGENT_SCHEDULE` or `AGENT_SCHEDULE_FROM`). The container's log says which."))
+    data = panel.get("data") if panel is not None and panel.get("ok") else None
+    # Live only when both say so: say when they do (each run may send), and when only one does.
+    container = schedule.get("setting") if isinstance(schedule, dict) else None
+    in_db = data.get("setting_live") if isinstance(data, dict) else None
+    if container == "live" and in_db:
+        out.append(("warn", agent_schedule.LIVE_ON))
+    elif (container == "live" and in_db is False) or (in_db and container in ("off", "dry-run")):
+        out.append(("info", agent_schedule.HALF_LIVE))
+    if isinstance(schedule, dict) and schedule.get("model_key") is False:
+        out.append(("bad", agent_schedule.NO_KEY_LINE))
+    if isinstance(schedule, dict) and isinstance(schedule.get("problem"), str) and schedule["problem"]:
+        out.append(("bad", schedule["problem"]))
+    if isinstance(schedule, dict) and isinstance(schedule.get("waiting"), str) and schedule["waiting"]:
+        out.append(("warn", schedule["waiting"]))
+    if panel is None:
+        return out
+    if not isinstance(data, dict):
+        out.append(("warn", SCHEDULE_UNAVAILABLE))
+        return out
+    if data.get("behind"):
+        out.append(("bad", agent_schedule.BEHIND.format(names=", ".join(data["behind"]))))
+        return out
+    if data.get("setting_ok") is False:
+        out.append(("bad", agent_schedule.INVALID_IN_DB))
+    latest = data.get("latest")
+    seen = set()
+    if isinstance(latest, dict) and (line := _scheduled_line(latest, now)) is not None:
+        out.append(line)
+        seen.add(latest.get("due_at"))
+    for row in data.get("incidents") or []:
+        if row.get("due_at") in seen:
+            continue
+        line = _scheduled_line(row, now)
+        if line is not None and line[0] != "info":
+            out.append(line)
+    return out
 
 
 def verdict(items: list[dict]) -> str:
@@ -799,6 +1610,8 @@ def verdict(items: list[dict]) -> str:
 def to_json(value: Any) -> str:
     def default(v: Any) -> Any:
         if isinstance(v, datetime):
+            return v.isoformat()
+        if isinstance(v, date):          # a plain date (the wake-up's week start); datetime is above
             return v.isoformat()
         if isinstance(v, Decimal):
             return str(v)    # money stays exact text, as the tools send it
@@ -843,7 +1656,8 @@ def _window(sales: dict) -> str:
 def _time(value: datetime | None, form: str = "abs", now: datetime | None = None) -> str:
     """A <time> the page's script keeps current in the viewer's zone. Server text until it runs.
 
-    `abs` is a date and time, `clock` just the time, `ago` and `until` a span from `now`.
+    `abs` is a date and time, `clock` just the time, `ago` and `until` a span from `now`, and `et`,
+    `etclock` and `etday` the time ("2:00 PM ET", "2:00 PM") or the day and time in Eastern, the machine's zone.
     """
     if value is None:
         return "&mdash;"
@@ -853,6 +1667,12 @@ def _time(value: datetime | None, form: str = "abs", now: datetime | None = None
         text = f"{_span(now - value)} ago"
     elif form == "until" and now is not None:
         text = _span(value - now)
+    elif form in ("et", "etclock", "etday"):
+        local = _eastern(value)
+        eastern = getattr(local.tzinfo, "key", None) == "America/New_York"
+        local = local if eastern else utc       # without the IANA database, say UTC rather than guess
+        clock = f"{local:%I:%M %p}".lstrip("0") + ("" if form == "etclock" and eastern else " ET" if eastern else " UTC")
+        text = (f"{local:%a} {local.day} {local:%b}, " if form == "etday" else "") + clock
     elif form == "clock":
         text = f"{utc:%H:%M} UTC"
     else:
@@ -982,10 +1802,10 @@ def _check_plan_fills(snap: dict) -> None:
 
 
 def machine_view(snap: dict) -> dict:
-    """What "In the machine" draws for each of our slots, Now and Next Friday. Reads nothing.
+    """What "In the machine" draws for each of our slots, Now and Next restock. Reads nothing.
 
     Now: the price on the tag from the latest poll, and the product and units on hand from the
-    receipts (`vending.stock`); each is None when there is no record of it. Next Friday: the latest
+    receipts (`vending.stock`); each is None when there is no record of it. Next restock: the latest
     plan's product, price and fill, falling back to Now for what the plan leaves as is. `next` is
     None when there is no plan.
     """
@@ -1028,56 +1848,136 @@ def machine_view(snap: dict) -> dict:
                 labels = (_changes(entry, planned[slot]["before"], now["price"]) if entry is not None
                           else ["dropped"])
                 change = {"labels": labels, "kind": _change_kind(labels), "reason": (entry or {}).get("reason")}
-        out[slot] = {"now": now, "next": nxt, "change": change, "fill_to": _fill(entry)}
+        out[slot] = {"now": now, "next": nxt, "change": change, "fill_to": _fill(entry),
+                     "reason": (entry or {}).get("reason"), "wildcard": slot == snap.get("wildcard")}
     return out
 
 
-def _cabinet_html(snap: dict) -> str:
-    """In the machine: our lanes close up (`vending.machine_art`), and the plan's changes."""
+def _attention_card(items: list[dict]) -> str:
+    """Needs attention, beside the machine while nothing is picked. Never cut short: the side scrolls first."""
+    bad = sum(1 for a in items if a["level"] == "bad")
+    warn = sum(1 for a in items if a["level"] == "warn")
+    badge = (_pill(_plural(bad, "problem"), "bad") if bad else _pill(_plural(warn, "check"), "warn") if warn
+             else _pill(_plural(len(items), "note"), "info") if items else _pill("all clear", "ok"))
+    return f'<div class="ops-card ops-attn" id="attention"><h3>Needs attention {badge}</h3>{_attention_html(items)}</div>'
+
+
+def _pick(slot: str, inner: str, view: dict) -> str:
+    """A row that picks one of our selections on the machine, or, for one not drawn there, opens its plan row."""
+    if slot in view:
+        return f'<a class="chg" id="chg-{_e(slot)}" href="{machine_art.pick_href(slot)}" data-sel="{_e(slot)}">{inner}</a>'
+    return f'<a class="chg" href="#slot-{_e(slot)}">{inner}</a>'
+
+
+def _changes_html(snap: dict, view: dict) -> str:
+    """The plan's changes, beside the machine while nothing is picked. Before the slot lock, each line of
+    the plan for the first fill; from the lock, each slot the latest plan changed, with the agent's
+    reason. Each row picks its selection."""
+    jump = '<a class="ops-jump" href="#plan">The plan &darr;</a>'
+    plan = snap["plan"]
+    p = plan["data"] if plan["ok"] else None
+    if "weekly_plan" in snap:
+        title = "First fill"
+        if not plan["ok"]:
+            body = _missing(plan)
+        elif p is None:
+            body = '<p class="dim">No plan for the first fill loaded yet.</p>'
+        elif p.get("message"):
+            body = f'<p class="dim">{_e(p["message"])}</p>'
+        else:
+            title += f' <span class="hint">{"picked plan" if p["picked"] else "latest, not picked"}</span>'
+            rows = "".join(
+                "<li>" + _pick(row["slot"], f'<b>{_e(row["slot"])}</b><span>'
+                                            + (f"{WILD} " if row["slot"] == snap.get("wildcard") else "")
+                                            + f'{_e(row["product"] or "no product")} '
+                                            f'&middot; {plan_rounds.format_cents(row["price_cents"])} &middot; '
+                                            f'{_plural(row["units"], "unit")}' + _fill_pill(row.get("fill_check"))
+                                            + "</span>", view) + "</li>"
+                for row in p["slots"])
+            body = f'<ul class="changes ff">{rows}</ul>' if rows else '<p class="dim">The plan has no slots.</p>'
+        return f'<div class="ops-card ops-chg" id="plan-changes"><h3>{title}{jump}</h3>{body}</div>'
+    if not plan["ok"]:
+        return f'<div class="ops-card ops-chg" id="plan-changes"><h3>Plan changes{jump}</h3>{_missing(plan)}</div>'
+    if p is None:
+        return (f'<div class="ops-card ops-chg" id="plan-changes"><h3>Plan changes{jump}</h3>'
+                '<p class="dim">No plan yet.</p></div>')
+    run = p["run"]
+    head = f'<h3>Plan changes <span class="hint">run #{run["id"]}</span> {_run_pill(run)}{jump}</h3>'
+    if not p["previous_run"]:
+        body = '<p class="dim">First plan of this mode: nothing earlier to compare with.</p>'
+    else:
+        items = [(slot, v["change"]) for slot, v in view.items() if v["change"]]
+        items += [(s["slot"], {"labels": ["dropped"], "kind": "bad", "reason": None})
+                  for s in p["slots"] if s["changed"] and s["slot"] not in view]
+        checks = {s["slot"]: s.get("fill_check") for s in p["slots"]}
+        rows = "".join(
+            "<li>" + _pick(slot, f'<span class="dotk {c["kind"]}"></span><b>{_e(slot)}</b><span>{_e(", ".join(c["labels"]))}'
+                                 + (f" {WILD}" if slot == snap.get("wildcard") else "") + _fill_pill(checks.get(slot))
+                                 + (f'<span class="why">{_e(c["reason"])}</span>' if c["reason"] else "") + "</span>",
+                           view) + "</li>"
+            for slot, c in items)
+        body = (f'<ul class="changes">{rows}</ul>' if rows else
+                f'<p class="dim">No slot changes since run #{p["previous_run"]}.</p>')
+    return f'<div class="ops-card ops-chg" id="plan-changes">{head}{body}</div>'
+
+
+def _fill_pill(check: str | None) -> str:
+    """A plan row's under-fill flag (`capacity.fill_check`, #194) as a pill: a warning, or muted when the
+    capacity isn't counted."""
+    return f" {_pill(check, 'muted' if check == capacity.NOT_COUNTED else 'warn')}" if check else ""
+
+
+def _fill_checks(snap: dict) -> dict:
+    """Each selection's under-fill flag in the plan the machine shows for the next restock (`_check_plan_fills`)."""
+    plan = snap.get("weekly_plan", snap["plan"])
+    p = plan["data"] if plan["ok"] else None
+    return {s["slot"]: s["fill_check"] for s in (p or {}).get("slots", []) if s.get("fill_check")}
+
+
+def _first_fill_lines(snap: dict) -> dict:
+    """Each selection's line in the plan for the first fill, for the close-up's facts. Before the slot lock only."""
+    if "weekly_plan" not in snap or not snap["plan"]["ok"]:
+        return {}
+    p = snap["plan"]["data"]
+    if not p or p.get("message"):
+        return {}
+    return {row["slot"]: {"text": f'{row["product"] or "no product"} · {plan_rounds.format_cents(row["price_cents"])} · '
+                                  f'{_plural(row["units"], "unit")}'
+                                  + (f' · {row["fill_check"]}' if row.get("fill_check") else ""),
+                          "reason": row["reason"]}
+            for row in p["slots"]}
+
+
+def _cabinet_html(snap: dict, items: list[dict] | None = None) -> str:
+    """In the machine, as one screen: the machine's whole front on the left (`vending.machine_art`);
+    on the right, Needs attention and the plan's changes, or, once one of ours is picked, its shelf
+    close up and its facts. On a phone the front comes first and the close-up is a sheet."""
+    items = attention(snap) if items is None else items
     plan = snap.get("weekly_plan", snap["plan"])
     now, sales, stock = snap["as_of"], snap["sales"], snap["stock"]
+    view = machine_view(snap) if snap["ours"]["ok"] else {}
+    face = {f"{r}{c}" for r in range(1, SHELVES + 1) for c in range(1, COLUMNS + 1)}
+    shown = {s: v for s, v in view.items() if s in face}
+    home = f'<div class="ops-home">{_attention_card(items)}{_changes_html(snap, shown)}</div>'
     if not snap["ours"]["ok"]:
         return ('<section id="vm" class="vm" data-view="now"><h2>In the machine</h2>'
-                f'{_missing(snap["ours"])}</section>')
+                f'<div class="ops"><div class="ops-front">{_missing(snap["ours"])}</div>'
+                f'<div class="ops-side">{home}</div></div></section>')
     p = plan["data"] if plan["ok"] else None
-    view = machine_view(snap)
-    face = {f"{r}{c}" for r in range(1, SHELVES + 1) for c in range(1, COLUMNS + 1)}
     products = snap.get("products") or {"ok": False, "why": PRODUCTS_FAILED}
-    cabinet = machine_art.closeup_html({s: v for s, v in view.items() if s in face},
-                                       products["data"] if products["ok"] else None,
-                                       p is not None and "weekly_plan" not in snap)
+    sold, span = {}, "in the last 7 days"
+    if sales["ok"]:
+        sold = {s: v for s, v in sales["data"]["slots"].items() if s in shown}
+        span = _window_words(sales["data"])
+    front, panels = machine_art.split_html(shown, products["data"] if products["ok"] else None,
+                                           p is not None and "weekly_plan" not in snap, sold, span,
+                                           _first_fill_lines(snap), _fill_checks(snap))
+    lede = ""
     if p is None:
-        cabinet = '<p class="empty v-next">No plan yet: Next Friday shows the machine as it is now.</p>' + cabinet
+        lede = '<p class="empty v-next">No plan yet: Next restock shows the machine as it is now.</p>'
     off_face = [s for s in our_selections(snap) if s not in face]
     if off_face:
-        cabinet += f'<p class="sub">Also ours, not on the {SHELVES}&times;{COLUMNS} face: {_e(", ".join(off_face))}</p>'
-
-    # The side: what the plan changes, with the agent's reasons.
-    if not plan["ok"]:
-        changes = _missing(plan)
-    elif p is None:
-        changes = '<div class="label">Next Friday</div><p class="dim">No plan yet.</p>'
-    else:
-        run = p["run"]
-        head = (f'<div class="label">Plan changes &middot; run #{run["id"]} {_run_pill(run)}</div>')
-        if not p["previous_run"]:
-            changes = head + '<p class="dim">First plan of this mode: nothing earlier to compare with.</p>'
-        else:
-            items = [(slot, v["change"]) for slot, v in view.items() if v["change"]]
-            items += [(s["slot"], {"labels": ["dropped"], "kind": "bad", "reason": None})
-                      for s in p["slots"] if s["changed"] and s["slot"] not in view]
-            def slot_link(slot: str) -> str:
-                label = f'<b>{_e(slot)}</b>'
-                return label if "weekly_plan" in snap else f'<a href="#slot-{_e(slot)}">{label}</a>'
-
-            rows = "".join(
-                f'<li><span class="dotk {c["kind"]}"></span>{slot_link(slot)}'
-                f'<span>{_e(", ".join(c["labels"]))}'
-                + (f'<span class="why">{_e(c["reason"])}</span>' if c["reason"] else "") + "</span></li>"
-                for slot, c in items)
-            changes = head + (f'<ul class="changes">{rows}</ul>' if rows else
-                              f'<p class="dim">No slot changes since run #{p["previous_run"]}.</p>')
-    polled = ""
+        lede += f'<p class="sub">Also ours, not on the {SHELVES}&times;{COLUMNS} face: {_e(", ".join(off_face))}</p>'
     if sales["ok"] and sales["data"]["as_of"] is not None:
         polled = f'Prices from the poll {_time(sales["data"]["as_of"], "ago", now)}. '
     elif sales["ok"]:
@@ -1086,22 +1986,51 @@ def _cabinet_html(snap: dict) -> str:
         polled = "Prices aren't available. "
     stock_note = "" if stock["ok"] else "Stock isn't available. "
     shapes = "" if products["ok"] else f"Packages are approximate: {PRODUCTS_FAILED}. "
-    legend = ('<div class="vm-legend"><div><i class="dotk info"></i>swap or fill</div>'
-              '<div><i class="dotk warn"></i>price change</div><div><i class="dotk bad"></i>pull</div>'
-              "<p>Grey lanes aren't ours. The number by a lane is units on hand (Now) or after the plan's "
-              "fill (Next Friday); <b>~3</b> is from a photo count, less sales since, so at least that many were "
-              "seen; <b>?</b> means no receipt or count yet. Dashed slots are empty room, from the capacity on the "
-              "machine's loading chart or a person's count; \"+N back Friday\" is the plan's fill less the "
-              f"units on hand. {polled}{stock_note}{shapes}Packages are drawn from the catalog size; they are not "
-              "photos.</p><p class=\"honest\">Stock is estimated from receipts and polls, not a sensor.</p></div>")
+    legend = ('<details class="vm-legend" data-key="vm-legend"><summary><i class="dotk info"></i>swap or fill '
+              '<i class="dotk warn"></i>price <i class="dotk bad"></i>pull &middot; '
+              '<span class="honest">Stock is estimated from receipts and polls, not a sensor.</span> '
+              '<span class="more">How to read it</span></summary>'
+              "<p>Grey cells aren't ours: they show their number and nothing else, at half the width. On ours, the "
+              "number is units on hand (Now) or after the plan's fill (Next restock), against the column's capacity; "
+              "<b>~3</b> is from a photo count, less sales since, so at least that many were seen; <b>?</b> means no "
+              "receipt or count yet. The bar is units against capacity: hatched means unknown, outlined means no "
+              "capacity counted. The badge is what the next restock does: <b>+N</b> back, swap, new, $ for a new "
+              "price, pull. The next restock is almost always the free Friday visit; a paid midweek visit is one too. "
+              "In the close-up, dashed slots are empty room and \"+N at restock\" is the plan's fill less the units "
+              f"on hand. {polled}{stock_note}{shapes}Packages are drawn from the catalog size; they are not photos.</p>"
+              "</details>")
     seg = ('<span class="seg" role="group" aria-label="Show" hidden>'
            '<button type="button" data-view="now" aria-pressed="true">Now</button>'
-           '<button type="button" data-view="next" aria-pressed="false">Next Friday</button></span>')
-    return (f'<section id="vm" class="vm" data-view="now" data-shelf="{machine_art.default_shelf(view)}">'
-            f'<h2>In the machine <span class="hint">our selections, close up &middot; pick a shelf on the '
-            f'machine</span>{seg}</h2>'
-            f'<div class="vm-wrap"><div class="vm-cab">{cabinet}</div>'
-            f'<div class="vm-side"><div class="card">{changes}</div>{legend}</div></div></section>')
+           '<button type="button" data-view="next" aria-pressed="false">Next restock</button></span>')
+    when = _restock(p)
+    when = f'<span class="vm-when">Next restock &middot; {_e(when)}</span>' if when else ""
+    panel = ('<aside class="vm-panel" aria-label="Close-up of the picked selection">'
+             '<div class="vm-ph"><span class="vm-grab" aria-hidden="true"></span><span class="label">Close-up</span>'
+             # "?#vm", not "#vm": without scripts closing must load the page without ?sel=, or the timed
+             # reload would open the pick again. With scripts the click is handled in place.
+             '<a class="vm-x" id="vm-close" href="?#vm" data-close aria-label="Close the close-up">'
+             '<span aria-hidden="true">&times;</span> Close</a></div>'
+             f'{panels}</aside>')
+    scrim = '<a class="vm-scrim" href="?#vm" data-close tabindex="-1" aria-hidden="true"></a>'
+    return (f'<section id="vm" class="vm" data-view="now">{machine_art.selection_css(shown)}'
+            f'<h2 id="vm-title" tabindex="-1">In the machine <span class="hint">our {len(shown)} selections &middot; tap one to see it close up'
+            f'</span>{when}{seg}</h2>{lede}'
+            f'<div class="ops"><div class="ops-front">{front}{legend}</div>'
+            f'<div class="ops-side">{home}{panel}</div></div>{scrim}</section>')
+
+
+def _slot_num(slot: str) -> str:
+    """A plan row's slot number. One on the machine's face is a link that picks it in the close-up."""
+    if re.fullmatch(rf"[1-{SHELVES}][1-{COLUMNS}]", slot):
+        return (f'<a class="num" id="num-{_e(slot)}" href="{machine_art.pick_href(slot)}" data-sel="{_e(slot)}" '
+                f'aria-label="Selection {_e(slot)}: show it in the machine">{_e(slot)}</a>')
+    return f'<b class="num">{_e(slot)}</b>'
+
+
+def _wild_mark(slot: str, wildcard: str | None) -> str:
+    """The wildcard's pill at the start of its plan row's text. Inside the text, not beside the number,
+    so the row's columns stay in line."""
+    return f"{WILD} " if slot == wildcard else ""
 
 
 def _fill_check_html(check: str, reason: str | None) -> str:
@@ -1111,7 +2040,7 @@ def _fill_check_html(check: str, reason: str | None) -> str:
 
 
 def _plan_cell(s: dict, compared: bool, sold: dict | None, held: dict | None,
-               window: str = "the window") -> str:
+               window: str = "the window", wildcard: str | None = None) -> str:
     """One slot of the plan as a <details>: what it asks for in the summary; the reason, what it was
     and what the slot holds and sold inside."""
     slot, entry, changed = s["slot"], s["now"], compared and s["changed"]
@@ -1158,8 +2087,9 @@ def _plan_cell(s: dict, compared: bool, sold: dict | None, held: dict | None,
     if on_hand is not None:
         now_bits.append(f"{on_hand} left")
     return (f'<details class="pc{" changed" if changed else ""}" id="slot-{_e(slot)}" data-key="slot-{_e(slot)}">'
-            f'<summary><b class="num">{_e(slot)}</b><span class="now">{" &middot; ".join(now_bits)}</span>'
-            f'<span class="what">{what}</span><span class="tags">{tags}</span></summary>{"".join(body)}</details>')
+            f'<summary>{_slot_num(slot)}<span class="now">{" &middot; ".join(now_bits)}</span>'
+            f'<span class="what">{_wild_mark(slot, wildcard)}{what}</span><span class="tags">{tags}</span></summary>'
+            f'{"".join(body)}</details>')
 
 
 def _plan_html(snap: dict) -> str:
@@ -1197,14 +2127,15 @@ def _plan_html(snap: dict) -> str:
         controls = (f'<div class="chips">{chips}</div>'
                     '<label class="only" hidden><input type="checkbox" id="changed-only"> '
                     'Show changed slots only</label>')
-    cells = "".join(_plan_cell(s, bool(p["previous_run"]), sold.get(s["slot"]), held.get(s["slot"]), _window(sales))
+    cells = "".join(_plan_cell(s, bool(p["previous_run"]), sold.get(s["slot"]), held.get(s["slot"]), _window(sales),
+                               snap.get("wildcard"))
                     for s in p["slots"])
     columns = ('<div class="plan-head" aria-hidden="true"><span>Slot</span><span>Now</span>'
-               '<span>Next Friday</span><span></span></div>')
+               '<span>Next restock</span><span></span></div>')
     return head + controls + f'<div class="plan-grid" data-only="false">{columns}{cells}</div>'
 
 
-def _first_fill_cell(row: dict) -> str:
+def _first_fill_cell(row: dict, wildcard: str | None = None) -> str:
     slot, checks = row["slot"], row["checks"]
     check, reason = row.get("fill_check"), row["reason"]
     fill_note = _fill_check_html(check, reason) if check else ""
@@ -1222,7 +2153,7 @@ def _first_fill_cell(row: dict) -> str:
                 price, f"Capacity {cap}", f"Fill cost share {cost}"]
     problems = "".join(f'<div class="sub">{_e(reason)}</div>' for reason in checks["refusals"])
     return (f'<details class="pc" id="slot-{_e(slot)}" data-key="slot-{_e(slot)}">'
-            f'<summary><b class="num">{_e(slot)}</b><span class="what">{_e(row["product"])}'
+            f'<summary>{_slot_num(slot)}<span class="what">{_wild_mark(slot, wildcard)}{_e(row["product"])}'
             f' &middot; {plan_rounds.format_cents(row["price_cents"])}'
             f' &middot; {_plural(row["units"], "unit")}{fill_note}</span></summary>{reason_detail}'
             f'<div class="was"><span class="label">Code checks</span>'
@@ -1253,7 +2184,7 @@ def _plan_section(snap: dict) -> str:
             cost = (f"{plan_rounds.format_cents(expected)} expected, {plan_rounds.format_cents(maximum)} at most"
                     if expected is not None and maximum is not None else "unknown")
             hint += f" &middot; Fill cost {cost} against the proposed {cap} cap"
-            cells = "".join(_first_fill_cell(row) for row in p["slots"])
+            cells = "".join(_first_fill_cell(row, snap.get("wildcard")) for row in p["slots"])
             body = f'<div class="plan-grid first-fill">{cells}</div>'
     return ('<section id="plan"><h2>Plan for the first fill (stocked ~30 Nov) '
             f'<span class="hint">{hint}</span></h2>{body}</section>')
@@ -1267,105 +2198,246 @@ def _switched(verb: str, at: datetime | None, by: str | None, now: datetime) -> 
             + (f" by {_e(by)}" if by else ""))
 
 
-def _tiles(snap: dict) -> str:
+# The planner's week and zone, as its `Config` defaults them, so the page reads the cutoff as it does.
+_PLANNER_DEFAULTS = {f.name: f.default for f in dataclasses.fields(planner.Config)
+                     if f.name in ("week_starts", "timezone")}
+
+
+def _restock(plan: dict | None) -> str | None:
+    """The restock an agent's plan is for, in words. Almost every restock is the free Friday visit:
+    "Fri 4 Dec", the Friday the planner would still buy for when the plan's run started. That is the
+    planner's own rule (`planner._past_cutoff`, `planner._week_of`): its week turns over on
+    Saturday, and the cutoff passes only after the cutoff minute, so a run at 23:59:59 Thursday is
+    still for this Friday. A paid midweek visit is a restock too: "midweek visit", since the plan
+    records no date for it. None without a plan, or without the time-zone data to place the cutoff."""
+    if not plan:
+        return None
+    if plan.get("visit") == "midweek":
+        return "midweek visit"
+    try:
+        local = plan["run"]["started_at"].astimezone(planner._tz(_PLANNER_DEFAULTS["timezone"]))
+    except Exception:   # Windows without the tzdata package
+        return None
+    week_starts = _PLANNER_DEFAULTS["week_starts"]
+    friday = planner._week_of(local, week_starts) + timedelta(days=(4 - week_starts) % 7)
+    if planner._past_cutoff(local, IN_STORE_CUTOFF, week_starts):
+        friday += timedelta(days=7)
+    return f"{friday:%a} {friday.day} {friday:%b}"
+
+
+def next_sync(now: datetime, syncs: dict | None = None) -> datetime | None:
+    """When the worker's next sync starts. The worker says so when it serves the page (`syncs`);
+    otherwise it is its schedule: SYNC_AT_MINUTE past the next hour not yet passed. None when the
+    worker keeps no schedule (`SYNC_AT_MINUTE=off`)."""
+    try:
+        due = datetime.fromisoformat(syncs["next_round_at"])
+        if due.tzinfo is not None:
+            return due
+    except (KeyError, TypeError, ValueError):
+        pass
+    raw = (os.environ.get("SYNC_AT_MINUTE") or str(SYNC_AT_MINUTE)).strip().lower()
+    try:
+        minute = float(raw)
+    except ValueError:
+        return None
+    if not 0 <= minute < 60:
+        return None
+    at = now.astimezone(timezone.utc).replace(minute=0, second=0, microsecond=0) + timedelta(minutes=minute)
+    return at if at > now else at + timedelta(hours=1)
+
+
+def _window_words(sales: dict) -> str:
+    """What the polls' sales cover: 'in the last 7 days', or how long it really is. The bounds are
+    `_window`'s: the full window give or take an hour; a gap in the polls can put the start more than
+    7 days back, and polls that began recently less, and then the words say its length."""
+    start, end = sales.get("window_start"), sales.get("as_of")
+    if start is None or end is None:
+        return "since the first poll"
+    span = end - start
+    if abs(span - machine_state.WINDOW) <= timedelta(hours=1):
+        return f"in the last {machine_state.WINDOW.days} days"
+    return "in under a minute" if span < timedelta(minutes=1) else f"in the last {_span(span)}"
+
+
+def _cell(label: str, value: str, sub: str, href: str, tone: str = "", link: str = "") -> str:
+    """One cell of the status bar: a label, one value and a short line. The cell links to the section
+    with the rest. With a `link` of its own (a chart), the cell is a box and only its label links to the
+    section, since a link can't hold another."""
+    cls = f'sc{" " + tone if tone else ""}'
+    if link:
+        return (f'<div class="{cls}"><a class="label" href="{href}">{label}</a>'
+                f'<span class="sv">{value}</span><span class="sub">{sub}</span><span class="sub">{link}</span></div>')
+    return (f'<a class="{cls}" href="{href}"><span class="label">{label}</span>'
+            f'<span class="sv">{value}</span><span class="sub">{sub}</span></a>')
+
+
+def _cents(cents: int) -> str:
+    """Whole dollars without the cents, like the plan's cap: $366, $361.40."""
+    text = plan_rounds.format_cents(cents)
+    return text[:-3] if text.endswith(".00") else text
+
+
+def _status_bar(snap: dict, items: list[dict] | None = None, charts: dict[str, str] | None = None) -> str:
+    """The status bar: one compact row of six cells. Is the agent OK and on; how fresh the machine's
+    data is and when the next sync comes; the order cutoff; what is spendable; catalog approvals;
+    and the plan. Each cell links to its section. `charts` is where the server serves the chart
+    pages (`render`): the Spendable cell links to the development-spend chart when it is given."""
     now, s = snap["as_of"], snap["status"]
-    tiles = []
+    charts = charts or {}
+    spend_link = (f'<a href="{_e(charts["spend"])}">Development spend by week</a>' if "spend" in charts else "")
+    items = attention(snap) if items is None else items
+    state = verdict(items)
+    cells = []
 
+    # The agent: the verdict, the halt switch and the latest run.
     if s["halted"]:
-        sub = (_switched("turned on", s["halt_changed_at"], s["halt_changed_by"], now)
-               or "no halt row: counts as halted")
-        tiles.append(("Halt switch", '<span class="big bad-text">Halted</span>', f"no write tool can run &middot; {sub}"))
+        value = f'<span class="verdict {state}">{_VERDICT_TEXT[state]}</span> <span class="bad-text">Halted</span>'
+        switch = ("no write tool can run &middot; "
+                  + (_switched("halt switched on", s["halt_changed_at"], s["halt_changed_by"], now)
+                     or "no halt row: counts as halted"))
     else:
-        sub = _switched("turned off", s["halt_changed_at"], s["halt_changed_by"], now)
-        tiles.append(("Halt switch", '<span class="big ok-text">Off</span>',
-                      "writes allowed" + (f" &middot; {sub}" if sub else "")))
-
+        value = f'<span class="verdict {state}">{_VERDICT_TEXT[state]}</span> <span class="ok-text">On</span>'
+        switched = _switched("halt switched off", s["halt_changed_at"], s["halt_changed_by"], now)
+        switch = "writes allowed" + (f" &middot; {switched}" if switched else "")
     run = s["latest_run"]
     if run is None:
-        tiles.append(("Latest run", '<span class="big dim">None yet</span>', "the agent loop hasn't recorded a run"))
+        ran = "no run recorded yet"
+    elif run.get("stale"):
+        ran = f'<span class="bad-text">run #{run["id"]} probably died</span>'
+    elif run["status"] == "running":
+        ran = (f'run #{run["id"]} running for <time datetime="{run["started_at"].astimezone(timezone.utc).isoformat()}" '
+               f'data-f="since">{_span(now - run["started_at"])}</time>')
     else:
-        if run["status"] == "running" and not run.get("stale"):
-            big = f'Running <time datetime="{run["started_at"].astimezone(timezone.utc).isoformat()}" ' \
-                  f'data-f="since">{_span(now - run["started_at"])}</time>'
-        elif run.get("stale"):
-            big = "Probably died"
-        else:
-            big = _e(run["status"].capitalize())
-        cost = f' &middot; {_money(run["cost_usd"])}' if run.get("cost_usd") is not None else ""
-        tone = " bad-text" if run.get("stale") or run["status"] == "failed" else ""
-        tiles.append(("Latest run", f'<span class="big{tone}">{big}</span>',
-                      f'#{run["id"]} {_e(run["mode"])} &middot; started {_time(run["started_at"], "ago", now)}{cost}'))
+        ran = (f'<span class="{"bad-text" if run["status"] == "failed" else ""}">run #{run["id"]} '
+               f'{_e(run["status"])}</span> {_time(run["started_at"], "ago", now)}')
+    follow = (f'<a href="{_e(charts["run"])}{int(run["id"])}">Follow run #{int(run["id"])} live</a>'
+              if "run" in charts and run is not None and run["status"] == "running" and not run.get("stale") else "")
+    cells.append(_cell("Agent", value, f"{switch}<br>{ran}", "#attention",
+                       {"problem": "bad", "check": "warn"}.get(state, ""), follow))
 
-    cutoff = s["next_cutoff"]
-    if cutoff is None:
-        tiles.append(("Order cutoff", '<span class="big">Thu 23:59</span>',
-                      "Eastern &middot; install <code>tzdata</code> for a countdown"))
-    else:
-        soon = cutoff - now < CUTOFF_SOON
-        tiles.append(("Order cutoff",
-                      f'<span class="big{" warn-text" if soon else ""}">{_time(cutoff, "until", now)}</span>',
-                      f'{_time(cutoff)} &middot; 23:59 Eastern'))
-
+    # How fresh the machine's data is: when the last poll was taken and when the next sync reads it.
+    # The sales window is said in words, never as a lone date that could read as the last update.
     sales = snap["sales"]
+    tone = ""
     if not sales["ok"]:
-        tiles.append(("Machine data", '<span class="big dim">&mdash;</span>', "polls table missing"))
+        value, sub = '<span class="dim">&mdash;</span>', "polls table missing"
     elif not snap.get("ours", {"ok": True})["ok"]:
         # The poll reader refuses without our assignment, which isn't the same as no polls.
-        tiles.append(("Machine data", '<span class="big dim">&mdash;</span>', "our slots aren't recorded"))
+        value, sub = '<span class="dim">&mdash;</span>', "our slots aren't recorded"
     elif sales["data"]["as_of"] is None:
-        tiles.append(("Machine data", '<span class="big dim">No polls</span>', "run the history sync"))
+        value, sub = '<span class="dim">No polls</span>', "run the history sync"
     else:
         d = sales["data"]
         total = sum(v["sold"] or 0 for v in d["slots"].values())
-        tone = " warn-text" if d["stale"] else ""
-        # The window starts 7 days before the last poll. Its start date is not when the data was
-        # pulled, so it isn't shown here: it read like an old update time.
-        sold = (f"our slots sold {_plural(total, 'unit')} in {_window(sales)} to it" if d["window_start"]
-                else "one poll only, so no sales yet")
-        tiles.append(("Machine data", f'<span class="big{tone}">{_time(d["as_of"], "ago", now)}</span>',
-                      f"last poll &middot; {sold}"))
+        tone = "warn" if d["stale"] else ""
+        due = next_sync(now, snap.get("syncs"))
+        value = f'Polled {_time(d["as_of"], "ago", now)}'
+        sub = (f'{_time(d["as_of"], "et")}' + (f' &middot; next sync ~{_time(due, "etclock")}' if due else "")
+               + " &middot; " + (f'{total} sold {_window_words(d)}' if d["window_start"] else "one poll only"))
+    cells.append(_cell("Machine poll", value, sub, "#vm", tone))
 
+    cutoff = s["next_cutoff"]
+    if cutoff is None:
+        cells.append(_cell("Order cutoff", "Thu 23:59", "Eastern &middot; install <code>tzdata</code> for a countdown",
+                           "#requests"))
+    else:
+        cells.append(_cell("Order cutoff", _time(cutoff, "until", now), _time(cutoff, "etday"), "#requests",
+                           "warn" if cutoff - now < CUTOFF_SOON else ""))
+
+    # Money: spendable from the ledger once it has opened; before that, only that it is development spend
+    # (the live page shows no test purchases, #192).
     spend, money = snap["spend"], snap.get("money")
     ledgered = money["data"] if money and money["ok"] and money["data"].get("opened") else None
     if ledgered:
-        # Once the ledger is open, one source for money on the whole page: the ledger's.
         # The total is summed exact by the panel and rounded once, not added up from the rounded parts.
-        tiles.append(("Spent since the opening", f'<span class="big">{_money(Decimal(ledgered["spent"]))}</span>',
-                      f'drinks {_money(Decimal(ledgered["receipts"]))}, visits {_money(Decimal(ledgered["visit_fees"]))}, '
-                      f'model {_money(Decimal(ledgered["tokens"]))} &middot; from the ledger'))
+        spendable = Decimal(ledgered["spendable"])
+        cells.append(_cell("Spendable", _money(spendable),
+                           f'Spent since the opening <b>{_money(Decimal(ledgered["spent"]))}</b> &middot; model '
+                           f'{_money(Decimal(ledgered["tokens"]))}', "#money", "bad" if spendable < 0 else "",
+                           link=spend_link))
+    elif spend["ok"] and spend["data"] is None:
+        # Before the opening the live page shows no test runs or test purchases (#192): only that this
+        # is development spend, not from the $600, and where its chart is.
+        opens = money["data"].get("opens_at") if money and money["ok"] else None
+        cells.append(_cell("Spendable", '<span class="dim">Before the opening</span>',
+                           "development spend, not from the $600"
+                           + (f' &middot; the ledger opens {money_panel._day(opens)}' if opens else ""),
+                           "#money", link=spend_link))
     elif spend["ok"]:
+        # The ledger has opened (the live spend counts from it), but it couldn't give a balance (no slot
+        # assignment, say): the balance is unknown, not unopened. What was spent since the opening shows.
         m, dr = spend["data"]["model"], spend["data"]["drinks"]
-        unpriced = f' &middot; {m["unpriced"]} without a cost' if m["unpriced"] else ""
-        visits = f' &middot; {_plural(dr["midweek"], "midweek visit")}' if dr["midweek"] else ""
-        label, period = "Spent so far", ""
-        if money and money["ok"] and not money["data"].get("problem"):
-            # No opening yet (or one dated ahead): all of this is development and test spend (#104).
-            # A ledger that can't answer says nothing about the period, so the tile claims none.
-            opens = money["data"].get("opens_at")
-            label = "Spent before the opening"
-            period = ("development and test, not from the $600"
-                      + (f' &middot; the ledger opens {money_panel._day(opens)}' if opens else "") + "<br>")
-        tiles.append((label, f'<span class="big">{_money(dr["paid"])}</span>',
-                      f'{period}drinks, {_plural(dr["fulfilled"], "fulfilled request")}{visits}<br>'
-                      f'model {_money(m["total"])} over {_plural(m["runs"], "run")} '
-                      f'({_money(m["last_7_days"])} this week){unpriced}'))
-    seen = snap.get("visits")
-    if seen and not seen["ok"]:
-        tiles.append(("Visitors", '<span class="big dim">Unavailable</span>',
-                      "the visit counts couldn't be read just now; the rest of the page could"))
-    elif seen:
-        v = seen["data"]
-        if not v["browsers"]:
-            tiles.append(("Visitors", '<span class="big dim">None yet</span>',
-                          "browsers that open these pages are counted here"))
+        unpriced = f' ({m["unpriced"]} without a cost)' if m["unpriced"] else ""
+        cells.append(_cell("Spendable", '<span class="dim">Balance unavailable</span>',
+                           f'Spent since the opening: drinks {_money(dr["paid"])}, model {_money(m["total"])}{unpriced}',
+                           "#money", link=spend_link))
+    else:
+        cells.append(_cell("Spendable", '<span class="dim">&mdash;</span>', "not available", "#money"))
+
+    # Catalog approvals: every product in the first fill needs one, by the deadline.
+    counts = snap.get("catalog_counts") or {"ok": False}
+    if counts["ok"]:
+        c = counts["data"]
+        by = c["by_status"]
+        extra = "".join(f' &middot; <span class="warn-text">{by[k]} {k}</span>' for k in ("sending", "unknown") if by[k])
+        rejected = f' &middot; {by["rejected"]} rejected' if by["rejected"] else ""
+        day = key_dates.CATALOG.day
+        due = f" &middot; due {day:%a} {day.day} {day:%b}" if now < APPROVALS_DUE else ""
+        left = f'<span class="{"bad-text" if not c["left"] else ""}">{_plural(c["left"], "place")} left</span>'
+        cells.append(_cell("Catalog approvals", f'{by["approved"]} approved',
+                           f'{by["pending"]} pending{rejected}{extra} &middot; {left}{due}', "#requests"))
+    else:
+        cells.append(_cell("Catalog approvals", '<span class="dim">&mdash;</span>', "not available", "#requests"))
+
+    # The plan: before the slot lock, the plan for the first fill; from it, the agent's plan for the next
+    # restock (almost always the free Friday visit; a paid midweek visit is a restock too).
+    plan = snap["plan"]
+    p = plan["data"] if plan["ok"] else None
+    tone = ""
+    if "weekly_plan" in snap:
+        value = "For the first fill"
+        if not plan["ok"]:
+            sub = "not available"
+        elif p is None:
+            sub = "no plan loaded yet"
+        elif p.get("message"):
+            sub = _e(p["message"])
         else:
-            tiles.append(("Visitors", f'<span class="big">{_plural(v["browsers"], "browser")}</span>',
-                          f'{_plural(v["visits"], "visit")} &middot; {_plural(v["sign_ins"], "sign-in")} '
-                          f'since {_time(v["since"])}<br>this week: {_plural(v["visits_7_days"], "visit")} '
-                          f'from {_plural(v["browsers_7_days"], "browser")}'))
-    body = "".join(f'<div class="tile"><div class="label">{label}</div><div>{big}</div>'
-                   f'<div class="sub">{sub}</div></div>' for label, big, sub in tiles)
-    return f'<div class="tiles">{body}</div>'
+            most, cap = p["fill_most_cents"], p["fill_cap_cents"]
+            cost = f"{_cents(most)} of {_cents(cap)}" if most is not None else "cost unknown"
+            tone = "bad" if most is not None and most > cap else ""
+            sub = (f'{_plural(len(p["slots"]), "slot")} &middot; {cost}'
+                   + ("" if p["picked"] else " &middot; latest, not picked"))
+    else:
+        value = "For the next restock"
+        if not plan["ok"]:
+            sub = "not available"
+        elif p is None:
+            sub = "no plan yet"
+        else:
+            run = p["run"]
+            when = _restock(p)
+            moved = (_plural(sum(1 for x in p["slots"] if x["changed"]), "change") if p["previous_run"]
+                     else f'first plan: {_plural(sum(1 for x in p["slots"] if x["now"] is not None), "slot")}')
+            sub = ((f"{_e(when)} &middot; " if when else "") + f'{moved} &middot; run #{run["id"]} '
+                   f'{_e(run["status"])} {_time(run["started_at"], "ago", now)}')
+    cells.append(_cell("Plan", value, sub, "#plan", tone))
+    return f'<nav class="strip" aria-label="Status">{"".join(cells)}</nav>'
+
+
+def _visitors_line(snap: dict) -> str:
+    """Who has looked at the pages, as one small line for the footer. Not about running the machine."""
+    seen = snap.get("visits")
+    if not seen:
+        return ""
+    if not seen["ok"]:
+        return '<p class="visitors">Visitors: unavailable just now.</p>'
+    v = seen["data"]
+    if not v["browsers"]:
+        return '<p class="visitors">Visitors: none yet.</p>'
+    return (f'<p class="visitors">Visitors: {_plural(v["browsers"], "browser")}, {_plural(v["visits"], "visit")}, '
+            f'{_plural(v["sign_ins"], "sign-in")} since {_time(v["since"], "day")} &middot; this week: '
+            f'{_plural(v["visits_7_days"], "visit")} from {_plural(v["browsers_7_days"], "browser")}.</p>')
 
 
 def _attention_html(items: list[dict]) -> str:
@@ -1375,6 +2447,22 @@ def _attention_html(items: list[dict]) -> str:
     rows = "".join(f'<li class="{a["level"]}"><span class="dot">{icon[a["level"]]}</span>'
                    f'<span>{_code(_e(a["text"]))}</span></li>' for a in items)
     return f'<ul class="attention">{rows}</ul>'
+
+
+def _alerts_html(alerts: list[dict]) -> str:
+    """The page-top failure banner (#220): one line per current failure, or nothing when all is
+    well. The words are the code's own (`build_alerts`), the time is Eastern, and no failure's
+    text reaches it. Each line carries its group (`data-kind`): the refresh handler's outage swap
+    (`SCRIPT`) replaces only the sync line, the one the worker can name without the database."""
+    if not alerts:
+        return ""
+
+    def line(a: dict) -> str:
+        kind = ALERT_GROUPS.get(a["kind"], "run")
+        label = _e(ALERT_LABELS.get(a["kind"], a["kind"]))
+        return f'<p data-kind="{kind}"><b>{label}</b> {_code(_e(a["text"]))} {_time(a["at"], "et")}</p>'
+
+    return f'<div class="failbanner" role="alert">{"".join(line(a) for a in alerts)}</div>'
 
 
 def _code(text: str) -> str:
@@ -1394,11 +2482,16 @@ def _words_html(plan: dict) -> str:
     return f'<div class="pair">{boxes}</div>'
 
 
-def _runs_html(panel: dict, now: datetime) -> str:
+def _runs_html(panel: dict, now: datetime, run_href: str | None = None) -> str:
+    """The Runs panel. `run_href` is where the server serves the live run page (`vending.run_page`), to be
+    followed by a run's id: each live run links to it."""
+    hidden = panel.get("hidden_tests")
+    notice = (f'<p class="dim">{hidden["runs"]} test runs and {hidden["purchases"]} test purchases '
+              'from before the opening are not shown here.</p>' if hidden else "")
     if (missing := _missing(panel)) is not None:
-        return missing
+        return notice + missing
     if not panel["data"]:
-        return ('<p class="empty">No runs recorded yet. The agent loop (#39) calls '
+        return notice + ('<p class="empty">No live runs yet. The agent loop (#39) calls '
                 '<code>agent_runs.start</code> and <code>finish</code>; each run then shows here with '
                 'what it cost and what its plan changed.</p>')
     items = []
@@ -1406,6 +2499,8 @@ def _runs_html(panel: dict, now: datetime) -> str:
         end = r["finished_at"] or now
         meta = [_e(r["mode"]), _e(r["model"] or "model not recorded"),
                 ("ran " if r["finished_at"] else "running ") + _span(end - r["started_at"])]
+        if r.get("scheduled"):      # started by the worker: a weekly time, or a midweek wake-up (#219)
+            meta.insert(1, "midweek run" if r["scheduled"] == agent_schedule.MIDWEEK else "scheduled run")
         if r["cost_usd"] is not None:
             meta.append(_money(r["cost_usd"]))
         if r["request_id"]:
@@ -1428,10 +2523,14 @@ def _runs_html(panel: dict, now: datetime) -> str:
             body += f'<div class="note"><b>Notes:</b> {_e(r["notes"])}</div>'
         if r.get("steps"):
             body += _steps_html(r["id"], r["steps"])
-        items.append(f'<li class="run{" replay" if r["mode"] == "replay" else ""}">'
+        if run_href and r["mode"] == "live":
+            body += (f'<p class="follow"><a href="{_e(run_href)}{int(r["id"])}">'
+                     + ("Follow this run live" if r["status"] == "running" and not r["stale"] else "Open this run")
+                     + '</a></p>')
+        items.append(f'<li class="run{" replay" if r["mode"] == "replay" else ""}" id="run-{int(r["id"])}">'
                      f'<div class="head"><b>#{r["id"]}</b> {_time(r["started_at"])} {_run_pill(r)}</div>'
                      f'<div class="meta">{" &middot; ".join(meta)}</div>{body}</li>')
-    return f'<ol class="timeline">{"".join(items)}</ol>'
+    return notice + f'<ol class="timeline">{"".join(items)}</ol>'
 
 
 # Characters of a tool call or reply shown before "more"; reasoning is shown whole.
@@ -1446,10 +2545,9 @@ def _cut(text: str) -> str:
     return f'<details><summary><code>{_e(text[:STEP_SHOWN])}...</code></summary><pre>{_e(text)}</pre></details>'
 
 
-def _steps_html(run_id: int, steps: list[dict]) -> str:
-    """A run's steps, in order, folded away under one line: what it thought, called and was told."""
-    calls = sum(1 for s in steps if s["kind"] == "tool_call")
-    turns = max(s["turn"] for s in steps)
+def step_items(steps: list[dict]) -> list[str]:
+    """Each step as one list item: what it thought, called and was told. Shared with the run page
+    (`vending.run_page`), which appends new ones as they arrive."""
     items = []
     for s in steps:
         kind = s["kind"]
@@ -1462,8 +2560,15 @@ def _steps_html(run_id: int, steps: list[dict]) -> str:
             body = _cut(s["content"])
         items.append(f'<li class="{kind}{" error" if s["is_error"] else ""}">'
                      f'<span class="t">{int(s["turn"])}</span><div><span class="what">{what}</span>{body}</div></li>')
-    return (f'<details class="steps" data-key="steps-{int(run_id)}"><summary>How it decided: '
-            f'{_plural(turns, "turn")}, {_plural(calls, "tool call")}</summary><ol>{"".join(items)}</ol></details>')
+    return items
+
+
+def _steps_html(run_id: int, steps: list[dict]) -> str:
+    """A run's steps, in order, folded away under one line: what it thought, called and was told."""
+    calls = sum(1 for s in steps if s["kind"] == "tool_call")
+    turns = max(s["turn"] for s in steps)
+    return (f'<details class="steps" id="steps-{int(run_id)}" data-key="steps-{int(run_id)}"><summary>How it decided: '
+            f'{_plural(turns, "turn")}, {_plural(calls, "tool call")}</summary><ol>{"".join(step_items(steps))}</ol></details>')
 
 
 def _activity_html(panel: dict, recent: dict) -> str:
@@ -1544,19 +2649,21 @@ def _requests_html(purchases: dict, catalog: dict, now: datetime) -> str:
         if len(items) > REQUESTS_SHOWN:
             out += (f'<details class="more" data-key="more-requests"><summary>{len(items) - REQUESTS_SHOWN} older'
                     f'</summary><ul class="list">{"".join(items[REQUESTS_SHOWN:])}</ul></details>')
-    out += '<h3>Catalog requests</h3>'
+    return out + '<h3>Catalog requests</h3>' + catalog_requests_html(catalog, now)
+
+
+def catalog_requests_html(catalog: dict, now: datetime) -> str:
+    """Every catalog request, newest first, under its counts. The Products page (#55) shows the same list."""
     if (missing := _missing(catalog)) is not None:
-        out += missing
-    elif not catalog["data"]:
-        out += _catalog_lede(_catalog_counts(catalog)) + '<p class="empty">None yet.</p>'
-    else:
-        out += _catalog_lede(_catalog_counts(catalog)) + '<ul class="list">' + "".join(
-            f'<li><div class="head"><b>{_e(r["name"])}</b> <span class="dim">{_e(r["size"])}</span> '
-            f'{_pill(r["status"], _REQUEST_TONE.get(r["status"], "muted"))}</div>'
-            f'<div class="meta">asked {_time(r["requested_at"], "ago", now)}{_catalog_sku(r)}</div>'
-            + (f'<div class="detail">{_e(r["decision_note"])}</div>' if r["decision_note"] else "") + "</li>"
-            for r in catalog["data"]) + "</ul>"
-    return out
+        return missing
+    if not catalog["data"]:
+        return _catalog_lede(_catalog_counts(catalog)) + '<p class="empty">None yet.</p>'
+    return _catalog_lede(_catalog_counts(catalog)) + '<ul class="list">' + "".join(
+        f'<li><div class="head"><b>{_e(r["name"])}</b> <span class="dim">{_e(r["size"])}</span> '
+        f'{_pill(r["status"], _REQUEST_TONE.get(r["status"], "muted"))}</div>'
+        f'<div class="meta">asked {_time(r["requested_at"], "ago", now)}{_catalog_sku(r)}</div>'
+        + (f'<div class="detail">{_e(r["decision_note"])}</div>' if r["decision_note"] else "") + "</li>"
+        for r in catalog["data"]) + "</ul>"
 
 
 def _catalog_sku(r: dict) -> str:
@@ -1606,7 +2713,7 @@ code { font:12px ui-monospace, "Cascadia Mono", Consolas, monospace; background:
 a { color:var(--accent) }
 .dim, .muted { color:var(--muted) }
 .ok-text { color:var(--ok) } .warn-text { color:var(--warn) } .bad-text { color:var(--bad) }
-header.top { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; margin-bottom:14px }
+header.top { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; margin-bottom:8px }
 header.top .meta { color:var(--muted); font-size:12px; margin-left:auto }
 .verdict { font-weight:700; font-size:13px; padding:3px 10px; border-radius:999px; border:1px solid currentColor }
 .verdict.ok { color:var(--ok); background:var(--ok-soft) } .verdict.check { color:var(--warn); background:var(--warn-soft) }
@@ -1615,8 +2722,25 @@ header.top .meta { color:var(--muted); font-size:12px; margin-left:auto }
 .demo-banner { position:sticky; top:0; z-index:20; padding:10px 16px; text-align:center; font-size:15px; font-weight:700;
   background:#ffd23f; color:#1a1400; border-bottom:3px solid #b8860b }
 .demo-banner a { color:inherit; text-decoration:underline }
-.tiles { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:10px }
-.tile { background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:12px 14px; box-shadow:var(--shadow); min-width:0 }
+/* The failure banner (#220): one red line per current failure, at the very top of the page. */
+.failbanner { border:1px solid var(--bad); background:var(--bad-soft); border-radius:8px; padding:4px 12px;
+  margin:0 0 12px; font-size:14px }
+.failbanner p { margin:5px 0 }
+.failbanner b { color:var(--bad) }
+.failbanner time { white-space:nowrap }
+/* The status bar: one compact row of six cells; each links to its section. */
+.strip { display:grid; grid-template-columns:repeat(6, minmax(0, 1fr)); background:var(--surface); border:1px solid var(--line);
+  border-radius:10px; box-shadow:var(--shadow); overflow:hidden; margin-bottom:10px }
+.sc { display:flex; flex-direction:column; gap:0; padding:5px 10px 6px; min-width:0; color:var(--ink); text-decoration:none;
+  border-left:1px solid var(--line) }
+.sc:first-child { border-left:0 } .sc:hover { background:var(--sunk) } .sc:focus-visible { outline:2px solid var(--accent); outline-offset:-2px }
+.sc .label { font-size:10px } .sc .sv { font-size:16px; font-weight:700; line-height:1.25; overflow-wrap:anywhere }
+.sc .sv .verdict { font-size:12px; padding:0 8px; vertical-align:2px }
+.sc .sub { font-size:11.5px; line-height:1.35 } .sc .sub b { color:var(--ink); font-weight:600 }
+.sc.warn .sv { color:var(--warn) } .sc.bad .sv { color:var(--bad) }
+.sc.warn { box-shadow:inset 0 3px 0 var(--warn) } .sc.bad { box-shadow:inset 0 3px 0 var(--bad) }
+@media (max-width:1100px) { .strip { grid-template-columns:repeat(3, minmax(0, 1fr)) }
+  .sc:nth-child(3n+1) { border-left:0 } .sc:nth-child(n+4) { border-top:1px solid var(--line) } }
 .label { font-size:11px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:var(--muted) }
 .big { display:inline-block; font-size:22px; font-weight:700; margin:2px 0 }
 .sub { color:var(--muted); font-size:12px; overflow-wrap:anywhere }
@@ -1633,6 +2757,10 @@ section { background:var(--surface); border:1px solid var(--line); border-radius
   box-shadow:var(--shadow); min-width:0 }
 section > h2 { margin-bottom:8px; display:flex; align-items:baseline; gap:8px; flex-wrap:wrap }
 section > h2 .hint { font-weight:400; font-size:12px; color:var(--muted) }
+section > p.charts { margin:0 0 10px; font-size:13px }
+header.top a.chartlink { font-weight:600; font-size:14px; padding:4px 14px; border-radius:999px; text-decoration:none;
+  border:1px solid var(--accent); color:var(--accent) }
+header.top a.chartlink:hover, header.top a.chartlink:focus-visible { background:var(--accent); color:var(--surface) }
 .grid2 { display:grid; grid-template-columns:minmax(0, 1fr); gap:0 14px }
 @media (min-width:980px) { .grid2 { grid-template-columns:minmax(0, 1fr) minmax(0, 1fr) } .grid2 > section { margin:0 0 14px } }
 .lede { margin:0 0 8px } .empty { color:var(--muted); background:var(--sunk); border:1px dashed var(--line); border-radius:8px;
@@ -1652,10 +2780,69 @@ a.pill { text-decoration:none }
   padding:4px 12px; cursor:pointer }
 .seg button[aria-pressed="true"] { background:var(--accent); color:var(--surface) }
 .vm[data-view="now"] .v-next, .vm[data-view="next"] .v-now { display:none !important }
-.vm-wrap { display:grid; grid-template-columns:minmax(0, 1fr); gap:14px; align-items:start }
+/* In the machine, one screen: the front on the left; on the right Needs attention and the plan's changes,
+   or the picked selection close up. On a phone the front comes first and the close-up is a sheet. */
+.vm > h2 { margin-bottom:6px } .vm > h2 .vm-when { margin-left:auto; font-size:12px; font-weight:600; color:var(--muted) }
+.vm > h2 .vm-when + .seg { margin-left:0 }
+.ops { display:grid; grid-template-columns:minmax(0, 1fr); gap:12px; align-items:start }
+.ops-front { display:grid; gap:6px; min-width:0 }
+.ops-side, .ops-home { display:flex; flex-direction:column; gap:10px; min-width:0 }
+.ops-card { background:var(--sunk); border:1px solid var(--line); border-radius:10px; padding:8px 10px; min-width:0 }
+.ops-card h3 { display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px; margin:0 0 6px; font-size:13px; color:var(--ink);
+  text-transform:none; letter-spacing:0 }
+.ops-card h3 .hint { font-weight:400; font-size:11.5px; color:var(--muted) } .ops-jump { margin-left:auto; font-size:11.5px; font-weight:400 }
+.ops-attn .attention, .ops-attn div.attention.clear { margin:0 } .ops-attn .attention { gap:5px }
+.ops-attn .attention li { padding:6px 9px; gap:8px; font-size:12.5px } .ops-attn .attention .dot { width:18px; height:18px; font-size:11px }
+.ops-chg .changes { margin:0; gap:1px } .ops-chg .changes li { display:block }
+a.chg { display:grid; grid-template-columns:auto auto minmax(0, 1fr); gap:2px 6px; align-items:baseline; padding:3px 5px; border-radius:6px;
+  color:var(--ink); text-decoration:none; font-size:12.5px }
+a.chg:hover, a.chg:focus-visible { background:var(--surface); outline:1px solid var(--line) }
+.changes.ff a.chg { grid-template-columns:auto minmax(0, 1fr) }
+a.chg > b { font:800 11px/16px Arial, sans-serif; background:#07080a; color:#fff; border-radius:3px; padding:0 4px }
+a.chg .why { display:block; color:var(--muted); font-size:11.5px; overflow-wrap:anywhere }
+.vm-panel { display:none; min-width:0; background:var(--sunk); border:1px solid var(--line); border-radius:12px; padding:8px 10px 10px }
+.vm-ph { display:flex; align-items:center; gap:8px; margin:0 0 6px }
+.vm-x { margin-left:auto; display:inline-flex; align-items:center; gap:4px; font-size:12px; font-weight:600; color:var(--ink);
+  text-decoration:none; background:var(--surface); border:1px solid var(--line); border-radius:999px; padding:3px 11px }
+.vm-x:hover, .vm-x:focus-visible { border-color:var(--accent); color:var(--accent); outline:none }
+.vm-grab, .vm-scrim { display:none }
+.vm[data-sel] .vm-panel, .vm:not([data-js]):has(.sd:target) .vm-panel, .vm:not([data-js]):has(.ma-shelf:target) .vm-panel { display:block }
+@media (min-width:980px) {
+  .ops { grid-template-columns:minmax(0, 1fr) minmax(340px, 37%) }
+  .ops-side { position:sticky; top:8px; max-height:calc(100vh - 16px); overflow-y:auto; overscroll-behavior:contain }
+  .ops-attn { flex:none } .ops-chg { flex:0 1 auto; min-height:150px; overflow-y:auto }
+  .vm[data-sel] .ops-home, .vm:not([data-js]):has(.sd:target) .ops-home,
+  .vm:not([data-js]):has(.ma-shelf:target) .ops-home { display:none }
+  .vm-panel { position:relative } .vm-panel .vm-ph .label { display:none }
+  .vm-panel .vm-x { position:absolute; top:7px; right:10px } .vm-panel .ma-sh { padding-right:84px; min-height:24px }
+  .vm-panel .ma-lane svg { max-height:200px }
+  .vm-panel .ma-nm { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; font-size:11px }
+  .vm-panel .ma-nm span, .vm-panel .ma-chips, .vm-panel .ma-nt, .vm-panel .ma-why, .vm-panel .ma-plan { display:none }
+  .vm-panel .ma-ct b { font-size:16px } }
+@media (min-width:820px) and (max-width:979px) { .vm-panel { order:-1; scroll-margin-top:8px } }
+@media (max-width:819px) {
+  .vm-panel { display:block; position:fixed; left:0; right:0; bottom:0; z-index:30; max-height:88vh; overflow-y:auto;
+    overscroll-behavior:contain; border:0; border-radius:16px 16px 0 0; background:var(--surface); box-shadow:0 -10px 30px rgba(0,0,0,.35);
+    padding:6px 12px calc(14px + env(safe-area-inset-bottom)); transform:translateY(105%); visibility:hidden;
+    transition:transform .28s cubic-bezier(.2, .8, .3, 1), visibility 0s .28s }
+  .vm[data-open] .vm-panel, .vm:not([data-js]):has(.sd:target) .vm-panel { transform:none; visibility:visible;
+    transition:transform .28s cubic-bezier(.2, .8, .3, 1) }
+  .vm-grab { display:block; position:absolute; left:50%; top:6px; width:40px; height:4px; margin-left:-20px; border-radius:2px;
+    background:var(--line) }
+  .vm-ph { position:sticky; top:-6px; z-index:3; background:var(--surface); padding:12px 0 6px; margin:0 }
+  .vm-x { min-height:44px; padding:0 16px; font-size:14px }
+  .vm[data-open] .vm-scrim, .vm:not([data-js]):has(.sd:target) .vm-scrim { display:block; position:fixed; inset:0; z-index:29;
+    background:rgba(5,8,12,.5) }
+  /* In the sheet: the picked lane big beside its facts, then the whole shelf under it. */
+  .vm-panel .ma-sh { order:-2 } .vm-panel .sd-list { order:-1 } .vm-panel .sd { margin:0 0 10px }
+  .vm-panel .sd-art { display:block; float:left; width:112px; margin:0 10px 4px 0; border-radius:8px; overflow:hidden; background:#0b0e12 }
+  .vm-panel .sd-art:empty { display:none } .vm-panel .sd-art svg { display:block; width:100%; height:auto }
+  .vm-panel .ma-nm, .vm-panel .ma-chips, .vm-panel .ma-nt, .vm-panel .ma-why, .vm-panel .ma-plan, .vm-panel .ma-t { display:none }
+  .vm-panel .ma-meta { padding:3px 2px 5px; text-align:center } .vm-panel .ma-ct { margin:0; font-size:9px }
+  .vm-panel .ma-ct b { font-size:13px } .vm-panel .ma-notours { min-height:0 } .vm-panel .ma-n { font-size:11px }
+  .vm-panel .ma-lane:not(.ma-notours) { flex-grow:1 !important } .vm-panel .ma-strip .ma-lane svg { max-height:170px } }
+@media (prefers-reduced-motion:reduce) { .vm-panel { transition:none !important } }
 .dotk.info { background:var(--info) } .dotk.warn { background:var(--warn) } .dotk.bad { background:var(--bad) }
-.vm-side { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap:10px;
-  min-width:0 }
 details.more > summary { cursor:pointer; color:var(--muted); font-size:12px; margin:6px 0 }
 .card { background:var(--sunk); border:1px solid var(--line); border-radius:9px; padding:10px 12px; min-width:0 }
 .card p { margin:4px 0 0 }
@@ -1664,11 +2851,13 @@ details.more > summary { cursor:pointer; color:var(--muted); font-size:12px; mar
 .changes .why { display:block; color:var(--muted); font-size:12px; overflow-wrap:anywhere }
 .dotk { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px }
 .vm-legend { font-size:12px; color:var(--muted) } .vm-legend p { margin:6px 0 0 }
-.vm-legend > div { display:inline-block; margin-right:12px }
+.vm-legend > summary .dotk { margin-left:6px } .vm-legend .honest { margin:0 } .vm-legend .more { text-decoration:underline }
+.pc summary a.num { font-weight:700; color:var(--accent) }
+.pill.wild { background:#4a3508; color:#f8cd75; border:1px solid #c99a2e } a.chg .pill.wild { margin-left:4px } .sd-t .pill.wild { margin-right:6px }
 /* The plan: one line per slot; the reason opens beneath. */
 .only { display:inline-flex; gap:6px; align-items:center; font-size:12px; margin:4px 0 8px; cursor:pointer }
 .only[hidden] { display:none }
-/* One row per slot, top to bottom: what is in it now beside what the plan asks for Friday. */
+/* One row per slot, top to bottom: what is in it now beside what the plan asks for the next restock. */
 .plan-grid { display:flex; flex-direction:column; gap:4px }
 .plan-head, .pc summary { display:grid; grid-template-columns:34px minmax(0, 1fr) minmax(0, 1.25fr) minmax(90px, auto);
   gap:4px 12px; align-items:baseline }
@@ -1736,19 +2925,26 @@ pre { margin:4px 0 0; font:12px ui-monospace, Consolas, monospace; background:va
 .closet li { display:flex; justify-content:space-between; gap:8px; padding:5px 0; border-bottom:1px solid var(--line); font-size:13px; min-width:0 }
 .closet li b { font-weight:600; overflow-wrap:anywhere } .closet li span { color:var(--muted); white-space:nowrap }
 footer { color:var(--muted); font-size:12px; text-align:center; margin:18px 0 8px }
+footer .visitors { margin:4px 0 0; font-size:11px; opacity:.8 }
 @media (max-width:640px) {
   main { padding:12px } .big { font-size:19px } header.top .meta { margin-left:0; width:100% }
-  .tiles { grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px } .tile { padding:10px 12px }
-  .tile:last-child:nth-child(odd) { grid-column:1 / -1 }
+  .strip { grid-template-columns:repeat(2, minmax(0, 1fr)) } .sc { padding:6px 9px }
+  .sc:nth-child(n) { border-left:1px solid var(--line); border-top:1px solid var(--line) }
+  .sc:nth-child(odd) { border-left:0 } .sc:nth-child(-n+2) { border-top:0 } .sc .sv { font-size:15px }
   .plan-head { display:none }
   .pc summary { grid-template-columns:30px minmax(0, 1fr) } .pc summary .now::before { content:"now: " }
-  .pc summary .what, .pc summary .tags { grid-column:2 } .pc summary .what::before { content:"Friday: " }
+  .pc summary .what, .pc summary .tags { grid-column:2 } .pc summary .what::before { content:"Next restock: " }
   .pc summary .tags { justify-content:flex-start }
   .feed li { grid-template-columns:auto minmax(0, 1fr) } .feed .kind { display:none } }
 """
 
 STYLE += money_panel.STYLE   # the money panel's own rules (#48)
 STYLE += pricing_panel.STYLE   # the pricing panel's own rules
+STYLE += leaderboards.STYLE
+STYLE += report_card.STYLE
+STYLE += price_check_panel.STYLE + plan_history.STYLE
+STYLE += forecast_panel.STYLE
+STYLE += tracking_daily.STYLE
 
 # Keeps times current in the viewer's zone, and refreshes the page in place every REFRESH_SECONDS
 # without losing scroll, open details or the tool-call filter. A failed refresh keeps the last page
@@ -1756,17 +2952,23 @@ STYLE += pricing_panel.STYLE   # the pricing panel's own rules
 
 SCRIPT = """(function () {
   var REFRESH = %d * 1000, FROZEN = %d, show = 'all', view = 'now', only = false, lastOk = Date.now(), failed = false;
-  var shelf = '';
   // The demo copy keeps its toggles under its own keys, so flipping one there never moves the live page's.
   var PFX = '%s';
+  // sel: the selection the close-up shows ('' shows Needs attention and the plan's changes instead);
+  // sheet: whether it is open as a sheet (phones). Kept in memory, so a refresh keeps them and a new visit
+  // starts with Needs attention.
+  // opener: the id of what opened the close-up, so focus can go back to it even after a refresh
+  // has replaced every element in <main>.
+  var sel = '', sheet = false, opener = null;
   try {
     show = localStorage.getItem(PFX + 'show') || 'all';
     view = localStorage.getItem(PFX + 'view') === 'next' ? 'next' : 'now';
     only = localStorage.getItem(PFX + 'changed') === '1';
-    shelf = localStorage.getItem(PFX + 'shelf') || '';
   } catch (e) {}
-  var picked = /^#shelf-([1-5])$/.exec(location.hash);
-  if (picked) shelf = picked[1];
+  function narrow() { return !!(window.matchMedia && matchMedia('(max-width: 819px)').matches); }
+  // Between the phone's sheet and the desktop's side-by-side view the close-up sits under the front.
+  function stacked() { return !!(window.matchMedia && matchMedia('(min-width: 820px) and (max-width: 979px)').matches); }
+  function still() { return !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches); }
   function span(ms) {
     var m = Math.floor(Math.abs(ms) / 60000);
     if (m < 1) return 'under a minute';
@@ -1784,7 +2986,8 @@ SCRIPT = """(function () {
       var d = new Date(t.getAttribute('datetime')), f = t.getAttribute('data-f');
       if (isNaN(d)) return;
       if (FROZEN && (f === 'ago' || f === 'until' || f === 'since')) return;
-      if (FROZEN) {
+      // The Eastern forms (et, etclock, etday) are absolute already: they format below as on the live page.
+      if (FROZEN && f !== 'et' && f !== 'etclock' && f !== 'etday') {
         var et = {timeZone: 'America/New_York'};
         if (f === 'clock') t.textContent = d.toLocaleTimeString([], Object.assign({hour: 'numeric', minute: '2-digit'}, et)) + ' ET';
         else if (f === 'day') t.textContent = d.toLocaleDateString([], Object.assign({weekday: 'short', day: 'numeric', month: 'short'}, et));
@@ -1796,6 +2999,13 @@ SCRIPT = """(function () {
       if (f === 'ago') t.textContent = span(now - d) + ' ago';
       else if (f === 'until') t.textContent = d > now ? span(d - now) : 'passed';
       else if (f === 'since') t.textContent = span(now - d);
+      else if (f === 'et' || f === 'etclock' || f === 'etday') {
+        // Eastern, the machine's zone, whatever the viewer's own zone is.
+        var clock = d.toLocaleTimeString('en-US', {hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York'});
+        t.textContent = (f === 'etday' ? d.toLocaleDateString('en-GB', {weekday: 'short', day: 'numeric', month: 'short',
+                                                                         timeZone: 'America/New_York'}) + ', ' : '')
+                        + clock + (f === 'etclock' ? '' : ' ET');
+      }
       else if (f === 'clock') t.textContent = d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
       else if (f === 'day') t.textContent = d.toLocaleDateString([], {weekday: 'short', day: 'numeric', month: 'short'});
       else t.textContent = d.toLocaleString([], {weekday: 'short', month: 'short', day: 'numeric',
@@ -1810,18 +3020,27 @@ SCRIPT = """(function () {
     }
   }
   function save(key, value) { try { localStorage.setItem(key, value); } catch (err) {} }
+  function cellFor(s) { return s ? document.querySelector('.vm .fc[data-sel="' + CSS.escape(s) + '"]') : null; }
   // The controls only work with JavaScript, so the page sends them hidden and this shows them.
   function filter() {
     document.querySelectorAll('.feed').forEach(function (f) { f.setAttribute('data-show', show); });
     document.querySelectorAll('.filter button').forEach(function (b) {
       b.setAttribute('aria-pressed', String(b.getAttribute('data-show') === show));
     });
-    // The shelf the close-up shows: the viewer's pick, kept across refreshes, else the page's default.
+    // The picked selection, kept across refreshes. One that isn't ours any more (the assignment
+    // changed) is dropped, and the side shows Needs attention again.
+    if (sel && !cellFor(sel)) { sel = ''; sheet = false; }
+    if (sheet && !narrow()) sheet = false;
     document.querySelectorAll('.vm').forEach(function (v) {
       v.setAttribute('data-view', view);
       v.setAttribute('data-js', '');
-      if (shelf && v.querySelector('.ma-shelf[data-n="' + shelf + '"]')) v.setAttribute('data-shelf', shelf);
+      if (sel) v.setAttribute('data-sel', sel); else v.removeAttribute('data-sel');
+      if (sheet) v.setAttribute('data-open', ''); else v.removeAttribute('data-open');
     });
+    document.querySelectorAll('.vm .fc[data-sel]').forEach(function (c) {
+      if (c.getAttribute('data-sel') === sel) c.setAttribute('aria-current', 'true'); else c.removeAttribute('aria-current');
+    });
+    hero();
     document.querySelectorAll('.vm .seg').forEach(function (s) { s.hidden = false; });
     document.querySelectorAll('.vm .seg button').forEach(function (b) {
       b.setAttribute('aria-pressed', String(b.getAttribute('data-view') === view));
@@ -1829,6 +3048,42 @@ SCRIPT = """(function () {
     var box = document.getElementById('changed-only');
     if (box) { box.checked = only; box.closest('label').hidden = false; }
     document.querySelectorAll('.plan-grid[data-only]').forEach(function (g) { g.setAttribute('data-only', String(only)); });
+  }
+  // On a phone the sheet shows the picked lane big beside its facts, with the whole shelf under it.
+  function hero() {
+    document.querySelectorAll('.vm .sd-art').forEach(function (a) { a.textContent = ''; });
+    if (!sheet || !sel) return;
+    var lane = document.getElementById('lane-' + sel), card = document.getElementById('sel-' + sel);
+    var art = card && card.querySelector('.sd-art'), svg = lane && lane.querySelector('svg');
+    if (art && svg) art.appendChild(svg.cloneNode(true));
+  }
+  // Picking one of ours shows its shelf and facts beside the front; on a phone they slide up as a sheet.
+  function choose(s, from) {
+    if (!cellFor(s)) return false;
+    sel = s; sheet = narrow(); opener = from && from.id ? from.id : opener;
+    filter();
+    var panel = document.querySelector('.vm-panel'), card = document.getElementById('sel-' + sel);
+    if (sheet) {
+      if (panel) panel.scrollTop = 0;
+      if (card) card.focus({preventScroll: true});
+    } else if (stacked()) {
+      // One column: bring the close-up, under the front, into view.
+      if (panel) panel.scrollIntoView({block: 'start', behavior: still() ? 'auto' : 'smooth'});
+    } else if (from && !from.closest('.vm')) {
+      // Picked from the plan below: bring the machine back into view.
+      var vm = document.getElementById('vm');
+      if (vm) vm.scrollIntoView({block: 'start', behavior: still() ? 'auto' : 'smooth'});
+    }
+    return true;
+  }
+  function shut() {
+    if (!sel && !sheet) return;
+    // Back to the opener; if a refresh took it away (a change row that is gone), to the selection's
+    // cell on the front; if that is gone too, to the machine's heading.
+    var back = (opener && document.getElementById(opener)) || document.getElementById('fc-' + sel)
+               || document.getElementById('vm-title');
+    sel = ''; sheet = false; opener = null; filter();
+    if (back) back.focus({preventScroll: true});
   }
   function openSlot(id) {
     var d = document.getElementById(id);
@@ -1842,47 +3097,102 @@ SCRIPT = """(function () {
     if (b) { show = b.getAttribute('data-show'); save(PFX + 'show', show); filter(); }
     if (v) { view = v.getAttribute('data-view'); save(PFX + 'view', view); filter(); }
     if (a) openSlot(a.getAttribute('href').slice(1));
-    var pick = t.closest('a[data-shelf]'), lane = t.closest('a[data-lane]');
-    if (pick) { e.preventDefault(); shelf = pick.getAttribute('data-shelf'); save(PFX + 'shelf', shelf); filter(); }
-    if (lane) {
-      var to = document.getElementById('lane-' + lane.getAttribute('data-lane'));
-      if (to) {
-        e.preventDefault();
-        var still = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
-        to.scrollIntoView({block: 'nearest', inline: 'start', behavior: still ? 'auto' : 'smooth'});
-      }
+    var pick = t.closest('a[data-sel]'), shelf = t.closest('a[data-shelf]'), close = t.closest('[data-close]');
+    var lane = !t.closest('a') && t.closest('.vm-panel article.ma-lane:not(.ma-notours)');
+    if (pick && choose(pick.getAttribute('data-sel'), pick)) e.preventDefault();
+    if (shelf) {
+      var first = document.querySelector('.vm .fm-shelf[data-n="' + shelf.getAttribute('data-shelf') + '"] .fc[data-sel]');
+      if (first && choose(first.getAttribute('data-sel'), shelf)) e.preventDefault();
     }
+    if (lane) choose(lane.id.slice(5), null);
+    if (close) { e.preventDefault(); shut(); }
+    if (t.closest('a[href="#attention"]')) shut();
   });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') shut(); });
   document.addEventListener('change', function (e) {
     if (e.target.id !== 'changed-only') return;
     only = e.target.checked; save(PFX + 'changed', only ? '1' : '0'); filter();
   });
-  window.addEventListener('hashchange', function () { openSlot(location.hash.slice(1)); });
+  function fromHash() {
+    var h = /^#sel-([A-Za-z0-9_]+)$/.exec(location.hash), s = /^#shelf-([1-5])$/.exec(location.hash);
+    if (h) return choose(h[1]);
+    if (s) {
+      var first = document.querySelector('.vm .fm-shelf[data-n="' + s[1] + '"] .fc[data-sel]');
+      return first ? choose(first.getAttribute('data-sel')) : false;
+    }
+    openSlot(location.hash.slice(1));
+    return false;
+  }
+  window.addEventListener('hashchange', fromHash);
   function refresh() {
     if (document.hidden) return;
     // The header tells the visit counter this is a refresh, not someone opening the page.
     fetch(location.pathname, {cache: 'no-store', headers: {'%s': '1'}}).then(function (r) {
       // Signed out (the password's cookie ran out): reload, so the password page shows.
       if (r.redirected && new URL(r.url).pathname === '/login') { location.reload(); throw new Error('signed out'); }
-      if (!r.ok) throw new Error(r.status);
-      return r.text();
-    }).then(function (html) {
-      var doc = new DOMParser().parseFromString(html, 'text/html');
+      if (!r.ok) return r.text().then(function (html) {
+        // The database is down (503). The outage page still carries the worker's own sync line, so
+        // a failed sync round shows without Postgres: swap just that line in and keep the rest of
+        // the page as it is. Only the worker's real outage reply marks itself (data-sync-ok); any
+        // other error reply (a proxy's 502, a 500 of ours) isn't ours to read, and what is shown
+        // stays.
+        var doc = new DOMParser().parseFromString(html, 'text/html');
+        if (!doc.querySelector('[data-sync-ok]')) throw new Error(r.status);
+        var line = doc.querySelector('.failbanner [data-kind="sync"]');
+        return {syncline: line ? line.outerHTML : ''};
+      });
+      return r.text().then(function (html) { return {page: html}; });
+    }).then(function (got) {
+      if (got.syncline !== undefined) {
+        // An outage names only the sync round: add, replace or remove just that line, and leave
+        // the run and tracking lines - which the outage cannot check - for a refresh that read
+        // the database.
+        var main0 = document.querySelector('main'), box = main0.querySelector('.failbanner');
+        var old = box && box.querySelector('[data-kind="sync"]');
+        if (old) old.remove();
+        if (got.syncline) {
+          if (!box) {
+            box = document.createElement('div');
+            box.className = 'failbanner'; box.setAttribute('role', 'alert');
+            main0.insertBefore(box, main0.firstChild);
+          }
+          box.innerHTML = got.syncline + box.innerHTML;   // the sync line goes first, as drawn
+        } else if (box && !box.innerHTML) {
+          box.remove();                                   // the last line went: no banner at all
+        }
+        failed = true; times();
+        return;
+      }
+      var doc = new DOMParser().parseFromString(got.page, 'text/html');
       var fresh = doc.querySelector('main'), main = document.querySelector('main');
       if (!fresh || !main) throw new Error('no page');
       if (doc.title) document.title = doc.title;   // the verdict in the tab follows the page
       var open = Array.prototype.map.call(main.querySelectorAll('details[open][data-key]'),
                                           function (d) { return d.getAttribute('data-key'); });
+      var panel = document.querySelector('.vm-panel'), side = document.querySelector('.ops-side');
+      var scrolled = [panel ? panel.scrollTop : 0, side ? side.scrollTop : 0];
+      // Keyboard focus, by the focused element's id: the swap replaces it with an equal new one.
+      var focused = main.contains(document.activeElement) ? document.activeElement.id : '';
       main.innerHTML = fresh.innerHTML;
       open.forEach(function (k) {
         var d = main.querySelector('details[data-key="' + CSS.escape(k) + '"]');
         if (d) d.open = true;
       });
       failed = false; lastOk = Date.now(); filter(); times();
+      panel = document.querySelector('.vm-panel'); side = document.querySelector('.ops-side');
+      if (panel) panel.scrollTop = scrolled[0];
+      if (side) side.scrollTop = scrolled[1];
+      var again = focused && document.getElementById(focused);
+      if (again) again.focus({preventScroll: true});
     }).catch(function () { failed = true; times(); });
   }
   filter(); times();
-  if (location.hash) openSlot(location.hash.slice(1));
+  // The browser scrolls to a #target after this runs: on a wide screen show the machine from its top
+  // instead of wherever the facts happen to sit. Not in the one-column tablet layout: there the pick
+  // has just scrolled the close-up into view, and that is where a direct link should land.
+  if (location.hash && fromHash() && !sheet && !stacked()) {
+    setTimeout(function () { var vm = document.getElementById('vm'); if (vm) vm.scrollIntoView(); }, 60);
+  }
   if (!FROZEN) {
     setInterval(refresh, REFRESH);
     setInterval(times, 15000);
@@ -1902,34 +3212,78 @@ DEMO_TITLE = "DEMO &middot; "
 LIVE_STORAGE, DEMO_STORAGE = "dash-", "demo-dash-"
 
 
+def pickable(snap: dict, picked: str | None) -> str | None:
+    """`picked` when it is one of our selections on the machine's face (the stored assignment), else None."""
+    face = re.fullmatch(rf"[1-{SHELVES}][1-{COLUMNS}]", picked or "")
+    return picked if face and picked in our_selections(snap) else None
+
+
 def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.json",
-           nav: tuple[tuple[str, str], ...] = (), demo: bool = False) -> str:
+           nav: tuple[tuple[str, str], ...] = (), demo: bool = False,
+           charts: dict[str, str] | None = None, picked: str | None = None) -> str:
     """The page. `json_href` is where its JSON twin lives, and `nav` is (label, href) links to
-    sibling pages, for a server that mounts this page under a path beside others.
+    sibling pages, for a server that mounts this page under a path beside others. `picked` is the
+    request's `?sel=`: without scripts the timed reload keeps it, when it is one of ours.
 
     `demo` is for the made-up copy (`vending.demo`): a banner on top, "DEMO" in the tab title, and a
     fixed page. It never refreshes and keeps the times the server wrote, because the page's script would
-    otherwise measure "3 days ago" and "in 1 day" from the viewer's own clock, not the snapshot's."""
+    otherwise measure "3 days ago" and "in 1 day" from the viewer's own clock, not the snapshot's.
+
+    `charts` is where that server serves the chart pages, by name ("money", "pnl", "spend"): the money
+    panel and the spend tile link to the ones given. Run on its own, the page has none. "products" is the
+    Products page (#55), linked from Back stock."""
+    charts = charts or {}
     now = snap["as_of"]
+    # Without scripts the page reloads itself; a pick of ours goes along (a #fragment never reaches us).
+    picked = pickable(snap, picked)
+    reload_to = f"?{visits.REFRESH_QUERY}" + (f"&sel={picked}#sel-{picked}" if picked else "")
     links = "".join(f' &middot; <a href="{_e(href)}">{_e(label)}</a>' for label, href in nav)
     items = snap.get("attention")
     if items is None:
         items = attention(snap)
+    alerts = snap.get("alerts")
+    if alerts is None:                       # a snapshot made before the banner existed
+        alerts = build_alerts(snap)
     state = verdict(items)
-    head =(f'<header class="top">{mascot_svg(state)}<h1>Agent dashboard</h1>'
-            f'<span class="verdict {state}">{_VERDICT_TEXT[state]}</span>'
-            f'<span class="meta">Read-only &middot; as of {_time(now)} &middot; <span id="live">'
+    head = (f'<header class="top">{mascot_svg(state)}<h1>Agent dashboard</h1>'
+            + (f'<a class="chartlink" href="{_e(charts["money"])}">Money chart</a>' if "money" in charts else "")
+            + f'<span class="meta">Read-only &middot; as of {_time(now)} &middot; <span id="live">'
             + ("fixed snapshot, never refreshes" if demo else f"refreshes every {int(refresh)} s")
             + f'</span> &middot; <a href="{_e(json_href)}">JSON</a>{links}</span></header>')
+    chart_links = " &middot; ".join(f'<a href="{_e(charts[name])}">{label}</a>' for name, label in
+                                    (("money", "Money by day"), ("pnl", "Weekly P&amp;L")) if name in charts)
     money = (f'<section id="money"><h2>Money <span class="hint">from the ledger &middot; exact to the cent'
              " &middot; the competition counts from the ledger's opening; spend before it is development"
-             f'</span></h2>{money_panel.html(snap["money"])}</section>' if "money" in snap else "")
+             f'</span></h2>' + (f'<p class="charts">Charts: {chart_links}</p>' if chart_links else "")
+             + f'{money_panel.html(snap["money"], charts.get("pnl"))}</section>' if "money" in snap else "")
     pricing = pricing_panel.html(snap["pricing"], snap["ours"]) if "pricing" in snap else ""
-    body = (head + _tiles(snap) + _attention_html(items) + money + _cabinet_html(snap) + pricing
-            + _plan_section(snap)
+    price_checks = (f'<section id="price-checks"><h2>Price checks <span class="hint">weekly checks &middot; '
+                    f'lookup log &middot; sourcing &middot; Eastern</span></h2>{price_check_panel.html(snap["price_check_panel"])}'
+                    '</section>' if "price_check_panel" in snap else "")
+    shown_runs = {r["id"] for r in snap["runs"]["data"]} if snap["runs"]["ok"] else set()
+    history = (f'<section id="plan-history"><h2>Plan history <span class="hint">Sat&ndash;Fri, Eastern &middot; newest '
+               f'first &middot; live runs from the opening</span></h2>{plan_history.html(snap["plan_history"], shown_runs)}'
+               '</section>' if "plan_history" in snap else "")
+    boards = (f'<section id="leaderboards"><h2>Product leaderboards</h2>{leaderboards.html(snap["leaderboards"])}</section>'
+              if "leaderboards" in snap else "")
+    report = (f'<section id="report-card"><h2>Weekly report card <span class="hint">computed in code &middot; '
+              f'Saturday to Friday, Eastern</span></h2>{report_card.cards_html(snap["report_cards"])}</section>'
+              if "report_cards" in snap else "")
+    forecast = (f'<section id="forecast"><h2>Forecast vs actual <span class="hint">per slot &middot; Saturday to '
+                f'Friday, Eastern</span></h2>'
+                f'{forecast_panel.html(snap["forecast"])}</section>' if "forecast" in snap else "")
+    incidents = (f'<section id="incidents"><h2>Incident log <span class="hint">since the opening</span></h2>'
+                 f'{report_card.incidents_html(snap["incidents"])}</section>' if "incidents" in snap else "")
+    tracking = (f'<section id="tracking"><h2>Tracking check <span class="hint">our books, checked by the bridge'
+                f' &middot; newest first</span></h2>{tracking_daily.panel_html(snap["tracking"])}</section>'
+                if "tracking" in snap else "")
+    body = (head + _status_bar(snap, items, charts) + key_dates.html(snap.get("key_dates"))
+            + _cabinet_html(snap, items) + pricing + price_checks + money + tracking
+            + _plan_section(snap) + history
+            + report + forecast + incidents
             + '<div class="grid2">'
             + f'<section id="runs"><h2>Runs <span class="hint">newest first &middot; chips are what each plan '
-              f'changed</span></h2>{_runs_html(snap["runs"], now)}</section>'
+              f'changed</span></h2>{_runs_html(snap["runs"], now, charts.get("run"))}</section>'
             + f'<section id="calls"><h2>Tool calls <span class="hint">last {ACTIVITY_ROWS}</span></h2>'
               f'{_activity_html(snap["activity"], snap["recent_calls"])}</section>'
             + "</div>"
@@ -1937,16 +3291,20 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
             + f'<section id="requests"><h2>Requests</h2>'
               f'{_requests_html(snap["purchase_requests"], snap["catalog_requests"], now)}</section>'
             + f'<section id="closet"><h2>Back stock <span class="hint">the closet, from receipts</span></h2>'
-              f'{_closet_html(snap["stock"])}</section>'
+              + (f'<p class="charts"><a href="{_e(charts["products"])}">Every product we can order</a>, with our '
+                 'sourcing and this back stock</p>' if "products" in charts else "")
+              + f'{_closet_html(snap["stock"])}</section>'
             + "</div>"
+            + boards
             + ('<footer>Made-up data from a fixed snapshot, shown with the live page\'s own code. Nothing here is '
                f'read from our database. The live page is <a href="{DEMO_LIVE_HREF}">{DEMO_LIVE_HREF}</a>.</footer>'
                if demo else
-               '<footer>This page only reads. To stop the agent: <code>python -m vending.halt on --by NAME</code></footer>'))
+               '<footer>This page only reads. To stop the agent: <code>python -m vending.halt on --by NAME</code>'
+               + _visitors_line(snap) + '</footer>'))
     # The query marks the reload as one, so the visit counter doesn't count it (`vending.visits`).
     # The demo never reloads.
     reload = ("" if demo else
-              f'<noscript><meta http-equiv="refresh" content="{int(refresh)}; url=?{visits.REFRESH_QUERY}"></noscript>')
+              f'<noscript><meta http-equiv="refresh" content="{int(refresh)}; url={_e(reload_to)}"></noscript>')
     banner = (f'<div class="demo-banner" role="note">{_e(DEMO_BANNER)}<a href="{DEMO_LIVE_HREF}">{DEMO_LIVE_HREF}</a>'
               '</div>' if demo else "")
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
@@ -1954,7 +3312,8 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
             + ('<meta name="robots" content="noindex">' if demo else "")
             + reload
             + f'<title>{DEMO_TITLE if demo else ""}{_VERDICT_TEXT[state]} &middot; Agent dashboard</title>'
-            f'<style>{STYLE}{machine_art.STYLE}</style></head><body>{banner}<main>{body}</main>'
+            f'<style>{STYLE}{machine_art.STYLE}{key_dates.STYLE}</style></head><body>{banner}'
+            f'<main>{_alerts_html(alerts)}{body}</main>'
             f'<script>{SCRIPT % (int(refresh), int(demo), DEMO_STORAGE if demo else LIVE_STORAGE, visits.REFRESH_HEADER)}'
             '</script></body></html>')
 
@@ -1971,6 +3330,11 @@ def _error_page(message: str) -> str:
 
 # --- Server -------------------------------------------------------------------------------------
 
+# The Products page (#55) beside the page this server draws, and a run's page (`vending.run_page`) by its id.
+PRODUCTS_PATH = "/products"
+RUN_PATH = "/run/"
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "vending-dashboard"
 
@@ -1979,19 +3343,39 @@ class Handler(BaseHTTPRequestHandler):
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
         if host not in LOCAL_HOSTS:
             return self._send(403, "text/plain; charset=utf-8", "open this page as 127.0.0.1 or localhost")
-        if path not in ("/", "/state.json"):
+        from vending import run_page
+        followed = run_page.parse(path, RUN_PATH)
+        if path not in ("/", "/state.json", PRODUCTS_PATH) and followed is None:
             return self._send(404, "text/plain; charset=utf-8", "not found")
         try:
             with connect() as conn:
-                snap = snapshot(conn)
-        except (psycopg.Error, settings.SettingsError) as error:
+                if followed is not None:
+                    data = run_page.read(conn, followed[0], public=False,
+                                         after=run_page.after_of(urlsplit(self.path).query))
+                elif path == PRODUCTS_PATH:
+                    from vending import products_page
+                    data = products_page.read(conn)
+                else:
+                    snap = snapshot(conn)
+        except (psycopg.Error, settings.SettingsError, Missing) as error:
             message = str(error).strip().splitlines()[0] if str(error).strip() else type(error).__name__
             if path == "/state.json":
                 return self._send(503, "application/json", to_json({"error": message}))
             return self._send(503, "text/html; charset=utf-8", _error_page(message))
+        if followed is not None:
+            status = 200 if data["found"] and data.get("shown") else 404
+            if followed[1]:
+                return self._send(status, "application/json", to_json(data))
+            return self._send(status, "text/html; charset=utf-8", run_page.html(
+                data, nav=(("Agent dashboard", "/"),), json_href=f"{RUN_PATH}{followed[0]}.json"))
+        if path == PRODUCTS_PATH:
+            return self._send(200, "text/html; charset=utf-8", products_page.html(data, nav=(("Agent dashboard", "/"),)))
         if path == "/state.json":
             return self._send(200, "application/json", to_json(snap))
-        self._send(200, "text/html; charset=utf-8", render(snap))
+        picked = parse_qs(urlsplit(self.path).query).get("sel", [None])[0]
+        self._send(200, "text/html; charset=utf-8",
+                   render(snap, picked=picked, nav=(("Products", PRODUCTS_PATH),),
+                          charts={"products": PRODUCTS_PATH, "run": RUN_PATH}))
 
     def _send(self, code: int, content_type: str, body: str) -> None:
         data = body.encode("utf-8")

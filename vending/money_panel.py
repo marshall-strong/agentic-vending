@@ -36,13 +36,15 @@ import psycopg
 from vending import config, ledger
 from vending.slots import SlotsNotRecorded
 
-# Proposed in #113 ("Opening capital plan"), not yet agreed: how the $600 is split.
+# How the $600 is split (docs/opening-capital-plan.md, first proposed in #113). The first fill's line is $400
+# since 22 Nov (Kevin, #230), up from #113's $366, so the safety margin, the residual, is $73. The lines must
+# add up to the $600.
 PROPOSED_SPLIT: tuple[tuple[str, int], ...] = (
-    ("Day-one fill (most-we-pay)", 36_600),
+    ("First fill (most-we-pay)", 40_000),
     ("Midweek visits (2 x $25)", 5_000),
     ("Model spend (9 weeks x $1)", 900),
     ("Product-switch reserve", 6_800),
-    ("Safety margin", 10_700),
+    ("Safety margin", 7_300),
 )
 MODEL_BUDGET_CENTS = 900
 VISIT_BUDGET_CENTS = 5_000
@@ -293,8 +295,10 @@ def _split_bar(d: dict) -> str:
             f'<div class="mkeys">{keys}</div><div class="sub">Money in: {money_in}.</div>')
 
 
-def html(panel: dict) -> str:
-    """The panel's inner HTML: a dashboard `_panel` dict, ok or not."""
+def html(panel: dict, pnl_href: str | None = None) -> str:
+    """The panel's inner HTML: a dashboard `_panel` dict, ok or not. `pnl_href` is where the server
+    serves the weekly P&L (`/dashboard/pnl` on the container); run on its own there is none, and the
+    panel names the command that prints it instead."""
     if not panel["ok"]:
         return f'<p class="empty">Not available: {_e(panel["why"])}</p>'
     d = panel["data"]
@@ -320,7 +324,7 @@ def html(panel: dict) -> str:
                 'the $600.</p>' + pend + plan)
     if not d["opened"]:
         return ('<p class="empty">No opening entry in the ledger yet, so there is no balance. Record the '
-                '$600 before the day-one fill (#107): <code>python -m vending.ledger open --amount 600.00 '
+                '$600 before the first fill (#107): <code>python -m vending.ledger open --amount 600.00 '
                 '--by NAME</code>. Spend before the opening is development, not from the $600.</p>' + pend + plan)
     p = d["pnl"]
     tiles = (
@@ -357,8 +361,10 @@ def html(panel: dict) -> str:
             f'<h3>Where the money has gone</h3>{_split_bar(d)}{pend}'
             f'<h3>Against the proposed budget</h3>{meters}'
             f'<div class="grid2 mlow"><div><h3>Profit and loss since the opening</h3><table class="mpnl">{pnl_rows}</table>'
-            '<p class="sub">Weekly detail: <code>python -m vending.pnl_report</code>.</p></div>'
-            f'<div>{plan}' + (f'<h3>Ledger notes</h3><ul class="mnotes">{notes}</ul>' if notes else "") + "</div></div>")
+            + (f'<p class="sub">Weekly detail: <a href="{_e(pnl_href)}">the weekly P&amp;L</a> on the team&#39;s '
+               'dashboard, or <code>python -m vending.pnl_report</code> on a laptop.</p></div>' if pnl_href else
+               '<p class="sub">Weekly detail: <code>python -m vending.pnl_report</code>.</p></div>')
+            + f'<div>{plan}' + (f'<h3>Ledger notes</h3><ul class="mnotes">{notes}</ul>' if notes else "") + "</div></div>")
 
 
 STYLE = """

@@ -16,9 +16,12 @@ from fractions import Fraction
 
 from tests.conftest import TEST_SLOTS
 from vending.planner import (
+    MAX_NAME,
+    PULL_UNKNOWN,
     BACK_STOCK,
     PURCHASE,
     RESTOCK,
+    SPENDABLE_FLOOR_CENTS,
     SWITCH,
     CatalogProduct,
     ClosetStock,
@@ -240,6 +243,91 @@ class Purchases(unittest.TestCase):
         self.assertEqual(line(p, "15").purchase.primary.packs, 1)
         self.assertEqual(line(p, "16").purchase.primary.packs, 1)
         self.assertEqual(p.cost.max_cents, 2 * 1200)
+        self.assertNotIn("note", p.request())
+
+    def test_a_pooled_plan_buys_once_for_all_of_a_products_slots(self):
+        # `vending.fill`'s day-one plan: 6 short in slot 15 and 6 in slot 16 is one 24-pack, not two.
+        p = plan_restock(current(), replace(desired(
+            restock_15(), DesiredSlot("16", product=MTDEW, sale_price="2.50", fill_to=6)), pool=True),
+            CONFIG, TUESDAY)
+        self.assertTrue(p.ok, p.refusals)
+        first, fed = line(p, "15"), line(p, "16")
+        self.assertEqual((first.source, first.purchase.primary.packs, first.purchase.alternate.packs),
+                         (PURCHASE, 1, 1))
+        self.assertEqual(first.purchase.feeds, (("16", 6),))
+        self.assertEqual(first.purchase.primary.units_to_closet, 12)    # 24 bought, 6 + 6 loaded
+        self.assertEqual((fed.source, fed.fed_by, fed.units_to_load, fed.purchase), (BACK_STOCK, "15", 6, None))
+        self.assertEqual(fed.to_api()["load"], {"sku": MTDEW, "units": 6, "sale_price": "2.50",
+                                                "change_product": True})
+        self.assertEqual(p.cost.max_cents, 1200)                        # the dearer option, once
+        # The fed slot sells units the purchase bought, so their cost sets its floor.
+        self.assertEqual([part.source.split(",")[0] for part in floor_of(p, "16").parts],
+                         ["primary BJs 24-pack", "alternate Amazon 12-pack"])
+        body = p.request()
+        self.assertIn("15=6", body["note"])
+        self.assertIn("16=6", body["note"])
+        self.assertIn("slot 15's purchase", p.directive)
+        self.assertIn("for slots 15, 16", p.directive)
+
+    def test_a_pooled_purchase_past_its_cutoff_makes_its_fed_slots_late_too(self):
+        p = plan_restock(current(), replace(desired(pickle_17(), DesiredSlot(
+            "18", product=PICKLE, sale_price="3.00", fill_to=6)), pool=True), CONFIG, THURSDAY_NOON)
+        self.assertTrue(p.ok, p.refusals)
+        self.assertTrue(any("Amazon cutoff" in w and "17, 18" in w for w in p.warnings), p.warnings)
+
+    def test_a_pooled_plan_may_not_load_more_than_twenty_packs_on_one_line(self):
+        config = Config(slots=TEST_SLOTS, capacity_overrides=counted(30), timezone=EDT)
+        slots = [DesiredSlot(s, product=PICKLE, sale_price="3.00", fill_to=30) for s in TEST_SLOTS[2:11]]
+        p = plan_restock(current(), replace(desired(*slots), pool=True), config, TUESDAY)
+        self.assertIn("too_many_packs", codes(p))                       # 270 units in 12-packs is 23
+
+    def test_a_pooled_note_names_each_lines_supplier_and_keeps_closet_loads_apart(self):
+        """Sol round 2, finding 5: with 7 already in the closet and three slots needing 7 each, the plan buys 14
+        and one slot loads the closet's 7. The note sent all three loads to the new units."""
+        three = TEST_SLOTS[2:5]
+        p = plan_restock(current(closet=[ClosetStock(PICKLE, 7, 250)]), replace(desired(
+            *(DesiredSlot(s, product=PICKLE, sale_price="3.00", fill_to=7) for s in three)), pool=True),
+            CONFIG, TUESDAY)
+        self.assertTrue(p.ok, p.refusals)
+        closet, buyer, fed = (line(p, s) for s in three)
+        self.assertEqual((closet.source, closet.fed_by), (BACK_STOCK, None))
+        self.assertEqual((buyer.source, buyer.purchase.feeds), (PURCHASE, ((three[2], 7),)))
+        self.assertEqual(fed.fed_by, three[1])
+        note = p.request()["note"]
+        self.assertIn(f"From slot {three[1]}'s purchase: {three[1]}=7, {three[2]}=7.", note)
+        self.assertIn(f"From closet stock: {three[0]}=7.", note)
+        # The closet line is never said to load the new units.
+        self.assertNotIn(f"{three[0]}=7, {three[1]}", note)
+        self.assertNotIn("Back-stock lines load units bought", note)
+
+    def test_a_pooled_note_for_twenty_slots_stays_under_the_bridges_limit(self):
+        from types import SimpleNamespace as Ln
+
+        from vending.planner import MAX_NOTE, _pool_note
+        slots = [str(n) for n in range(10, 50, 2)]                      # 20 two-digit slots
+        bought = Ln(feeds=())
+
+        def buy(s):
+            return Ln(slot=s, units_to_load=12, fed_by=None, purchase=bought)
+
+        def fed(s, by):
+            return Ln(slot=s, units_to_load=12, fed_by=by, purchase=None)
+
+        def closet(s):
+            return Ln(slot=s, units_to_load=12, fed_by=None, purchase=None)
+
+        cases = {
+            "pairs": [ln for a, b in zip(slots[::2], slots[1::2]) for ln in (buy(a), fed(b, a))],
+            "alone": [buy(s) for s in slots],
+            "one buyer": [buy(slots[0]), *(fed(s, slots[0]) for s in slots[1:])],
+            "mixed": [buy(slots[0]), *(fed(s, slots[0]) for s in slots[1:8]), *(closet(s) for s in slots[8:14]),
+                      *(buy(s) for s in slots[14:])],
+        }
+        for name, lines in cases.items():
+            note = _pool_note(tuple(lines))
+            self.assertLessEqual(len(note), MAX_NOTE, (name, len(note), note))
+            for s in slots:
+                self.assertIn(f"{s}=12", note, name)
 
     def test_given_sourcing_beats_the_table(self):
         given = Sourcing(MTDEW, PurchaseOption("Walmart", 6, "4.49"))
@@ -296,7 +384,66 @@ class Costs(unittest.TestCase):
 
     def test_balance_check_uses_max_plus_fee(self):
         self.assertIn("insufficient_balance", codes(plan(restock_15(), off_cycle=True, balance=3699)))
-        self.assertTrue(plan(restock_15(), off_cycle=True, balance=3700).ok)
+        # Max plus fee is 37.00, and the $53.00 spendable floor must be left after it.
+        self.assertTrue(plan(restock_15(), off_cycle=True, balance=3700 + SPENDABLE_FLOOR_CENTS).ok)
+
+    def test_the_spendable_floor_holds_after_the_worst_case(self):
+        """Kevin, 19 Nov: a restock may spend down to the $53.00 floor (one midweek fee plus a week of model
+        spend), never under it; at exactly the floor it passes."""
+        self.assertEqual(SPENDABLE_FLOOR_CENTS, 5300)
+        at_floor = plan(restock_15(), balance=1200 + 5300)
+        self.assertTrue(at_floor.ok)
+        self.assertEqual(at_floor.cost.balance_left_at_max_cents, 5300)
+        short = plan(restock_15(), balance=1200 + 5299)
+        self.assertEqual(codes(short), ["below_spendable_floor"])
+        message = short.refusals[0].message
+        self.assertIn("$53.00 spendable floor", message)
+        self.assertIn("cut at least $0.01", message)
+        self.assertIn("slot 15 $12.00", message)
+        self.assertIsNone(short.plan_hash)
+
+    def test_the_floor_never_blocks_a_plan_that_spends_nothing(self):
+        """Sol, round 2: the floor limits what a plan spends. A closet-only load costs $0, so it passes even with
+        spendable already under the floor; any purchase that would leave spendable under it is refused."""
+        free = plan(restock_15(), closet=[ClosetStock(MTDEW, 9, 50)], balance=5299)
+        self.assertTrue(free.ok, free.refusals)
+        self.assertEqual(free.cost.max_cents, 0)
+        penny = Sourcing(MTDEW, PurchaseOption("Walmart", 24, "0.01"))
+        self.assertEqual(plan(restock_15(), sourcing=[penny], balance=5301).cost.max_cents, 1)
+        self.assertTrue(plan(restock_15(), sourcing=[penny], balance=5301).ok)
+        self.assertEqual(codes(plan(restock_15(), sourcing=[penny], balance=5300)), ["below_spendable_floor"])
+
+    def test_both_cash_refusals_give_the_same_recipe(self):
+        """Sol, round 2: insufficient_balance gets the cash-short recipe too, not just below_spendable_floor."""
+        short = plan(restock_15(), balance=1199)
+        self.assertEqual(codes(short), ["insufficient_balance"])
+        floor = plan(restock_15(), balance=1200)
+        self.assertEqual(codes(floor), ["below_spendable_floor"])
+        self.assertIn("cut at least $0.01", short.refusals[0].message)
+        for p in (short, floor):
+            message = p.refusals[0].message
+            self.assertIn("most margin per class day first", message)
+            self.assertIn("give a slot a smaller explicit fill_to, or keep it if nothing fits", message)
+            self.assertIn("slot 15 $12.00", message)
+            self.assertIn("then preview again", message)
+
+    def test_a_cash_short_first_fill_never_offers_keep(self):
+        """On the first fill every slot has no receipts and needs a line, so the recipe is cheaper products or packs,
+        or a smaller fill_to, never keep."""
+        unknown = {"15": SlotState("15", None, None, 0, None, contents_known=False)}
+        p = plan(restock_15(), slots=unknown, balance=1199)
+        self.assertEqual(codes(p), ["insufficient_balance"])
+        message = p.refusals[0].message
+        self.assertIn("slot 15 has no receipts yet (a first fill): give it a cheaper product or pack, or a smaller "
+                      "fill_to, but never keep it or leave it out", message)
+
+    def test_the_floor_is_a_setting(self):
+        self.assertTrue(plan(restock_15(), balance=1200, config=replace(CONFIG, spendable_floor_cents=0)).ok)
+
+    def test_the_floor_is_in_the_plan_hash(self):
+        """A floor changed between preview and submit changes the plan, so submit's hash check catches it."""
+        self.assertNotEqual(plan(restock_15()).plan_hash,
+                            plan(restock_15(), config=replace(CONFIG, spendable_floor_cents=6000)).plan_hash)
 
 
 class PricingGate(unittest.TestCase):
@@ -547,7 +694,8 @@ class Refusals(unittest.TestCase):
 
     def test_insufficient_balance(self):
         self.assertEqual(codes(plan(restock_15(), balance=1199)), ["insufficient_balance"])
-        self.assertTrue(plan(restock_15(), balance=1200).ok)
+        self.assertEqual(codes(plan(restock_15(), balance=1200)), ["below_spendable_floor"])
+        self.assertTrue(plan(restock_15(), balance=1200 + SPENDABLE_FLOOR_CENTS).ok)
 
     def test_empty_slot(self):
         self.assertEqual(codes(plan(DesiredSlot("15", product=None, sale_price="2.50"))), ["empty_slot"])
@@ -686,6 +834,63 @@ class Directive(unittest.TestCase):
                       shopping)
         self.assertIn("only if BJs is unavailable or over its max", shopping)
         self.assertIn(MTDEW_URL, shopping)
+
+
+def _row(directive: str, slot: str) -> list[str]:
+    """One slot's row of the directive table, split into its cells as the simulator reads them."""
+    import re
+    return next(re.split(r"\s{2,}", ln.strip()) for ln in directive.splitlines()
+                if ln.startswith(slot + " ") and "Visit" not in ln)
+
+
+def _named(**names) -> tuple[CatalogProduct, ...]:
+    return tuple(replace(c, name=names.get(c.product)) for c in CATALOG)
+
+
+class DirectiveNames(unittest.TestCase):
+    """#88: the worker reads the catalog's name, with the SKU beside it, and knows what to pull."""
+
+    def test_catalog_name_with_the_sku_beside_it(self):
+        state = replace(current(), catalog=_named(**{MTDEW: "Mountain Dew 20oz", COKE: "Coca-Cola 20oz"}))
+        p = plan_restock(state, desired(restock_15(), pickle_17()), CONFIG, TUESDAY)
+        self.assertTrue(p.ok, p.refusals)
+        self.assertEqual(_row(p.directive, "15")[2], "Mountain Dew 20oz (MTDEW-20OZ)")
+        self.assertIn("  Mountain Dew 20oz (MTDEW-20OZ): 1 x 24-pack", p.directive.split("Shopping list")[1])
+        # The product pulled is named too; one with no name in the catalog keeps its SKU alone.
+        self.assertEqual(_row(p.directive, "17")[2], PICKLE)
+        self.assertEqual(_row(p.directive, "17")[-1], "10 Coca-Cola 20oz (COKE-20OZ) to closet")
+        # A kept slot is named as well.
+        self.assertEqual(_row(p.directive, "16")[2], "Coca-Cola 20oz (COKE-20OZ)")
+
+    def test_sku_alone_when_the_catalog_has_no_name(self):
+        for catalog in (CATALOG, _named(**{MTDEW: "  \n "}), _named(**{MTDEW: MTDEW})):
+            p = plan_restock(replace(current(), catalog=catalog), desired(restock_15()), CONFIG, TUESDAY)
+            self.assertEqual(_row(p.directive, "15")[2], MTDEW)
+            self.assertIn(f"  {MTDEW}: 1 x 24-pack", p.directive)
+
+    def test_a_long_or_spaced_name_stays_one_compact_cell(self):
+        state = replace(current(), catalog=_named(**{MTDEW: "Mountain   Dew\tCode Red Limited Edition Extra Long Name 20oz"}))
+        p = plan_restock(state, desired(restock_15()), CONFIG, TUESDAY)
+        cell = _row(p.directive, "15")[2]
+        self.assertTrue(cell.startswith("Mountain Dew Code Red") and cell.endswith(f"... ({MTDEW})"), cell)
+        self.assertLessEqual(len(cell), MAX_NAME + len(MTDEW) + 3)
+        # The simulator's worker still reads the load from the table.
+        from vending.simulate.bridge import directive_loads
+        self.assertEqual(directive_loads(p.directive, TEST_SLOTS)["15"], 6)
+
+    def test_an_unknown_slot_being_swapped_is_emptied_to_the_closet(self):
+        unknown = SlotState("17", None, None, 0, None, contents_known=False)
+        p = plan(pickle_17(), slots={"17": unknown})
+        self.assertTrue(p.ok, p.refusals)
+        self.assertEqual(_row(p.directive, "17")[-1], PULL_UNKNOWN)
+        # Stock no receipt names is unknown too.
+        p = plan(pickle_17(), slots={"17": SlotState("17", None, None, 3, None)})
+        self.assertEqual(_row(p.directive, "17")[-1], PULL_UNKNOWN)
+
+    def test_a_known_empty_slot_or_a_restock_pulls_nothing(self):
+        p = plan(restock_15(), pickle_17(), slots={"17": SlotState("17", COKE, 200, 0, 125)})
+        self.assertEqual(_row(p.directive, "17")[-1], "-")
+        self.assertEqual(_row(p.directive, "15")[-1], "-")
 
 
 class Inputs(unittest.TestCase):
@@ -902,7 +1107,7 @@ class TestWildcard(unittest.TestCase):
             self.assertIn("slot 16 holds now", " ".join(p.warnings))
 
     # The day-one fill: no slot has receipts, and one request names all 20 slots' products. The wildcard is
-    # 37, a slot the setter allows (shelf 3, not column 5); tests/test_wildcard_review.py previews it end to end.
+    # 37, a slot the setter allows (shelf 3, not column 4 or 5); tests/test_wildcard_review.py previews it end to end.
     DAY_ONE = {s: SlotState(s, None, None, 0, None, contents_known=False) for s in TEST_SLOTS}
 
     def day_one(self, *kept: str):
@@ -960,6 +1165,94 @@ class TestWildcard(unittest.TestCase):
         self.assertEqual(where(wild(mtdew_16, slots=state, sourcing=(dear,))), [("above_ceiling", "18")])
         state["18"] = SlotState("18", None, 650, 0, None, contents_known=False)
         self.assertTrue(wild(mtdew_16, slots=state, sourcing=(dear,)).ok)
+
+
+def varied(**overrides) -> dict[str, SlotState]:
+    """Every slot holds its own drink (none of them on the catalog), so only the slots a test names can match."""
+    base = {s: SlotState(s, f"DRINK-{s}", 200, 10, 125) for s in TEST_SLOTS}
+    base.update(overrides)
+    return base
+
+
+def doubles(p) -> list[str]:
+    return [w for w in p.warnings if "adds stock, not sales" in w]
+
+
+class TestVariety(unittest.TestCase):
+    """Kevin, 22 Nov (#230): a second slot of the same drink adds stock, not sales. Warned of, never refused."""
+
+    def test_two_slots_switched_to_one_drink_are_warned_of_not_refused(self):
+        mtdew_16 = DesiredSlot("16", product=MTDEW, sale_price="2.50", fill_to=10)
+        mtdew_18 = DesiredSlot("18", product=MTDEW, sale_price="2.50", fill_to=10)
+        p = plan(mtdew_16, mtdew_18, slots=varied())
+        self.assertTrue(p.ok, p.refusals)
+        [warning] = doubles(p)
+        self.assertIn("slot 16 and slot 18 both get MTDEW-20OZ", warning)
+        self.assertIn("keep it only if one slot would sell out before Friday", warning)
+        self.assertIn("get_project_rules variety", warning)
+
+    def test_a_switch_into_a_drink_a_kept_slot_holds_is_warned_of(self):
+        kept = varied(**{"15": SlotState("15", MTDEW, 250, 4, 50)})
+        p = plan(DesiredSlot("16", product=MTDEW, sale_price="2.50", fill_to=10), slots=kept)
+        self.assertTrue(p.ok, p.refusals)
+        self.assertEqual(len(doubles(p)), 1)
+        self.assertIn("slot 15 and slot 16 both get MTDEW-20OZ", doubles(p)[0])
+
+    def test_three_slots_of_one_drink_are_one_warning(self):
+        p = plan(*(DesiredSlot(s, product=MTDEW, sale_price="2.50", fill_to=10) for s in ("16", "17", "18")),
+                 slots=varied())
+        [warning] = doubles(p)
+        self.assertIn("slots 16, 17 and 18 all get MTDEW-20OZ", warning)
+
+    def test_a_plan_of_distinct_drinks_gets_no_warning(self):
+        p = plan(DesiredSlot("16", product=MTDEW, sale_price="2.50", fill_to=10), slots=varied())
+        self.assertTrue(p.ok, p.refusals)
+        self.assertEqual(doubles(p), [])
+
+    def test_a_pooled_purchase_for_two_slots_is_warned_of_once(self):
+        # The day-one fill pools (vending.fill): one pack buys for both slots, and the warning still names them.
+        mtdew = [DesiredSlot(s, product=MTDEW, sale_price="2.50", fill_to=10) for s in ("16", "18")]
+        by_slot = {d.slot: d for d in mtdew}
+        pooled = DesiredState(tuple(by_slot.get(s, DesiredSlot(s, keep=True)) for s in TEST_SLOTS), pool=True)
+        p = plan_restock(current(slots=varied()), pooled, CONFIG, TUESDAY)
+        self.assertTrue(p.ok, p.refusals)
+        self.assertIsNotNone(p.note)
+        [warning] = doubles(p)
+        self.assertIn("slot 16 and slot 18 both get MTDEW-20OZ", warning)
+
+    def test_switching_away_from_a_duplicate_clears_the_warning(self):
+        both = varied(**{"15": SlotState("15", MTDEW, 250, 4, 50), "16": SlotState("16", MTDEW, 250, 4, 50)})
+        self.assertEqual(len(doubles(plan(restock_15(), slots=both))), 1)
+        p = plan(DesiredSlot("16", product=PICKLE, sale_price="3.00", fill_to=6), slots=both)
+        self.assertTrue(p.ok, p.refusals)
+        self.assertEqual(doubles(p), [])
+
+    def test_slots_no_receipt_describes_are_not_counted(self):
+        unknown = {s: SlotState(s, None, 200, 0, None, contents_known=False) for s in ("25", "26")}
+        p = plan(DesiredSlot("16", product=MTDEW, sale_price="2.50", fill_to=10), slots=varied(**unknown))
+        self.assertEqual(doubles(p), [])
+
+    def test_two_skus_of_one_product_are_one_drink(self):
+        # Red Bull Sugarfree got a second SKU from our request 1 (analysis/dayone/round7/build_catalog7.py): the
+        # catalog's two SKUs are one product, recorded in config product_aliases, so two slots of it are a duplicate.
+        old = "MTDEW-20OZ-OLDSKU"
+        state = varied(**{"16": SlotState("16", old, 250, 4, 50)})
+        aliased = replace(CONFIG, product_aliases={old: MTDEW})
+        p = plan(restock_15(), slots=state, config=aliased)
+        self.assertTrue(p.ok, p.refusals)
+        [warning] = doubles(p)
+        self.assertIn("slot 15 and slot 16 both get MTDEW-20OZ", warning)
+        self.assertIn(old, warning)
+        # Without the alias they are two products, as before.
+        self.assertEqual(doubles(plan(restock_15(), slots=state)), [])
+
+    def test_the_wildcard_is_left_to_its_own_rules(self):
+        # The wildcard's product is in no other slot, which _check_wildcard refuses or warns of itself.
+        state = varied(**{"16": SlotState("16", PICKLE, 300, 5, 250), "17": SlotState("17", PICKLE, 600, 2, 250)})
+        p = wild(restock_15(), slots=state)
+        self.assertEqual(doubles(p), [])
+        # With no wildcard set, the same two slots are just two regular slots of one drink.
+        self.assertEqual(len(doubles(plan(restock_15(), slots=state))), 1)
 
 
 if __name__ == "__main__":

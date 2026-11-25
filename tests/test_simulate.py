@@ -243,6 +243,52 @@ def test_first_week_end_to_end(schema_url, monkeypatch, tmp_path):
     assert {p.name for p in out.iterdir()} >= {"season.json", "weeks.json", "runs.json", "daily_slots.csv"}
 
 
+def test_a_season_run_settles_an_open_submission_from_its_own_bridge(schema_url, monkeypatch):
+    """Sol round 3, finding 6: a season's agent run checks open submissions against the season's bridge, not
+    the real one. A submission whose POST got a validated 201 that was never recorded is settled from it."""
+    from psycopg.types.json import Jsonb
+
+    from tests.conftest import open_in
+    from vending import db
+    from vending.simulate import season
+    from vending.simulate.bridge import Filed
+
+    url, schema = schema_url
+    monkeypatch.setattr(db, "connect", lambda: open_in(url, schema))
+    monkeypatch.setenv("VENDING_TOOLS", "built")
+    with open_in(url, schema) as conn:
+        conn.execute("delete from slot_assignment")
+        st = season.new_state(11, "scripted", "claude-opus-5-5", "medium", False, 3, EXAMPLE)
+        with patched(st.clock):
+            season.setup(conn, st, Decimal(1), Decimal(1))
+            body = {"lines": [], "off_cycle": False}
+            st.bridge.requests["pr_sim_seed"] = Filed("pr_sim_seed", body, st.clock.now())
+            conn.execute("insert into purchase_submissions (plan_hash, body, status, created_id)"
+                         " values ('h', %s, 'sending', 'pr_sim_seed')", (Jsonb(body),))
+            season.run_agent(conn, st, "weekly", Decimal(1), Decimal(1), Decimal(0))
+        assert ("GET", "/api/v1/purchase-requests/pr_sim_seed") in st.bridge.calls
+        assert conn.execute("select status, request_id, resolved_by from purchase_submissions"
+                            " where created_id = 'pr_sim_seed'").fetchone() == ("accepted", "pr_sim_seed", "auto-check")
+
+
+def test_a_season_resolves_a_refused_post_as_a_person_would(conn):
+    """The submit tool leaves a refused POST `unknown`; the season knows its bridge filed nothing, so it resolves
+    the row as never filed, and the next run isn't blocked."""
+    from psycopg.types.json import Jsonb
+
+    from vending import submissions
+    from vending.simulate import season
+
+    refused, other = {"lines": [{"slot": "12"}], "off_cycle": False}, {"lines": [], "off_cycle": True}
+    for body in (refused, other):
+        conn.execute("insert into purchase_submissions (plan_hash, body, status) values ('h', %s, 'unknown')",
+                     (Jsonb(body),))
+    assert season.settle_refused(conn, [{"status": 422, "body": refused}, {"status": 404, "body": other}]) == [1]
+    assert conn.execute("select status, resolved_by from purchase_submissions order by id").fetchall() == [
+        ("not_filed", season.BY), ("unknown", None)]
+    assert submissions.unresolved(conn).code == "submission_unresolved"
+
+
 def test_a_seasons_slots_come_from_its_assignment(tmp_path):
     from vending.simulate import season
     good = tmp_path / "slots.json"
@@ -350,6 +396,7 @@ def test_run_agent_puts_the_servers_globals_back(monkeypatch):
 
     async def fake_run(**_k):
         seen.append(server.bridge())
+        assert _k["bridge"]() is server.bridge()        # startup recovery reads the season's bridge too
         assert server._conn is None                      # nothing cached from before this run
         server._conn = _FakeConn()                       # what the tools would cache
         opened.append(server._conn)
@@ -433,3 +480,74 @@ def test_resume_picks_up_mid_hour_where_the_checkpoint_was_taken(monkeypatch, tm
     assert "probe" in events and again[0] == events
     assert sorted(set(again[1])) == sorted(set(polls)) and len(again[1]) == len(polls)
     assert again[2] == sold and sum(sold.values()) > 0
+
+
+def _check_in_week(conn, *, price_cents, pack_cents, tag):
+    """A full machine of WAKE-SKU at `price_cents`, four slots emptied by Monday and the rest
+    holding 8, with the catalog synced, a sourcing row and the halt switch off, so the wake
+    check has everything it needs but the margin."""
+    import json
+
+    from tests.conftest import TEST_SLOTS, store_poll
+    from tests.test_dashboard import fulfilled
+    from vending import config, sourcing
+
+    empty = TEST_SLOTS[:4]
+    config.set_halted(conn, False, "tester")
+    conn.execute("insert into catalog_products (sku, name, size, last_response)"
+                 " values ('WAKE-SKU', 'Wake Cola', '12 fl oz can', %s)",
+                 (json.dumps({"sku": "WAKE-SKU", "size": "12 fl oz can", "active": True}),))
+    conn.execute("insert into catalog_syncs (synced_at, product_count) values (%s, 1)",
+                 (datetime(2026, 12, 7, 11, tzinfo=EASTERN),))
+    sourcing.set_option(conn, sourcing.Option(
+        sku="WAKE-SKU", rank="primary", store="Walmart", units_per_pack=6,
+        expected_cents=pack_cents, max_cents=pack_cents, url=None, pack_description=None,
+        checked_at=datetime(2026, 12, 5, 17, tzinfo=timezone.utc), checked_by="tester"),
+        datetime(2026, 12, 7, 12, 30, tzinfo=EASTERN))
+    for slot in TEST_SLOTS:
+        loaded = 6 if slot in empty else 8
+        fulfilled(conn, f"checkin-{tag}-{slot}", slot, "WAKE-SKU", units_loaded=loaded,
+                  paid=f"{pack_cents * loaded / 600:.2f}", at=datetime(2026, 12, 4, 20, tzinfo=timezone.utc))
+    store_poll(conn, f"checkin-before-{tag}", datetime(2026, 12, 4, 18, tzinfo=timezone.utc).isoformat(),
+               {s: (price_cents, 100) for s in TEST_SLOTS})
+    store_poll(conn, f"checkin-monday-{tag}", datetime(2026, 12, 7, 16, 30, tzinfo=timezone.utc).isoformat(),
+               {s: (price_cents, 106 if s in empty else 100) for s in TEST_SLOTS})
+
+
+def test_the_monday_check_in_runs_the_agent_when_a_midweek_visit_would_pay(schema_url, monkeypatch):
+    """The check-in gate is the midweek wake's own decision (`vending.midweek_wake.eligible`,
+    the worker's path through the planner), not a separate count of empty slots: four cheap
+    slow sellers empty together never pay the $25 fee, so they don't run the agent; a paying
+    week does."""
+    from types import SimpleNamespace
+
+    from tests.conftest import open_in
+    from vending import ledger
+    from vending.simulate import season
+
+    url, schema = schema_url
+    monday = datetime(2026, 12, 7, 12, 30, tzinfo=EASTERN)      # CHECK_IN_AT
+    opts = {"budget": 1.0, "run_cap": 1.0, "min_run": 0}
+    ran = []
+    monkeypatch.setattr(season, "run_agent", lambda *a: ran.append(a[2]))
+    with open_in(url, schema) as conn:
+        ledger.record(conn, "opening", 60000, "opening capital", "tester",
+                      at=datetime(2026, 12, 1, 15, tzinfo=timezone.utc))
+        st = SimpleNamespace(clock=SimpleNamespace(now=lambda: monday),
+                             bridge=SimpleNamespace(requests={}), runs=[], log=[])
+
+        def check_in():
+            season.handle(conn, st, season.Event(monday, "check_in"), opts)
+
+        _check_in_week(conn, price_cents=325, pack_cents=600, tag="slow")   # 4 empty, saves $11.61 < $25
+        check_in()
+        assert ran == []
+        assert st.log[-1]["kind"] == "check_in" and st.log[-1]["wake"] is None
+
+        for table in ("polls", "purchase_lines", "purchase_requests", "sourcing_options",
+                      "catalog_products", "catalog_syncs"):
+            conn.execute(f"delete from {table}")
+        _check_in_week(conn, price_cents=450, pack_cents=1014, tag="fast")   # 4 empty, saves $26.83 > $25
+        check_in()
+        assert ran == ["check-in"]
+        assert st.log[-1]["wake"] == ["15", "16", "17", "18"]

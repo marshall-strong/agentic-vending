@@ -332,6 +332,12 @@ class Now:
         return self.now
 
 
+def session(n, kind="live"):
+    """A session id like the bridge's (32 hex digits) for read number `n`. The history's ids are of kind
+    "live"; another kind is an id the history doesn't have."""
+    return {"live": "a", "header": "b"}[kind] * 24 + f"{n:08x}"
+
+
 class Bridge:
     """The bridge as `step` uses it: a request that is pending, then fulfilled; reads that land in history.
     Each call takes the time in `takes` (a receipt read) or 8.5 s (the machine read) on the fake clock."""
@@ -339,7 +345,7 @@ class Bridge:
     def __init__(self, answers, clock):
         self.answers, self.polls, self.stored, self.asked = answers, 0, [], []
         self.clock, self.refresh_takes, self.sends_session_id = clock, timedelta(0), True
-        self.header_prefix = "live"             # what the header's id starts with; the history's ids start with "live"
+        self.header_kind = "live"               # the kind (`session`) of id the header names; the history's are "live"
         self.cached, self.age_seconds = False, 0.0
 
     def purchase_request(self, request_id):
@@ -349,10 +355,9 @@ class Bridge:
 
     def poll(self):
         self.polls += 1
-        session_id = f"live{self.polls}"
-        self.stored.append((session_id, self.clock.now))
+        self.stored.append((session(self.polls), self.clock.now))
         self.clock.now += timedelta(seconds=8.5)
-        named = f"{self.header_prefix}{self.polls}" if self.sends_session_id else None
+        named = session(self.polls, self.header_kind) if self.sends_session_id else None
         read = LiveRead(b"DXS*", named)
         if "cached" in LiveRead._fields:
             read = read._replace(cached=self.cached, age_seconds=self.age_seconds)
@@ -555,7 +560,7 @@ def test_a_read_whose_storage_is_not_confirmed_is_logged_and_still_a_read(conn, 
     break_it(machine)
     machine.clock.now = POLL_AT(15, 25)
     assert visit_polls.step(POLL_AT(15, 25), said.append) == READ       # the POST worked: not a failure
-    assert any("storage not confirmed" in line and "live1" in line for line in said)
+    assert any("storage not confirmed" in line and session(1) in line for line in said)
     assert not any("stored read" in line for line in said)
 
 
@@ -586,7 +591,7 @@ def test_real_poll_failures_still_back_off_after_unconfirmed_storage(conn, machi
 
 def test_a_header_id_that_is_not_the_history_id_keeps_the_one_minute_cadence_and_the_stop_rule(conn, machine):
     said = []
-    machine.header_prefix = "header"            # the header's ids are never the history's ids
+    machine.header_kind = "header"              # the header's ids are never the history's ids
     reader = Reader(SCHEDULE, lambda now: visit_polls.step(now, said.append), said.append)
     for minute in (25, 26, 27):                 # three successful POSTs, each with a usable row stored
         machine.clock.now = POLL_AT(15, minute)
@@ -637,7 +642,7 @@ def test_a_stored_read_is_logged_with_its_session_id(conn, machine):
     said = []
     machine.clock.now = POLL_AT(15, 25)
     assert visit_polls.step(POLL_AT(15, 25), said.append) == READ
-    assert any("live1" in line and "stored" in line for line in said)
+    assert any(session(1) in line and "stored" in line for line in said)
 
 
 def test_a_bridge_that_sends_no_session_id_is_checked_by_the_time_of_the_read(conn, machine):

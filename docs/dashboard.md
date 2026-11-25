@@ -14,7 +14,7 @@ script or another agent.
 
 ![The dashboard with sample data](dashboard/current.png)
 
-*Sample data from a throwaway database, not a real run. **The highlighted columns in this picture are not our real slots.** For the screenshot our slots were set to columns 2, 4, 6 and 8, to show the page follows `vending.slots`. Our real slots are the ones the stored server assignment names (`python -m vending.slots`).*
+*Made-up data from a throwaway database, not a real run, and the purple banner says so. **The selections lit in this picture are not our real slots.** For the screenshot the stored assignment was set to 20 scattered selections, to show the page follows `vending.slots`. Our real slots are the ones the stored server assignment names (`python -m vending.slots`).*
 
 The money panel (#48), with seeded test data rendered at a fixed time (9 Dec): an opening of $600, two fulfilled
 requests, three model calls and one pending request. Light, dark and phone:
@@ -30,40 +30,56 @@ what changed and why.
 
 | Part | What's in it | Where it comes from |
 |---|---|---|
-| Verdict | **OK**, **Check** or **Problem** next to the title (and in the browser tab), from the worst item in Needs attention | everything below |
-| Tiles | The halt switch and who last changed it; the latest run and how long it has run; a countdown to the Thursday 23:59 Eastern cutoff; how old the last machine poll is and what our slots sold in the 7 days to it (the window's start date isn't shown, since it read like an update time); what has been spent on drinks (fulfilled requests) and on the model (run costs), labelled as development and test spend before the opening, not from the \$600; once the ledger's opening entry is in the past, what has been spent since the opening, from the ledger, so the page gives one figure; on the container, who has looked: browsers, visits and sign-ins, all time and this week (`vending.visits`; see [`deploy.md`](deploy.md#the-public-pages)) | `config`, `agent_runs`, `polls`, `purchase_requests`, `vending.ledger`, `page_visits`, `page_visit_totals` |
-| Needs attention | One sentence per thing a person should look at, worst first. **Problem:** the latest run failed, or has said `running` for over 2 hours; on the Container App, a job in the worker's latest sync round didn't exit 0 (see [Sync health](#sync-health)). **Check:** refused or failed tool calls in the last 24 hours; polls over 3 hours old; a catalog request stuck in `sending` or `unknown`; the latest purchase request rejected; a shelf price, or a price the plan sets, that isn't legal (see Pricing); and within 24 hours of the cutoff, still halted or no Friday request sent. **Info** (doesn't change the verdict): halted, no polls yet, stock warnings from the receipts, a panel whose table is missing | the snapshot, and the worker's latest round |
-| In the machine | A close-up of our selections, one shelf at a time, beside a small drawing of the machine's front (5 shelves of 8; row r, column c is selection "rc") that picks the shelf. Which selections are ours comes only from the stored assignment (`vending.slots.our_slots`, kept by `python -m vending.slots record`), read on every page; with none stored the panel says so and draws nothing. Each of ours is a lane seen from above the front edge: the packages on the rail, dashed empty slots, its number plate and price tag, then the product, the count and what Friday does to it. Every other selection is a grey card with its number and "Not ours", and nothing else about it is in the page or `/state.json`. **Now** is the tag price from the latest poll and the product and units on hand from the receipts, or from a person's count where the receipts don't know the slot or the count is newer (see below). **Next Friday** is the latest plan: the empty slots fill in, a swap draws the new product's package and colours, a pull empties the lane, a new price shows the old one struck through, and the agent's reason sits under the lane on one line. Beside it, each change with the agent's reason. "plan row" opens the selection in the plan | `vending.stock` (receipts and polls), `get_machine_state` (polls), `agent_runs`, `catalog_products`, `config.capacity_overrides` |
-| Pricing | One row per selection of ours (the stored assignment, nothing else). **Now** is the shelf price from the latest poll. **Unit cost** is what the units in the slot cost, from the receipts; with no receipt cost it is the primary sourcing option's pack price over the pack size, labelled **expected** (the product is the receipts', else the plan's). **Floor** is the pricing gate's, as the planner sets it for a restock: the highest of the receipt cost's floor and each sourcing option's floor at its most-we-pay price (`pricing.floor_cents`, `pack_floor_cents`); hover it for the parts. **Legal** is `pricing.check_price` against that floor and the selection's ceiling, the planner's (`planner.Config.ceiling_for`: \$6.50, or \$8.00 for the one wildcard selection, #166); with no cost known the floor is unknown, and only the 5-cent step and the ceiling are checked. A price that isn't legal shades the row and says why. **Margin** is what one sale keeps after the sales tax inside the price, less the unit cost. **Sold** is units in the last 7 days and per class day (own rate, or the fall prior until the slot has 5 in-stock class days). **Plan** follows the plan that "The plan" shows: before the slot lock, the first-fill plan's price (marked **first fill**); from the lock, the agent's weekly plan. It shows the new price and the reason, checked the same way against the floor of the product that plan puts in (its sourcing rows, else the first-fill plan's own floor). A plan entry of an unexpected shape gives that row no plan price. The line is the shelf price at every poll over the last 28 days, a dot at each change; a change shows at the poll that first saw it | polls (`get_machine_state`, `machine_state.price_history`), `vending.stock`, `sourcing_options`, `config`, `agent_runs` |
-| The plan | Before the slot lock, the plan for the first fill. Each line shows the product, price and units. Open it for the agent's reason and the code's checks. The header compares the fill cost with the proposed $366 cap. The page shows the picked plan or labels the latest one "latest, not picked". A plan for an earlier assignment shows a message with no slots. From the lock, the agent's Friday plan shows its slot changes, reasons, weekly update and notes; each line also says what the slot sold in the 7 days to the last poll. That count is the slot's, not the product's: a swap at a visit inside the window adds the old product's sales (#172), and the page says so. | `first_fill_plans` before the lock, then `agent_runs`, `vending.stock` and `get_machine_state` |
-| Runs | The last 10 runs as a timeline: mode, model, how long, cost, request, how it ended, and chips for every slot its plan changed from the plan before it. Under each, **How it decided** opens the run's steps in order: the model's reasoning (a summary the API returns, never the raw chain of thought), anything it wrote, each tool call and what came back, with failed replies in red. A run in progress shows the steps so far | `agent_runs`, `agent_steps` |
+| Failure banner | A red box at the very top of the page (#220) when something is failing now: the worker's latest sync round (on the Container App, where the worker hands its latest round to the page), the latest agent run (failed, halted, or left `running` over 2 hours), a scheduled or midweek run that never started by its latest start (`agent_schedule` outcome `missed`), and a tracking check whose verdict came back `outside`. One line per failure: a short cause the code wrote itself, and the time in Eastern. It shows with the next page refresh after the failure — the worker serves its latest round, so a failed round shows within one round — and clears when the next round passes, a later run finishes successfully, or the next check comes back all `within`. A missed run's line clears once a later scheduled run has started and ended (its own read of `agent_schedule`, so a newer run still going doesn't bring it back). A run refused at a busy lease never started, so it clears nothing. Starting a retry clears nothing: a run left `running` stays on the banner until a run that started after it finishes. Run, missed-run and tracking lines cover the live competition only: nothing from before the ledger opening banners, like the incident log. A halted run's line says whether the halt switch is on now, and when the run ended. No failure's own text reaches it: the detail stays in the database, `/health` and the container's log. While Postgres is down, the page answers with what the worker can still name on its own — its latest sync round, if that failed — beside the can't-read notice, and the refresh handler adds, replaces or removes only that sync line; the run and tracking lines need the database, so they stay as last drawn until a refresh that read it. Only the worker's real outage reply is marked for this: a 500 from a bug drawing the page, or a proxy's error page, changes nothing on an open tab. `/state.json` carries the same lines as `alerts` | `syncs` (the worker's latest round), `agent_runs`, `agent_schedule`, `tracking_checks` |
+| Status bar | One row of six cells, each a link to its section. **Agent:** the verdict (**OK**, **Check** or **Problem**, from the worst item in Needs attention; the browser tab shows it too), the halt switch and who last changed it, and the latest run; while a run is in progress, "Follow run #N live" opens its [run page](#the-run-page). **Machine poll:** how long ago the last poll was taken, its time in Eastern, when the worker's next sync should read the machine (the worker's own `next_round_at` when it serves the page, else `SYNC_AT_MINUTE` past the hour), and what our slots sold in the 7 days to that poll. The window's start date isn't shown: it read like an update time. **Order cutoff:** a countdown to Thursday 23:59 Eastern. **Spendable:** from the ledger once its opening entry is in the past, with what has been spent since the opening; if the ledger can't give a balance (no slot assignment, say), "Balance unavailable" and the spend since the opening. Before the opening it shows no test runs or test purchases, only that this is development spend, not from the \$600. Where the server serves the charts, the cell links the development-spend chart. **Catalog approvals:** approved, pending, rejected, any `sending` or `unknown`, the places left under the bridge's cap, and the 25 Nov deadline until it passes. **Plan:** before the slot lock, the plan for the first fill (its slots and its most-we-pay cost against the \$400 day-one cap); from the lock, the plan for the next restock: "For the next restock · Fri 4 Dec · 2 changes", or "midweek visit" for a paid off-cycle visit, which the plan records without a date. Almost every restock is the free Friday visit, the Friday after the Thursday cutoff that follows the plan's run; a paid \$25 midweek visit is a restock too, and either can change anything. On a phone the six cells wrap to two columns | `config`, `agent_runs`, `polls`, `purchase_requests`, `vending.ledger`, `product_requests`, `first_fill_plans` |
+| Key dates | Under the status bar. Before the start, each date the instructors gave (catalog approvals 25 Nov, the fill request 29 Nov, stocking 30 Nov, the opening day, the first restock request 3 Dec, the first tax Saturday 5 Dec), with a status from our own records where they exist: **done**, **due in N days** or **overdue**. From the start, the next restock request and the next tax Saturday. See [Key dates](#key-dates) | `vending.key_dates`: `ledger_entries`, `first_fill_plans`, `catalog_products`, `slot_assignment`, `purchase_requests`, the catalog counts |
+| In the machine | One screen. On the left, the machine's whole front: 5 shelves of 8 (row r, column c is selection "rc"). Which selections are ours comes only from the stored assignment (`vending.slots.our_slots`, kept by `python -m vending.slots record`), read on every page; with none stored the section says so and draws nothing. Each of ours shows its number, a next-restock badge (+N back, swap, new, \$ for a new price, pull), its front package, units against capacity, the tag price, the product name and a fill bar. Every other selection is a grey cell half as wide with its number and "Not ours", and nothing else about it is in the page or `/state.json`. Beside each shelf, what our lanes on it hold and what the next restock adds. On the right, **Needs attention** and the plan's changes (before the lock, each line of the plan for the first fill; after it, each slot the latest plan changed, with the agent's reason). Tap one of ours on the front, a row of the plan's changes, or a slot number in The plan, and the right side shows that selection's shelf from above instead, with the picked lane wider and not-ours lanes half width, and its facts: on hand, price, what the slot sold, the next restock, the plan's fill check ("fills 6 of 8: 2 spaces empty", as on The plan's rows and the side card's), the first fill, capacity and the agent's whole reason, each saying where it comes from ("from receipts and polls", "unknown: no price from the polls"). **Close** (or Escape) goes back to Needs attention. The wildcard slot (config `wildcard_slot`, #166) is marked only when the stored assignment makes it ours: a **W** badge on the front, a "wildcard" chip on its lane, a Wildcard line in its facts, and a pill on its rows in the plan's changes and The plan. **Now** is the tag price from the latest poll and the product and units on hand from the receipts, or from a person's count where the receipts don't know the slot or the count is newer (see below). **Next restock** is the latest plan (the toggle's hint gives its date: "Next restock · Fri 4 Dec", or "midweek visit"): the empty slots fill in, a swap draws the new product's package and colours, a pull empties the lane, and a new price shows the old one struck through | `vending.stock` (receipts and polls), `get_machine_state` (polls), `agent_runs`, `first_fill_plans`, `catalog_products`, `config.capacity_overrides` |
+| Pricing | One row per selection of ours (the stored assignment, nothing else). **Now** is the shelf price from the latest poll. **Unit cost** is what the units in the slot cost, from the receipts; with no receipt cost it is the primary sourcing option's pack price over the pack size, labelled **expected** (the product is the receipts', else the plan's), or **expected · receipt** when that sourcing price came from an earlier receipt (`vending.receipt_prices`). **Floor** is the pricing gate's, as the planner sets it for a restock: the highest of the receipt cost's floor and each sourcing option's floor at its most-we-pay price (`pricing.floor_cents`, `pack_floor_cents`); hover it for the parts. **Legal** is `pricing.check_price` against that floor and the selection's ceiling, the planner's (`planner.Config.ceiling_for`: \$6.50, or \$8.00 for the one wildcard selection, #166); with no cost known the floor is unknown, and only the 5-cent step and the ceiling are checked. A price that isn't legal shades the row and says why. **Margin** is what one sale keeps after the sales tax inside the price, less the unit cost. **Sold** is units in the last 7 days and per class day (own rate, or the fall prior until the slot has 5 in-stock class days). **Plan** follows the plan that "The plan" shows: before the slot lock, the first-fill plan's price (marked **first fill**); from the lock, the agent's weekly plan. It shows the new price and the reason, checked the same way against the floor of the product that plan puts in (its sourcing rows, else the first-fill plan's own floor). A plan entry of an unexpected shape gives that row no plan price. The line is the shelf price at every poll over the last 28 days, a dot at each change; a change shows at the poll that first saw it | polls (`get_machine_state`, `machine_state.price_history`), `vending.stock`, `sourcing_options`, `config`, `agent_runs` |
+| Price checks | Under Pricing. Labels and figures only. **Weekly check**: whether it runs (`live`, `dry run` or `off`: the lower of `PRICE_CHECK_MODE`, from the worker's `/health` `price_check` when the worker serves the page, else this server's settings, and `price_check_mode` in the database) and when the next is due; before any has run, "First due" from `PRICE_CHECK_SCHEDULE` and `PRICE_CHECK_FROM` and "Runs so far: none". **Lookup spend** this week (Saturday to Friday, Eastern, from the opening once it has passed; before it, marked test spend) and since the opening, from the lookup log (the opening is `ledger.real_opening`: never the 11 Nov test opening); `--no-store` benchmark lookups are left out. **Weekly checks**: the last 8 runs, newest first: when due, compare all stores or re-check primary stores (or dry run, or off), the models its lookups used, drinks checked, prices changed, drinks with no usable price, cost and outcome. **Drinks in our plan**: each drink the plan "The plan" shows puts in our selections (before the lock the first-fill plan, from it the latest live plan; a kept slot's product is the receipts', a pull buys nothing), with its SKU and slots. Per store, the latest price per unit: the newer of our sourcing row there and the newest verified price a lookup saw there, with pack, price, day and source (person, receipt, price check, or the lookup's model, with the checking model when a second check confirmed it). The lookup logs a find before it verifies it, so the panel derives verification the way `price_search._verified` decides: a check that agreed, a model at least as dear as `price_check_model`, a find the sourcing row took, or one within `price_check_percent` of a verified price for that store and pack from the last 28 days. Any other find (a check that disagreed, or one that never ran because the run's searches ran out) is shown as unverified: never a price, never the cheapest. The cheapest store among fresh prices. The primary and alternate we would buy (store, pack, price, max, checked, by whom). **Flags**: no price (no primary with a price); stale (a primary or alternate checked more than 7 days ago, `sourcing.STALE_AFTER`, the fill's rule); not found (the newest lookup at the primary's store, after its check, found no usable price; with no primary, every store that missed); over max (the price the store's cell shows, for a store we buy from, is above that row's max for its pack); changed (a store's verified unit price, at the price it was stored at, moved more than `price_check_percent`, default 5%, from the verified one before it); unverified (the newest find at a store didn't clear verification). It reads the newest 20 lookups per drink and store, the last 8 checks, and the indexes in migration 036. Unknown prices show as a dash or unknown, never \$0.00. A missing table blanks only its part and is named in our words | `price_check_runs` (migration 034), `price_lookups` (032, indexed by 036), `sourcing_options`, `catalog_products`, `config`, the worker's `price_check` |
+| Needs attention | Beside the machine, never cut short. One sentence per thing a person should look at, worst first. **Problem:** the latest run failed, or has said `running` for over 2 hours; on the Container App, a job in the worker's latest hourly sync didn't exit 0 (see [Sync health](#sync-health)); a scheduled agent run in the last week failed or was missed, or still says `running` past the agent's deadline, however many runs came after it, or the newest scheduled run failed, however old; a scheduled run whose agent run still says `running` in `agent_runs` after the run returned (its ending couldn't be recorded), however old; a scheduled run's submission still `sending` or `unknown` (`May have sent`), however old; the worker can't do its scheduled work (the database is down or missing a migration); a schedule setting on the worker, or `agent_schedule_mode` in the database, is wrong (a wrong mode is a dry run, never live) ([`docs/agent.md`](agent.md#when-it-runs-unattended)); the schedule is on but the worker has no model key. **Check:** refused or failed tool calls in the last 24 hours; polls over 3 hours old; a catalog request stuck in `sending` or `unknown`; the latest purchase request rejected; this week's midweek wake-up (#219) whose run hasn't been requested yet; and within 24 hours of the cutoff, still halted or no Friday request sent; a scheduled agent run in the last week was halted; a scheduled run meant to be live didn't run live (a check made it a dry run, or stopped it), with why, until a later live run has run; the scheduled runs' status couldn't be read; both schedule settings say `live`, so each scheduled run may send a restock request. **Info** (doesn't change the verdict): the newest scheduled agent run's outcome, whether it was live or a dry run, and what it sent (the request and submission, or "Nothing sent"); that only one schedule setting says `live`, so the runs are dry runs; halted, no polls yet, stock warnings from the receipts, this week's midweek wake-up once its run has been requested, a panel whose table is missing | the snapshot (scheduled runs from `agent_schedule`, without their detail), and the worker's latest sync |
+| The plan | Before the slot lock, the plan for the first fill. Each line shows the product, price and units. Open it for the agent's reason and the code's checks. The header compares the fill cost with the $400 day-one cap. The page shows the picked plan or labels the latest one "latest, not picked". A plan for an earlier assignment shows a message with no slots. From the lock, the agent's plan for the next restock shows its slot changes, reasons, weekly update and notes; each line also says what the slot sold in the 7 days to the last poll. That count is the slot's, not the product's: a swap at a visit inside the window adds the old product's sales (#172), and the page says so. | `first_fill_plans` before the lock, then `agent_runs`, `vending.stock` and `get_machine_state` |
+| Plan history | Under The plan. One card per week (Saturday to Friday, Eastern, the ledger's weeks) from the opening (`ledger.real_opening`: never the 11 Nov test opening), newest first, the last 8. Each card: the report card's grade for the week before; the **day-one fill** (the picked first-fill plan, its lines, and its request: the first request standing since the opening and sent before the start, in that request's week); then **each live run that left a plan**, newest first, with its number (linked to it under Runs), status, time, model, model cost (`cost_usd`; "not recorded" when null), the request it sent (paid once fulfilled, plus a midweek visit's fee: the stored one, else `config.midweek_fee_cents`, as the ledger charges it; else at most, the money panel's worst case plus that fee; unknown when a line has no price), the plan's visit and reason, weekly update, notes, and the plan it was compared with (the previous live plan since the opening, else the day-one fill). **Each slot of ours it changed**: the change, was and now (product with SKU, price, fill), the agent's reason, and **the inputs the run read for that slot**: each `agent_steps` tool call whose selection arguments (`slot`, `selection`, `into_slot`, `wildcard_slot`, or a `slots` list) name that slot, or, with none, whose arguments name the slot's old or new SKU, with its reply. A call whose arguments name a selection outside our assignment anywhere (the dashboard's `_scope_payload`) is never matched or shown. Replies are matched to calls by turn: the agent records a turn's calls, then their replies in order, and start-up reads as replies with no call. Steps are read only for runs under the current assignment, and a step marked `is_error` is read without its content. A poll reply keeps that slot's row only; any other reply goes through the dashboard's payload filter; a failed call says failed, never its text. Nothing is inferred: a reason that cites nothing is shown as it is. The run's other calls are listed by tool. Runs that left no plan are listed by number, and **How it decided** links to the run's steps. Live runs only, from the opening: dry runs and replays are counted, not shown. Text from before the current assignment is replaced | `agent_runs`, `agent_steps`, `first_fill_plans`, `purchase_requests`, `catalog_products`, the report card |
+| Runs | The last 10 runs as a timeline: mode, model, how long, cost, request, how it ended, and chips for every slot its plan changed from the plan before it. Under each, **How it decided** opens the run's steps in order: the model's reasoning (a summary the API returns, never the raw chain of thought), anything it wrote, each tool call and what came back, with failed replies in red. A run in progress shows the steps so far. Each live run links to its [run page](#the-run-page) ("Follow this run live" while it runs) | `agent_runs`, `agent_steps` |
 | Tool calls | Counts for the last 24 hours, then the last 50 calls. Writes are marked W and shaded; refused and failed calls are red. Filter to writes or to refused and failed; each call's arguments open on a click | `action_log` |
-| Money | **Balance**, **spendable** (balance less the sales tax set aside) and **profit since the opening**. One bar shows where the money in (opening, capital, takings) has gone: drinks bought, midweek visits, model spend, tax handed over, tax set aside, and what is still spendable. Then model spend against the proposed \$9 and visit fees against the proposed \$50, the profit and loss since the opening (units sold across a swap the counters can't split have no exact cost, so cost of sales and profit show as unknown, and their estimate gets its own line, labelled as an estimate and not in profit, #172), the proposed split of the \$600 (#113), and the ledger's notes, such as development spend from before the opening. **Committed:** what the pending purchase requests could still cost at most (the dearer of each line's primary and alternate at `packs x max_price_per_pack`, plus an off-cycle request's visit fee), since the ledger counts a purchase only once it is fulfilled. If any pending line has no price we can read, the most is unknown, never counted as \$0, and so is what stays spendable after it. The competition counts from the ledger's opening entry; anything before it is development and test spend, not from the \$600, and no figure here counts it. Before the opening entry, it says how to record it; an opening entry dated in the future (recorded ahead with `--at`) keeps that view and says when the ledger opens. Receipts and visit fees from before the opening are test purchases: once the opening is recorded, stock on hand and cost of sales leave them out too (`stock.receipts_count_from`, #150). A submission sent with no usable answer (`sending` or `unknown` in `purchase_submissions`) counts as committed too, since it may exist at the bridge. Needs attention adds: **Problem** if spendable is below zero, or if pending requests could cost more than is spendable; **Check** if spendable would fall under the proposed \$53 floor, if requests are pending with no opening entry or before an opening dated ahead (the date in Eastern), if a submission is unsettled, if a pending line has no price we can read, or if the ledger can't give a balance (for example, our slot assignment isn't recorded); **Info** if model spend passes \$9. If reading the ledger passes the statement timeout, only this panel says it isn't available; the rest of the page still shows | `vending.ledger` (`balance`, `pnl`), `purchase_requests`, `purchase_submissions` |
+| Money | **Balance**, **spendable** (balance less the sales tax set aside) and **profit since the opening**. One bar shows where the money in (opening, capital, takings) has gone: drinks bought, midweek visits, model spend, tax handed over, tax set aside, and what is still spendable. Then model spend against the proposed \$9 and visit fees against the proposed \$50, the profit and loss since the opening (units sold across a swap the counters can't split have no exact cost, so cost of sales and profit show as unknown, and their estimate gets its own line, labelled as an estimate and not in profit, #172), the proposed split of the \$600 (#113), and the ledger's notes about the live period. **Committed:** what the pending purchase requests could still cost at most (the dearer of each line's primary and alternate at `packs x max_price_per_pack`, plus an off-cycle request's visit fee), since the ledger counts a purchase only once it is fulfilled. If any pending line has no price we can read, the most is unknown, never counted as \$0, and so is what stays spendable after it. The ledger figures count spending from the opening entry. Before the opening entry, it says how to record it; an opening entry dated in the future (recorded ahead with `--at`) keeps that view and says when the ledger opens. Receipts and visit fees from before the opening are test purchases: once the opening is recorded, stock on hand and cost of sales leave them out too (`stock.receipts_count_from`, #150). A submission sent with no usable answer (`sending` or `unknown` in `purchase_submissions`) counts as committed too, since it may exist at the bridge. Needs attention adds: **Problem** if spendable is below zero, or if pending requests could cost more than is spendable; **Check** if spendable would fall under the proposed \$53 floor, if requests are pending with no opening entry or before an opening dated ahead (the date in Eastern), if a submission is unsettled, if a pending line has no price we can read, or if the ledger can't give a balance (for example, our slot assignment isn't recorded); **Info** if model spend passes \$9. If reading the ledger passes the statement timeout, only this panel says it isn't available; the rest of the page still shows | `vending.ledger` (`balance`, `pnl`), `purchase_requests`, `purchase_submissions` |
 | Requests | Our last 10 purchase requests (status, what was paid, lines loaded, unavailable and alternates). Then every catalog request, newest first: counts by status, the open (`pending`) ones against the bridge's cap and the places left, and each request's status, its SKU once it has one (an approved product may be added under a SKU we wouldn't guess), and the decision note | `purchase_requests`, `purchase_lines`, `product_requests` |
-| Back stock | What the receipts say is in the closet, and what each unit cost us | `vending.stock` |
+| Back stock | What the receipts say is in the closet, and what each unit cost us. Links to the [Products page](#the-products-page) | `vending.stock` |
+| Product leaderboards | The ten best sellers by SKU, flavor, and brand for our current assignment. Each row shows units sold, revenue excluding tax, and sell-through. Sell-through divides units sold by units loaded since the opening. For this week (Saturday to Friday, Eastern), it divides units sold by starting stock plus units loaded. The rate is unavailable if sales exceed recorded stock. Sales with an unknown product stay out of the rankings. The panel counts those sales and labels the units with an estimated cost. | `vending.stock`, `vending.ledger`, `catalog_products` |
+| Weekly report card | Under The plan. One card per week (Saturday to Friday, Eastern, the ledger's display weeks) from the opening, newest first, the last 8. Each scores the plan its visit loaded (matched through the purchase request), with the week replayer's scoring, beside its baseline: restock each slot to last week's sales at last week's price. **Hard checks** (valid plan, catalog, prices, balance) pass, fail or skip; a failed check fails the week, whatever it earned. **Outcome**: units sold, slots that sold out (estimated), unsold units and margin, for the plan and the baseline. **Against the baseline**: the margin difference on the shared slots, with what it leaves out. The opening week isn't graded, the current week is graded on its sales so far, and a closed week whose polls cover too little of it shows its figures without a grade. See [The weekly report card](#the-weekly-report-card) | `agent_runs`, polls (`vending.replay`), `vending.stock`, `vending.ledger`, `catalog_products`, `product_requests`, `config` |
+| Forecast vs actual | Under the report card, the same weeks (Saturday to Friday, Eastern, from the opening, the last 8) and the same plan per week. Per slot of ours: SKU (receipts, at the week's last poll), the rate the plan was made with (units per class day, with its basis: `own` or `fall prior`), **Expected (est.)**, **Sold**, **Diff**, **empty** when the stock replay says the slot ran out by the last poll (demand may have been higher). Per week: expected, sold, diff, mean \|diff\| per slot, slots compared, slots empty. See [Forecast vs actual](#forecast-vs-actual) | `agent_runs.plan` (`forecast`), the report card's weeks (polls through `vending.replay`, `vending.stock`) |
+| Incident log | Under the report card. From the opening, newest first, the last 50 (with the total counted): refused and failed tool calls, halt switch flips, live runs that failed, halted or were left running, live runs whose model was told a tool call failed (counted, not quoted), each sync round the worker recorded as failed (`sync_incidents`), weeks that failed a hard check, and tracking checks that read `outside` on a figure or got no usable answer. Each has a one-line note; a failure's text is never shown | `action_log`, `agent_runs`, `agent_steps`, `sync_incidents`, the report card, `tracking_checks` |
+| Tracking check | Under Money. The last 7 checks, newest first: when it was sent and by whom, the poll it was as of, and the bridge's four verdicts (cash, sales tax owed, coil, back stock), each `within` or `outside`. A send with no verdicts says why, in our words. It says whether the worker's daily send is on (`TRACKING_DAILY`, off by default). Needs attention adds **Problem** when the newest answered check read `outside` on any figure. See [`vending/tracking_daily.py`](../vending/tracking_daily.py) | `tracking_checks` |
+| Footer | One small line on who has looked: browsers, visits and sign-ins, all time and this week (`vending.visits`; see [`deploy.md`](deploy.md#the-public-pages)) | `page_visits`, `page_visit_totals` |
+
+When the wake check (#219) flags a week, Needs attention carries the row's reason, so the visit
+fee and the midweek run have a why on the record. Warn until the run is requested, info after.
+The run itself shows like a scheduled run: a Needs attention line that starts "The midweek live
+run requested ..." (or dry run), and "midweek run" beside it in Runs (demo data, made-up slots):
+
+![Needs attention with the midweek wake-up](images/dashboard-midweek-wake.png)
 
 ### The machine close-up
 
-![In the machine, dark theme](dashboard/machine-closeup-dark.png)
+![In the machine with selection 32 picked, dark theme](dashboard/machine-closeup-dark.png)
 
 | | |
 |---|---|
-| ![Light theme](dashboard/machine-closeup-light.png) | ![Next Friday](dashboard/machine-closeup-next-friday.png) |
-| Light theme | Next Friday: a swap (12), a price change (13) |
+| ![Light theme](dashboard/machine-closeup-light.png) | ![Next restock](dashboard/machine-closeup-next-friday.png) |
+| Light theme, before the slot lock: 32, the made-up wildcard, picked | After the lock, Next restock: a swap (31), new prices (13, 43, 58), a pull (51) |
 
-![A 390 px phone](dashboard/machine-closeup-phone-390.png)
+![A 390 px phone, with the close-up open as a sheet](dashboard/machine-closeup-phone-390.png)
 
-*Sample data in a throwaway local database, not a real run: the products, prices, plan and reasons
-are made up, and our selections were set to columns 1 to 4 for the picture. Seeded the evening of
-15 Nov 2026.*
+*Made-up data in a throwaway local database, not a real run, and the purple banner says so: the
+slot assignment (20 scattered selections), products, prices, sales, plans, reasons, requests and
+visits are invented. Seeded 19 Nov 2026.*
 
 How to read a lane:
 
-- **Count.** The big number is units on hand (Now) or after the plan's fill (Next Friday). **~4**
+- **Count.** The big number is units on hand (Now) or after the plan's fill (Next restock). **~4**
   is from a photo count: units seen down the rail, less sales since, so at least that many. **?**
   means no receipt or count yet; the rail behind the front item is then hatched, never drawn full or
   empty.
-- **+N back Friday** is the plan's `fill_to` less the units on hand, when both are known. With
+- **+N at restock** is the plan's `fill_to` less the units on hand, when both are known. With
   units unknown it is **+?**. With no plan there is no number, only "no plan yet". It is never
   capacity less units.
 - **Dashed slots** are empty room in the column, based on [package capacity](capacity.md).
@@ -71,7 +87,7 @@ How to read a lane:
 - **Fill check.** The current plan shows how many spaces a proposed fill leaves and the reason,
   if given. The same warning appears under Needs attention as a Check. A plan line with unknown
   capacity says "capacity not counted".
-- **Swap, pull, price.** On Next Friday a swap draws the new product, a pull shows the lane empty,
+- **Swap, pull, price.** On Next restock a swap draws the new product, a pull shows the lane empty,
   and a price change strikes the old tag through. The agent's reason is cut to one line; the full
   text is in the plan row.
 - **Named from a count.** Photo and door counts name a product in free text, not a SKU, so it
@@ -104,20 +120,23 @@ every flavor:
 word or two printed on the front package. A new package size (a 1 L bottle, say) is a new `SHAPES`
 entry with its diameter and height; anything else in the page needs no change.
 
-On a phone the shelf is a strip that shows two lanes at a time: swipe, drag its scroll bar, use the
-arrows on each lane, or focus it and use the arrow keys. From 820 px wide the whole shelf of 8
-shows at once. Every lane has an aria label that reads it out (product, count, Friday, price,
-reason); with reduced motion set, the Friday fill doesn't animate.
+On a phone the front comes first, then Needs attention and the plan's changes. Tapping one of ours
+opens its close-up as a sheet from the bottom: the picked lane large beside its facts, with the
+whole shelf under it. Close it with the button, a tap outside it, or Escape. Every selection on the
+front has an aria label that reads it out (product, count, next restock, price, reason); with
+reduced motion set, the restock fill and the sheet don't animate.
 
 A slot counts as changed when what the plan asks for changes (product, fill, price, keep). A
-reworded reason alone is not a change. Status and the machine follow `live` and `dry-run` runs
-only, and a plan is compared only with the last plan of the same mode; replays of past weeks show
-under Runs, dimmed. Model spend counts `live` and `dry-run` runs.
+reworded reason alone is not a change. The status and machine panels follow live runs.
+The plan compares with the previous live plan.
 
 The page refreshes itself in place every 30 seconds, keeping your scroll position, any open
-slot or arguments, the tool-call filter, the Now / Next Friday choice, the shelf you picked and the
-changed-only switch, and the verdict in the tab title. Without JavaScript the machine shows Now
-(the shelf links still work), the plan shows every slot, and the switches are hidden. If a refresh fails (the database is down) it keeps the last
+slot or arguments, the tool-call filter, the Now / Next restock choice, the selection you picked and
+the changed-only switch, and the verdict in the tab title. A new visit starts with nothing picked,
+so Needs attention shows. Without JavaScript the machine shows Now, each selection's link
+(`?sel=15#sel-15`) still opens its close-up, and the timed reload keeps that pick while the stored
+assignment makes it ours (Close loads the page without it, so it stays closed); a shelf's link opens its first selection of ours, so a phone's sheet opens
+too. The plan shows every slot, and the switches are hidden. If a refresh fails (the database is down) it keeps the last
 page and says how old it is. Without JavaScript it reloads the whole page instead.
 
 ## The demo copy
@@ -137,8 +156,10 @@ to it as "Demo copy"; the demo links back as "Live dashboard".
 - **Its 20 selections are its own.** They are in the snapshot (`ours`), scattered over the machine,
   and are not the team's assignment. The team's stored assignment is never read.
 - **It is a fixed moment.** Wed 9 Dec 2026, 10:00 Eastern, a week into the competition: $600 opened,
-  a day-one fill, a midweek visit, six runs with steps, tool calls (one refused, one failed), purchase
-  and catalog requests, a count, the closet. It doesn't refresh, and its times don't follow your
+  a day-one fill, a midweek visit, this week's wake-up (#219), six runs with steps, tool calls (one refused, one failed), purchase
+  and catalog requests, a count, the closet, a report card for the week in progress, an incident log, our sourcing
+  rows, a dry-run and a live weekly price check with their lookups (stale, not-found, over-max and changed flags),
+  and the plan history those runs make. It doesn't refresh, and its times don't follow your
   clock (the live page's script does that; the demo turns it off).
 - **Views of it aren't visits.** The visit counter lists `/dashboard` and `/db` only
   (`vending.visits.PAGES`), so a view of the demo is not counted at all, not even separately, and it
@@ -146,14 +167,18 @@ to it as "Demo copy"; the demo links back as "Live dashboard".
   count would need a new `page` value in `page_visits`, whose check allows `/login`, `/dashboard`
   and `/db` only (migration 016), so it is a migration; this change adds none. The counter never
   tries to write a demo view.
-- **Its toggles are its own.** The page keeps the Now / Next Friday choice, the shelf and the
-  filters in `localStorage`, which both pages share by address. The demo uses keys that start
+- **Its toggles are its own.** The page keeps the Now / Next restock choice, the changed-only
+  switch and the tool-call filter in `localStorage`, which both pages share by address. The demo uses keys that start
   `demo-dash-`, the live page `dash-`, so a switch flipped on the demo doesn't move the live page's.
 - **Signed out**, the demo's JSON answers 401 like the live JSON, and its page redirects to the
   password page. A POST to either is refused with 405. The demo can't set off anything that reads
   the live verdict: the JSON has no verdict of its own and says `demo`.
 - **Failed calls and runs show no error text**, as on the live public page: the snapshot is made
   with `public=True`.
+- **Run pages.** `/dashboard/demo/run/<id>` draws the [run page](#the-run-page) for the run in progress, the
+  last finished run and the failed one, from `run_pages` in the same file (read with `run_page.read` when the file
+  is made). The demo's Runs panel and status bar link to them. The run in progress has four made-up model calls
+  (one still at its worst case) under a \$2 cap, and two drafts; the day-one plan carries a made-up forecast.
 
 To make the file again (it must match the dashboard's snapshot, and a test checks that it does):
 
@@ -164,7 +189,8 @@ DATABASE_URL=postgresql://postgres:x@127.0.0.1:PORT/postgres python -m vending.d
 
 The generator refuses a host that isn't this machine. It builds a throwaway schema, fills it with
 made-up data (`vending/demo/make.py`), runs `snapshot()` on it, writes the file and drops the schema.
-`--check` says whether the committed file is current. Stop the container afterwards.
+It writes the [Products page](#the-products-page)'s demo data (`vending/demo/products.json`) from the
+same schema. `--check` says whether both committed files are current. Stop the container afterwards.
 
 ![The demo copy, light](dashboard/demo-1280-light.png)
 
@@ -172,9 +198,226 @@ made-up data (`vending/demo/make.py`), runs `snapshot()` on it, writes the file 
 |---|---|
 | ![The demo copy, dark](dashboard/demo-1280-dark.png) | ![The demo copy on a phone](dashboard/demo-390-light.png) |
 
+## Key dates
+
+A small panel under the status bar, so the team sees what's next without opening the countdown page.
+
+![The Key dates panel before the start (made-up records, Sat 28 Nov) and from the start (the demo copy, Wed 9 Dec)](images/dashboard-key-dates.png)
+
+*Made-up records, not the team's: the top panel is drawn from invented facts at Sat 28 Nov 10:00 ET, the
+bottom one from the demo copy's snapshot. Rendered 21 Nov 2026.*
+
+The dates live in one place, `DATES` in `vending/key_dates.py`, each with its source (David's answers of
+17 Nov in `docs/planning/2026-11-17-david-answers.md`, and his email of 20 Nov). Edit a date there: the
+panel, `/state.json` (`key_dates`) and the status bar's catalog deadline (`APPROVALS_DUE`) all follow.
+The opening day is `vending.start.START`, and the slot check waits for the lock (`SLOTS_LOCK_AT`), so
+neither is written twice. Times are Eastern. A status is judged on the snapshot's clock, the database's,
+like the rest of the page. A date passes at its minute (23:59) or, for a whole day, at the midnight after it.
+The restock request's Thursday 23:59 is the exception: it is the planner's order cutoff
+(`planner._past_cutoff`), which passes only once that minute is over, so at 23:59:30 the row still shows
+that week and a request sent then counts for it. The tax Saturday passes at 23:59 itself.
+
+| Date | What | Status, from |
+|---|---|---|
+| Wed 25 Nov | Every first-fill product approved in the catalog | **Catalog approvals**: done when every product the picked first-fill plan loads (each slot's SKU, else the projection's) is in our copy of the catalog (`catalog_products`, not delisted); otherwise it says how many aren't. The copy is as fresh as the last catalog sync. After the day, a product still missing shows as "passed": a request naming it is denied. With no plan picked it is **Catalog queue clear** instead: done when no catalog request is pending, sending or unknown, which can't say the fill's products are in; any still waiting after the day "miss the fill". Not overdue: the instructors decide them |
+| Sun 29 Nov, 23:59 | First fill request due; record the ledger opening before it | **First-fill plan picked** (a picked `first_fill_plans` row for the current assignment), **Ledger opening recorded** (the opening entry; one dated ahead says when it opens; the 11 Nov test opening does not count until it is reset, see [`ledger-reset.md`](ledger-reset.md)), **Fill request sent** (the first request, not rejected, sent at or after the opening and before the start; "after the deadline" if late). Before the opening it waits: a request then is a test purchase. It also waits while the only opening is the 11 Nov test one. A request from the start on is a restock, never the fill, so a rejected fill can't make the first restock look like it |
+| Mon 30 Nov | Staff empty, buy and stock our first-fill request and reset the interval counters; the tracking check starts answering | Counts down only |
+| Thu 3 Dec | Opening day: the competition starts at 00:00 (settled, A24). Stocking is finished by 1 or 2 Dec; the machine doesn't operate before 3 Dec | **Slots confirmed at the lock**: a stored assignment that passes the checks every reader of our slots makes (`vending.slots`), checked from the lock through the snapshot's time. A row they refuse (another device or team, the wrong count) is due, or overdue from the lock, however recently it was checked. Before the lock a valid one waits |
+| Thu 3 Dec, 23:59 | First restock request due, filled Fri 4 Dec; then a visit every Friday | **Restock request sent**: a request that isn't off-cycle, rejected or the fill request, sent in the 7 days to the cutoff. Like the fill, it counts only from a real opening: while the only opening is the 11 Nov test one, no request counts |
+| Sat 5 Dec, 23:59 | First weekly sales tax calculation; then every Saturday | Counts down only |
+
+From the start (`START`) the panel shrinks to the next restock request (Thursday 23:59, the planner's
+in-store cutoff, filled the Friday after) with the same check, and the next tax Saturday. If the slot
+assignment still isn't confirmed after the start, that row stays on top as overdue.
+
+A request's "sent" time is `purchase_requests.submitted_at`: our own clock just before the request went
+to the bridge, not when the bridge received it. A request sent in a deadline's last seconds can show as on
+time here and still reach the bridge after 23:59, so treat a send that close as late.
+
+The records are read in the page's read-only snapshot, in a savepoint with a short timeout. If the read
+fails, the dates still show, the checks that need it say "can't tell", and the error's text goes to the
+server's log, never to the page or the JSON. The panel shows no slot numbers and nothing about the other
+team.
+
+## Forecast vs actual
+
+`vending/forecast_panel.py`. No model calls.
+
+- **The forecast** is the demand rate the model had when it made the plan, kept from the replies it received
+  (`vending.agent.capture_forecast`), never read again afterwards: each slot's `units_per_class_day` and
+  `rate_basis` from the latest `get_machine_state` reply (`vending.demand`: own in-stock rate after 5 in-stock
+  class days, else the fall prior for its price); if the run never called it, the startup briefing's
+  `units_per_day` (per calendar day, over the last 7 days). The plan stores it as `forecast`, with `source`,
+  `unit` and `as_of`. Keeping it can't fail a run or its submit: a reply it can't read is skipped. Plans from
+  before this change have none: **No forecast recorded**. Nothing is reconstructed afterwards.
+- **Expected (est.)**: a class-day rate x the class days the week's polls cover, each weighted by the share of a
+  day's sales between the two polls (`demand.HOUR_SHARE`; weekends and breaks are 0, `vending.class_days`); a
+  calendar-day rate x the days the polls span. So a week in progress or with a gap is compared over the stretch its
+  sales were counted over. Demand, not capped by the fill.
+- **Sold** is the report card's: the counters' rise between the week's polls (`replay_week`). It needs this week's
+  polls only: when last week can't be rebuilt, the report card has no baseline, but the forecast is still compared.
+- **Weeks** follow the report card's rules: opening week, no plan matched, rejected request, couldn't be read and
+  no sales yet each show a label and no table. Not compared, but listed (#172): a slot the visit swapped (the rate
+  was the old product's), and a slot where any receipt between the week's two polls loaded a product other than
+  the one it held at the first (a midweek swap: two products' sales). A closed week whose polls cover under 6 or
+  over 8 days shows its figures and withholds mean \|diff\|. A slot with no rate or no sales figure has no diff and
+  stays out of the totals.
+- **Only our selections**, from the stored assignment now. A forecast entry for any other selection is dropped;
+  the panel's text then goes through the report card's numbered-selection scoping.
+
+## The run page
+
+`/dashboard/run/<id>` (`.json` for its data; `/run/<id>` on `python -m vending.dashboard`), `vending/run_page.py`.
+One live run as it happens. Same gate and read-only login as the dashboard. No websocket.
+
+- **Refresh.** While the run says `running` (and is under 2 hours old), or steps are left to load, the page asks
+  every 5 s for the steps after the last one it has (`?after=<step id>`, at most 200 a time). It appends them and
+  any new drafts, puts a late preview reply's status on its draft, and swaps the figures and the plan. Each refresh
+  reads the run's row, the new steps, a count of all its steps and at most one earlier preview call; never the
+  whole transcript again. Without scripts the page reloads whole every 5 s.
+- **Step text** is cut to 1,000 characters on the page and in the JSON. The database keeps it whole:
+  `preview_desired_state` and `submit_desired_state` calls up to 16,000 characters (`agent_runs.MAX_CALL_TEXT`, so a
+  whole desired state is readable slot by slot), every other step up to 4,000.
+
+| Part | What's in it | Where it comes from |
+|---|---|---|
+| Status | `running`, `submitted`, `skipped`, `halted`, `failed`, or "probably died" after 2 hours; mode, model; a "before the ledger opening" mark for a run that started before it (development spend, not the \$600) | `agent_runs` |
+| Started, Ended | Times in Eastern, how long it ran, the request id | `agent_runs` |
+| Model spend | So far: the sum of `model_calls.cost_usd` for the run's harness, read by its key (`agent_runs.harness_key`, `agent-run-<id>`, through the `model_calls_run` index; a price lookup on the same harness counts too), calls counted, and how many are still at their worst case (`pending`), against `model_run_cap_cents` as set now ("default" when unset). Once the run has ended: `agent_runs.cost_usd`. The meter turns amber at 80% and red at the cap. A run started before this change wrote a random key, so its spend so far reads \$0; once it ends, its recorded cost shows | `model_calls`, `config`, `agent_runs` |
+| Steps | The Runs panel's "How it decided", unfolded: reasoning (the API's summary), text, each tool call and reply | `agent_steps` |
+| Plan | The plan the run recorded (at submit or at its end); before that, the latest draft, with the slots it moved marked. Slot, SKU, fill to, price, keep, reason | `agent_runs.plan`, `agent_steps` |
+| Drafts | Each `preview_desired_state` call: turn, time, its own preview reply's status (`accepted`, `refused`, `failed`, `waiting`), and chips for what it moved from the draft before it (the first, from the last live plan) | `agent_steps` |
+| Ended | The run's detail, team update and notes | `agent_runs` |
+
+- **Honesty rules are the Runs panel's.** No raw chain of thought. A failed run's detail and every step marked
+  `is_error` show `HIDDEN`, on the public route and the standalone one. Scoping is `dashboard.scope_run`: a run from
+  before the current assignment shows no steps, drafts or plan; a payload naming a selection outside ours is dropped
+  or replaced; a saved poll reply keeps only our rows.
+- **Drafts and the plan are typed.** Each entry is reduced to a catalog SKU, a whole fill and a shelf price; a kept
+  slot is only "keep" (a price or fill it carries doesn't apply). Chips compare those typed entries only, for our
+  slots only, the last live plan included, so no stored text reaches a chip.
+- **A reply is paired with its own call** by the model's tool-use id, stored on both steps (`agent_steps.tool_use_id`,
+  migration 035). A step from before the migration has none: its reply is paired only when its turn has one preview
+  call and one preview reply, else the draft says `waiting`.
+- **Live runs only.** A dry run or replay answers 404 "Not on the live page", as the Runs panel leaves them out.
+- **A database the page can't read** (down, or not migrated) answers the pages' fixed 503, never the error's text.
+
+## The Products page
+
+`/dashboard/products` (#55): every product we can order and what is in back stock, so nobody has to
+query the tables. David asked for it on 11 Nov. It is linked as "Products" in the dashboard's header
+and from Back stock. `python -m vending.dashboard` serves it too, at `/products`.
+
+![The Products page, demo data](images/products-page-demo.png)
+
+*The demo copy (`/dashboard/demo/products`): made-up products, prices, plan and closet.*
+
+| Part | What's in it | Where it comes from |
+|---|---|---|
+| Warnings at the top | **The catalog's age:** never synced, or last synced more than 36 hours ago (the rule `get_catalog` uses). **Planned products with no sourcing row:** the planner has no store, pack or price for them (on 20 Nov, 8 of round 6's drinks had no checked price). A planned line with no SKU yet counts too. **Planned products with a stale price** (checked more than 7 days ago) | `catalog_syncs`, `sourcing_options`, `first_fill_plans` |
+| What we can order | One row per product the catalog lists now (delisted ones are left out), by name: SKU, name, size; **our sourcing** (store, pack, the pack's price when someone looked, the unit cost that makes rounded half up to the cent, the most we pay, the day it was checked and by whom, and **STALE** after 7 days; an alternate under it); **day-one plan** (the units and our slots it fills); **back stock** (units in the closet and what each cost us). A planned product with no sourcing row is shaded and marked **no sourcing** | `catalog_products`, `sourcing_options` (`vending.sourcing`), `first_fill_plans` (`vending.plan_store`), `vending.stock` |
+| Not in the catalog | A planned or closet product the catalog doesn't list now: delisted, or waiting for an approval and its SKU | the same |
+| Catalog requests | The dashboard's own list and counts (the same code: `dashboard.catalog_requests_html`) | `product_requests` |
+
+- **Which plan.** The picked first-fill plan; with none picked, the latest, labelled "latest, not picked".
+  It is the dashboard's own read (`dashboard._first_fill`), so a plan for an earlier slot assignment
+  shows its message and marks nothing.
+- **Back stock counts from the ledger's opening**, as the dashboard's Back stock does: receipts before
+  it are test purchases. Before the opening the column is empty and the page says why. The figures are
+  the dashboard's, read its way (`stock.stock` when our slots are recorded, else `stock.closet`).
+- **Read-only.** One `repeatable read, read only` transaction on the pages' read-only login. A missing
+  or unreadable table blanks only its own part; on the container the reason goes to the log, not the
+  page. Every value is escaped, money is exact (integer cents and fractions to text), and the page runs
+  no script (`form-action 'none'`, nothing loaded from elsewhere).
+- **Demo.** `/dashboard/demo/products` draws `vending/demo/products.json`, made by `python -m
+  vending.demo.make` with the dashboard's demo snapshot (the sourcing rows and the day-one plan go in with
+  the dashboard's seed; only the catalog's last sync goes in after it). It opens no connection.
+- **Visits.** Views of it aren't counted: `vending.visits.PAGES` lists `/dashboard` and `/db` only.
+
+## The weekly report card
+
+![The report card and incident log on the demo copy](images/report-card-incidents-demo.png)
+
+*The demo copy's made-up data (Wed 9 Dec 2026): the week of 5 Dec in progress, scored against the day-one plan.*
+
+Computed in code by `vending/report_card.py` (#48); no model calls. For each week from the ledger's opening:
+
+- **The week's plan** is matched to its visit through the run's purchase request (`agent_runs.request_id`). A
+  request whose receipt is in loads the week after its visit; with more than one for a week, the latest visit
+  wins (a paid midweek visit after the Friday request supersedes it, and the card names the plan it replaced).
+  A request with no receipt yet is meant for the week after the Friday the planner buys for when the run
+  started (the Thursday 23:59 Eastern cutoff, as on the plan panel), and is scored as if loaded, saying so. A
+  rejected request shows only the hard checks, graded "Request rejected". With no match the card says "No plan
+  matched" and scores nothing. Dry runs and replays never count; plans are read from two weeks before the
+  oldest card shown.
+- **The stored plan is validated first**, in fixed sentences that name only our slot numbers: a malformed
+  entry, a price or fill that isn't one, a product that isn't a SKU, or an entry outside our assignment fails
+  "valid plan" without quoting the plan. Then it is adapted: `off_cycle` reads as a midweek visit, a slot left
+  to fill its column is filled to its package's capacity (`vending.capacity`), and only a kept slot with no
+  reason gets a fixed one. Where the capacity isn't known the entry keeps its price and product for the checks,
+  and only its fill and outcome are unscored.
+- **Scoring** is the replayer's (`vending.replay.scoring.score`, [week-replayer.md](week-replayer.md)): last
+  week's sales and prices are the state, this week's sales are the demand, read only from polls up to the
+  page's moment. The card shows the poll times each week's sales cover. The receipts fill in what a replayed
+  week lacks: each slot's product and units just before the visit, and its unit cost after it when the product
+  is the same. The catalog and balance are as they stood when the plan was made.
+- **Hard checks**: valid plan, catalog, prices and balance, run even when the polls can't rebuild last week.
+  The price check uses the planner's ceilings, so the wildcard slot is held to its own (\$8.00, #166). The
+  balance check fails when the known spend alone is over the funds, even with a cost unknown. The replayer's
+  "no writes" check is left out, since a live run is meant to write its request. A skip means the data isn't
+  there and is never a pass.
+- **Outcome**, for all scored slots: sold, sold out (estimated: the model's rail ran empty, so demand may have
+  been higher), unsold units (they keep their cost, so they are counted, not charged) and margin.
+- **Grade**: failed a hard check (whatever it earned), or beat, level with or behind the baseline on margin over
+  the shared slots, to the cent. A slot the visit swapped is left out (its sales are a product the baseline
+  never stocked), and the card says so beside the figures. A shared slot with unknown unit cost makes the
+  comparison unavailable; with no shared slot it is "Not scored".
+- The week holding the opening isn't graded: the first fill goes in partway through it. The current week says
+  "in progress", and its grade can change until Friday ends. A closed week whose polls cover too little or too
+  much of it shows its figures as "Incomplete data: not graded".
+- A week that fails to score shows that, and the other weeks still show.
+
+Before the opening both panels say there is no data yet. Text in the card that names a numbered selection
+outside our assignment is replaced, as elsewhere on the page.
+
+**The incident log** reads `action_log` (refused and failed calls, and `halt` flips), `agent_runs` (live runs
+that failed, halted or still say `running` 2 hours on), `agent_steps` (a count of tool results marked as
+errors, for a run that didn't fail anyway), `tracking_checks` (checks whose verdicts name a figure
+`outside`, or with no usable answer; migration 021) and the report card (weeks that failed a hard check). It also carries one row
+per failed sync round, from `sync_incidents` (migration 026): the worker writes a row when a round ends
+with a failed job (`vending.worker.record_failed_round`), so a round stays listed after a later round
+passes or the worker restarts. The write runs in one background thread, never on the round's own path,
+on a connection bounded at the TCP layer (keepalives and `tcp_user_timeout`), so a database that locks the
+table or goes silent can't hold up the next round. A round stays in the worker's wait list until the
+database has taken it, and one the database can't record is written by a later round's writer. A failure's
+stored text is never read: the row says `error` and `hide_errors` gives it the fixed message, on the public
+page and the standalone one alike. A refusal keeps its first line, cut to 160 characters. A note from before
+the current slot assignment is replaced. Each source reads only its newest 50 rows, the total is counted in
+SQL (the sync rows and the tracking checks are counted over the window), and a run that failed, halted or stuck
+is one incident (its tool errors aren't listed again).
+`tracking_checks` (#218) adds a row for each check the bridge answered `outside` on any figure (which figures,
+and the poll it was as of; the bridge never says by how much) and for each send that may have used the day's
+check with no verdicts. Only the stored verdicts and our own codes are read, never the bridge's text: a figure
+counts as `outside` only when the stored JSON is an object and one of the four documented keys says so (the
+allowlist `tracking.verdicts` applies, in SQL), so an undocumented key or a `results` that isn't the documented
+object can neither crash the query nor hide the log. A check is placed by when it was answered (`answered_at`,
+else `sent_at`), the moment the banner names.
+
+**Not built yet:** the agent reading a compact summary of its last few report cards and recent incidents
+before it plans (#48). That is a follow-up.
+
+## The tracking check
+
+![The tracking check panel and its incident rows, fake data on a scratch database](images/tracking-check-panel.png)
+
+The panel lists the last 7 checks from `tracking_checks`, newest first, each with the bridge's four verdicts.
+A check with an `outside` verdict is also a row in the incident log and a **Problem** in Needs attention,
+and the agent's next briefing has it (`books_outside_<figure>`). The worker sends one check a day only when
+`TRACKING_DAILY=on` ([`deploy.md`](deploy.md)); off, a person sends with `python -m vending.tracking check --send`.
+
 ## Catalog requests
 
-The instructors must approve every day-one product by Wed 25 Nov 2026, so the panel lists all of
+The instructors must approve every product for the first fill by Wed 25 Nov 2026, so the panel lists all of
 our catalog requests, not the newest few. They are our own team's records, so the public page
 shows them too. Above the list:
 
@@ -213,7 +456,42 @@ hands the same dict to it (`snapshot(..., syncs=...)`). When a job in the latest
 Like `/health`, it shows no error text. `/state.json` carries the round as `syncs`. Run on its own
 (`python -m vending.dashboard`), the dashboard has no worker beside it, so `syncs` is `null` and
 the page says nothing about the syncs; look at the Container App's `/health`. The poll-age
-warning still covers a history sync that has stopped.
+warning still covers a history sync that has stopped. A failed round raises the failure banner
+(#220) at the top of the page too, naming the same jobs and exit codes with no error text.
+
+## What the live page leaves out
+
+Runs show `live` work, including runs before the opening. The panel counts `dry-run` and `replay`
+runs it leaves out from before opening. A rejected request appears if its last update falls
+within the ledger period. If it has no update time, the dashboard uses the submission time.
+Fulfilled purchases and back stock use the same receipt clock as the ledger. The Runs panel
+also counts the test purchases it leaves out from before opening.
+
+Pending purchase requests, catalog requests and approvals, the assignment, and polls still show
+before opening. Unsettled submissions (`sending` and `unknown`) still count as committed spend.
+An opening dated ahead takes effect at that time. The spend tile appears after the opening.
+
+`action_log` has no run ID. From the opening, calls appear by time. Before the opening, these
+exact `write` tools appear:
+
+- `config.set`, `halt`, `pages.grant`, `slot_counts`, and `slots.record`
+- `ledger.adjustment`, `ledger.capital`, `ledger.opening`, and `ledger.tax_remitted`
+- `plan_store.load` and `plan_store.pick`
+- `product_requests.resolve`, `request_catalog_product`, `request_backlog.add`,
+  `request_backlog.drop`, and `request_backlog.move`
+- `set_wildcard_slot`, `submit_desired_state`, `submissions.resolve`, `sourcing.remove`, and `sourcing.set`
+
+All `ledger.tokens` rows follow the opening time, including entries recorded by an operator.
+
+Both routes use the current slot assignment for stock, plans and saved tool replies. Before the
+lock, `plan` holds the first-fill plan and `weekly_plan` holds the agent's plan. A note replaces
+plan reasons and run and activity text from before the current assignment. Saved poll replies
+show figures only for rows that name a current selection. The stored audit records keep the full replies.
+The stored error text of failed calls and runs stays out of both responses, and so does the
+content of every step marked `is_error` (a failed tool reply, or any other step so marked) (#165).
+The public page keeps the confirmation when a submit succeeds and the run later fails.
+The public page gives a fixed message when a panel cannot read its data. The detail goes to
+stderr. The standalone page shows the detail in the panel.
 
 ## Honesty rules
 
@@ -221,10 +499,10 @@ The page shows only what something recorded, and says so when nothing did.
 
 - **Stock is estimated from receipts and polls, not a sensor.** Units on hand are what the
   fulfilled receipts loaded, minus what the polls' counters say sold, minus recorded losses.
-- **A plan is a proposal, not a restock receipt.** Next Friday is what the agent asked for, not
+- **A plan is a proposal, not a restock receipt.** Next restock is what the agent asked for, not
   what a worker loaded.
 - **Unknown stays unknown.** A selection with no receipt shows `?` and "unknown", never a guess
-  from the plan. A price with no poll shows a dash. Without a plan, Next Friday says "No plan yet".
+  from the plan. A price with no poll shows a dash. Without a plan, Next restock says "No plan yet".
 
 **Money is the ledger's, exact to the cent.** The balance counts a purchase only once it is
 fulfilled, so the panel adds what pending requests could still cost, read from their own bodies.
@@ -256,19 +534,47 @@ the count replaces it. `db/counts/2026-11-09-photo.json` is the first count, rea
 the machine on 9 Nov; its units are estimates and brands that couldn't be read are kept as the
 visible description.
 
+## The charts beside it
+
+On the Container App, three chart pages sit beside the dashboard, behind the same password. Each is
+built per request from the same read-only login, with the same error handling, and kept for 60
+seconds.
+
+| Route | What it shows | Linked from |
+|---|---|---|
+| `/dashboard/money` | The money chart ([`money-chart.md`](money-chart.md)): revenue, costs, profit, cash and net worth by day since the ledger's opening | The **Money chart** button in the header; "Money by day" in the money panel |
+| `/dashboard/pnl` | The weekly P&L ([`pnl-report.md`](pnl-report.md)), with its range and column choices in the URL | "Weekly P&L" in the header and the money panel |
+| `/dashboard/spend` | Development spend by week and day ([`dev-spend.md`](dev-spend.md)), up to the ledger's opening | "Dev spend" in the header; "Development spend by week" in the spend tile |
+| `/dashboard/demo/money` | The money chart with its seeded made-up data, under a DEMO banner | The live money chart before the opening |
+| `/dashboard/demo/spend` | Dev spend from the team's run notes, under a DEMO banner | Not linked |
+
+- **Real data only.** The live chart pages never draw the money chart's MOCK data. Only the two
+  demo routes do, and they read no database.
+- **Before the opening** the money chart says "No competition money yet: the chart starts at the
+  ledger opening" and links the demo; the P&L says there is no competition data until the ledger
+  opens. With an opening recorded ahead, both give its date.
+- **The opening is the boundary.** The money chart counts from the opening. The P&L checks the
+  opening before it reads any date in the URL, and a start on or before the opening's day counts
+  from the opening itself. Dev spend stops at the opening.
+- **Only our selections.** A receipt marker on the money chart names its slot and product only for
+  a selection in the current assignment.
+- `pages.money_page`, `pages.pnl_page` and `pages.spend_page` render each page from its data alone,
+  so made-up data can be drawn the same way.
+
+Run on its own (`python -m vending.dashboard`), the dashboard has no chart links: the CLIs write
+the charts instead.
+
 ## Safety
 
 - **It can't write.** Its connection sets `default_transaction_read_only`, so Postgres refuses
   any write, and it never migrates. A table that doesn't exist yet blanks only its own panel.
 - **On the container it is behind the team password (#136).** `/dashboard` on the Container App,
   with `/dashboard/state.json` beside it, shows this page to anyone who signs in with the team's
-  shared password; only `/health` is open without it. There it connects as a
-  login that can only read, and the error text of failed tool calls and failed runs is left out,
-  on the page and in the JSON. So are the selections not assigned to us: the JSON's counts hold only ours. [`deploy.md`](deploy.md#the-public-pages) has the rules.
+  shared password. Only `/health` is open without it. The dashboard connects as a login
+  that can only read. [`deploy.md`](deploy.md#the-public-pages)
 - **Run locally, it listens on 127.0.0.1 only, and has no login.** It answers only requests addressed to
   `127.0.0.1` or `localhost`, so another website can't point its own name at your machine and
-  read the page. A local copy still shows the error text the public page leaves out, so don't
-  put a local copy on a public address.
+  read the page.
 - **It costs nothing to run.** No model calls, no new services, no new packages.
 - **It never writes the visit counts itself.** The container's worker counts sign-ins and visits
   with the syncs' login; the page only reads `page_visit_totals` and the last week of
@@ -278,9 +584,9 @@ visible description.
 ## The run record
 
 Before the slot lock, `/state.json` puts the first-fill plan in `plan` and the machine's
-Friday preview in `weekly_plan`. At the lock, `plan` holds the Friday plan.
+next-restock preview in `weekly_plan`. At the lock, `plan` holds the plan for the next restock.
 
-The Friday plan, update and notes come from `agent_runs` (`db/migrations/009_agent_runs.sql`). Nothing
+The plan for the next restock, its update and notes come from `agent_runs` (`db/migrations/009_agent_runs.sql`). Nothing
 writes it yet: the agent loop (#39) should call `vending.agent_runs` at the start and end of each
 run, and the agent replay can do the same with `mode="replay"`:
 
@@ -302,14 +608,4 @@ Times on the page show in your browser's time zone. On Windows, the cutoff date 
 
 ## Where it could go next
 
-Ideas for the team to react to. None of this is built.
-
-**A. The week's profit.** The Money panel shows profit since the opening; a week-by-week view
-(`ledger.pnl_by_week`, as `python -m vending.pnl_report` prints it) isn't on the page yet.
-
-**B. Plan history.** One card per week: the update, the slots that changed, the notes, what it
-cost. Everything it needs is in `agent_runs` once #39 writes it.
-
-**C. A live run.** Each tool call as it happens, the draft plans as they change, and the run's
-budget. Each run's steps, its reasoning included, are now in `agent_steps` and show under
-How it decided, so what is left is a page that follows one run live and the run's budget.
+Ideas for the team to react to. None is listed now: plan history and the page that follows one run live are built.

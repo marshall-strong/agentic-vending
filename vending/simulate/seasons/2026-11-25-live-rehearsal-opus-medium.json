@@ -1,0 +1,314 @@
+{
+ "version": 1, "id": "2026-11-25-live-rehearsal-opus-medium", "simulated": true, "name": "Live rehearsal: Opus 5.5 medium, plan #8",
+ "strategy": "Dress rehearsal on the live schedule with the live model choice: plan #8 sent Sat 28 Nov through vending.fill, the worker's scheduler, the team's four-store prices.",
+ "built": "2026-11-25T10:21-05:00", "source": "sim-out/rehearsal-opus (not in git)", "decider": "model", "model": "claude-opus-5-5",
+ "effort": "medium", "seed": 20261203, "run_day": "live schedule",
+ "assumptions": {"budget": "15", "run_cap": "2", "min_run": "0.30", "elasticity": 0.46, "facing_exponent": 0.5, "interloper": 0.0},
+ "assignment": null,
+ "totals": {
+  "profit_after_model": 1445.27, "units_sold": 794, "units_lost": 146.2, "revenue_ex_tax": 2472.27, "gross_profit": 1451.97, "model_spend": 6.7389306,
+  "balance_end": 2017.75, "inventory_at_cost_end": 232.0, "runs": 23, "submitted": 10, "failed": 0, "qualifying_units_directed": 842
+ },
+ "weeks": [
+  {
+   "week": 1, "saturday": "2026-11-28", "class_days": 2, "units_sold": 57, "units_lost": 0.0, "stock_out_slots": 0, "revenue_ex_tax": 182.55,
+   "gross_profit": 106.42, "model_spend": 0.7965202, "profit": 105.63, "cumulative_profit": 105.63, "balance": 450.97, "spendable": 436.37,
+   "inventory_at_cost": 270.05,
+   "report_card": {
+    "stock_outs": {"grade": "good", "why": "0 of 57 units of demand lost to empty slots (0%); 0 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "good", "why": "0 stocked slots with no sale for 5 class days: none"},
+    "margin": {"grade": "good", "why": "gross margin 58% on $182.55 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $436.37 at week end (floor $53); model $0.80 over 2 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "watch", "why": "preview refusals: empty_slot, price_off_step"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 2, "saturday": "2026-12-05", "class_days": 5, "units_sold": 96, "units_lost": 31.2, "stock_out_slots": 10, "revenue_ex_tax": 304.68,
+   "gross_profit": 177.08, "model_spend": 0.4207772, "profit": 176.66, "cumulative_profit": 282.28, "balance": 568.15, "spendable": 529.18,
+   "inventory_at_cost": 354.32,
+   "report_card": {
+    "stock_outs": {"grade": "bad", "why": "31 of 127 units of demand lost to empty slots (25%); 294 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "good", "why": "0 stocked slots with no sale for 5 class days: none"},
+    "margin": {"grade": "good", "why": "gross margin 58% on $304.68 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $529.18 at week end (floor $53); model $0.42 over 2 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "watch", "why": "preview refusals: empty_slot, price_off_step"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 3, "saturday": "2026-12-12", "class_days": 5, "units_sold": 101, "units_lost": 18.0, "stock_out_slots": 8, "revenue_ex_tax": 300.88,
+   "gross_profit": 179.28, "model_spend": 0.5924784, "profit": 178.69, "cumulative_profit": 460.98, "balance": 846.81, "spendable": 783.76,
+   "inventory_at_cost": 279.02,
+   "report_card": {
+    "stock_outs": {"grade": "bad", "why": "18 of 119 units of demand lost to empty slots (15%); 163 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "bad", "why": "1 stocked slots with no sale for 5 class days: [slot] (REDBULL-SUGARFRE-8_4CAN)"},
+    "margin": {"grade": "good", "why": "gross margin 60% on $300.88 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $783.76 at week end (floor $53); model $0.59 over 2 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "watch", "why": "preview refusals: empty_slot, price_off_step"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 4, "saturday": "2026-12-19", "class_days": 1, "units_sold": 24, "units_lost": 1.5, "stock_out_slots": 1, "revenue_ex_tax": 71.53,
+   "gross_profit": 41.74, "model_spend": 0.6278078, "profit": 41.12, "cumulative_profit": 502.09, "balance": 924.06, "spendable": 855.29,
+   "inventory_at_cost": 249.23,
+   "report_card": {
+    "stock_outs": {"grade": "watch", "why": "1 of 25 units of demand lost to empty slots (6%); 72 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "good", "why": "0 stocked slots with no sale for 5 class days: none"},
+    "margin": {"grade": "good", "why": "gross margin 58% on $71.53 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $855.29 at week end (floor $53); model $0.63 over 2 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "good", "why": "no preview refusals"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 5, "saturday": "2026-12-26", "class_days": 0, "units_sold": 3, "units_lost": 0.2, "stock_out_slots": 0, "revenue_ex_tax": 10.56,
+   "gross_profit": 6.49, "model_spend": 0.6662988, "profit": 5.82, "cumulative_profit": 507.91, "balance": 834.84, "spendable": 765.22,
+   "inventory_at_cost": 345.78,
+   "report_card": {
+    "spend_vs_plan": {"grade": "good", "why": "spendable $765.22 at week end (floor $53); model $0.67 over 2 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "watch", "why": "preview refusals: empty_slot, price_off_step"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 6, "saturday": "2027-01-02", "class_days": 5, "units_sold": 123, "units_lost": 11.3, "stock_out_slots": 6, "revenue_ex_tax": 388.71,
+   "gross_profit": 230.69, "model_spend": 0.381003, "profit": 230.31, "cumulative_profit": 738.22, "balance": 1165.98, "spendable": 1065.27,
+   "inventory_at_cost": 276.42,
+   "report_card": {
+    "stock_outs": {"grade": "watch", "why": "11 of 134 units of demand lost to empty slots (8%); 104 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "good", "why": "0 stocked slots with no sale for 5 class days: none"},
+    "margin": {"grade": "good", "why": "gross margin 59% on $388.71 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $1,065.27 at week end (floor $53); model $0.38 over 2 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "good", "why": "no preview refusals"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 7, "saturday": "2027-01-09", "class_days": 5, "units_sold": 100, "units_lost": 35.8, "stock_out_slots": 13, "revenue_ex_tax": 311.07,
+   "gross_profit": 180.39, "model_spend": 0.5408802, "profit": 179.85, "cumulative_profit": 918.07, "balance": 1350.98, "spendable": 1225.38,
+   "inventory_at_cost": 296.69,
+   "report_card": {
+    "stock_outs": {"grade": "bad", "why": "36 of 136 units of demand lost to empty slots (26%); 348 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "good", "why": "0 stocked slots with no sale for 5 class days: none"},
+    "margin": {"grade": "good", "why": "gross margin 58% on $311.07 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $1,225.38 at week end (floor $53); model $0.54 over 3 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "good", "why": "no preview refusals"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 8, "saturday": "2027-01-16", "class_days": 5, "units_sold": 105, "units_lost": 18.9, "stock_out_slots": 8, "revenue_ex_tax": 325.56,
+   "gross_profit": 189.75, "model_spend": 0.5569366, "profit": 189.2, "cumulative_profit": 1107.27, "balance": 1573.72, "spendable": 1422.08,
+   "inventory_at_cost": 289.74,
+   "report_card": {
+    "stock_outs": {"grade": "bad", "why": "19 of 124 units of demand lost to empty slots (15%); 190 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "good", "why": "0 stocked slots with no sale for 5 class days: none"},
+    "margin": {"grade": "good", "why": "gross margin 58% on $325.56 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $1,422.08 at week end (floor $53); model $0.56 over 3 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "good", "why": "no preview refusals"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 9, "saturday": "2027-01-23", "class_days": 5, "units_sold": 112, "units_lost": 23.1, "stock_out_slots": 10, "revenue_ex_tax": 354.67,
+   "gross_profit": 208.7, "model_spend": 1.0514736, "profit": 207.65, "cumulative_profit": 1314.92, "balance": 1777.9, "spendable": 1597.88,
+   "inventory_at_cost": 322.64,
+   "report_card": {
+    "stock_outs": {"grade": "bad", "why": "23 of 135 units of demand lost to empty slots (17%); 228 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "good", "why": "0 stocked slots with no sale for 5 class days: none"},
+    "margin": {"grade": "good", "why": "gross margin 59% on $354.67 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $1,597.88 at week end (floor $53); model $1.05 over 3 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "good", "why": "no preview refusals"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  },
+  {
+   "week": 10, "saturday": "2027-01-30", "class_days": 3, "units_sold": 73, "units_lost": 6.2, "stock_out_slots": 6, "revenue_ex_tax": 222.09,
+   "gross_profit": 131.45, "model_spend": 1.1047548, "profit": 130.34, "cumulative_profit": 1445.26, "balance": 2017.75, "spendable": 1819.97,
+   "inventory_at_cost": 232.0,
+   "report_card": {
+    "stock_outs": {"grade": "watch", "why": "6 of 79 units of demand lost to empty slots (8%); 97 slot-hours empty while customers came"},
+    "slow_sellers": {"grade": "good", "why": "0 stocked slots with no sale for 5 class days: none"},
+    "margin": {"grade": "good", "why": "gross margin 59% on $222.09 revenue ex tax"},
+    "spend_vs_plan": {"grade": "good", "why": "spendable $1,819.97 at week end (floor $53); model $1.10 over 2 runs (plan $1.00 a run)"},
+    "refusals": {"grade": "watch", "why": "preview refusals: empty_slot, price_off_step"},
+    "guardrails": {"grade": "good", "why": "none hit"}
+   }
+  }
+ ],
+ "decisions": [
+  {
+   "at": "2026-12-02T14:00:00-05:00", "kind": "scheduled", "status": "skipped", "decision": "submit", "cost_usd": 0.31,
+   "reason": "The preview passed with no refusals: slot [slot] gets 2 units from the closet, and slot [slot], which has nothing in it on our records, gets Bubly Cherry. Every other slot is already full, and the plan costs at most $4.50 (Walmart, in-store, no Amazon). This is a dry run, so nothing was actually sent."
+  },
+  {
+   "at": "2026-12-03T12:00:00-05:00", "kind": "scheduled", "status": "submitted", "decision": "submit", "cost_usd": 0.49,
+   "reason": "Slot [slot] was never loaded because Bubly Cherry was out of stock at Walmart, so I sent the Friday restock pr_sim_002 (most it can cost: $37.00, about $317.84 left to spend): it fills all 20 slots and puts Coca-Cola cans in slot [slot]."
+  },
+  {
+   "at": "2026-12-09T14:00:00-05:00", "kind": "scheduled", "status": "submitted", "decision": "submit", "cost_usd": 0.33,
+   "reason": "No request was open and 5 slots were empty or almost empty, so I submitted pr_sim_003 before the Wednesday Amazon cutoff; it fills all 20 slots to their columns at current prices, at most $246.00 of $648.50 spendable."
+  },
+  {
+   "at": "2026-12-10T12:00:00-05:00", "kind": "scheduled", "status": "skipped", "decision": "skip", "cost_usd": 0.09,
+   "reason": "Request pr_sim_003 is still open and covers all 20 slots for Friday's 11 Dec visit, and only one request can be open at a time, so there is nothing new to submit."
+  },
+  {
+   "at": "2026-12-16T14:00:00-05:00", "kind": "scheduled", "status": "submitted", "decision": "submit", "cost_usd": 0.51,
+   "reason": "Eighteen of our 20 slots were low or empty ([slot] and [slot] had run out), so I submitted pr_sim_004 for a full refill: expected cost $49.89, at most $60.50, out of $695.84 we can spend."
+  },
+  {
+   "at": "2026-12-17T12:00:00-05:00", "kind": "scheduled", "status": "skipped", "decision": "skip", "cost_usd": 0.08,
+   "reason": "Request pr_sim_004 went in Wednesday 16 Dec for this Friday's visit and is still pending, and only one request can be open at a time, so no new plan can go in or be previewed this week."
+  },
+  {
+   "at": "2026-12-23T14:00:00-05:00", "kind": "scheduled", "status": "submitted", "decision": "submit", "cost_usd": 0.54,
+   "reason": "I submitted pr_sim_005 to fill all 20 slots to their columns for Friday 25 Dec, with no price changes, at most $114.00 (about $97.92 expected) against $851.26 spendable. The preview came back with no refusals."
+  },
+  {
+   "at": "2026-12-24T12:00:00-05:00", "kind": "scheduled", "status": "skipped", "decision": "skip", "cost_usd": 0.09,
+   "reason": "Request pr_sim_005, sent Wed 23 Dec, is still pending with no receipts and only one request can be open, so no new plan can go in this week."
+  },
+  {
+   "at": "2026-12-30T14:00:00-05:00", "kind": "scheduled", "status": "submitted", "decision": "submit", "cost_usd": 0.6,
+   "reason": "I submitted request pr_sim_006 to top up five slots from closet stock at $0 so every slot is full when classes restart on Mon 4 Jan; nothing needed buying."
+  },
+  {
+   "at": "2026-12-31T12:00:00-05:00", "kind": "scheduled", "status": "skipped", "decision": "skip", "cost_usd": 0.07,
+   "reason": "Request pr_sim_006 (sent Wed 30 Dec) is still pending, and only one request can be open at a time, so no new plan can go in until it closes."
+  },
+  {
+   "at": "2027-01-06T14:00:00-05:00", "kind": "scheduled", "status": "submitted", "decision": "submit", "cost_usd": 0.3,
+   "reason": "No request was open and several slots were low or empty ([slot] at 0, [slot] and [slot] at 1, [slot] at 2), so I sent the Friday full-fill request pr_sim_007 before the Amazon cutoff, after a clean preview."
+  },
+  {
+   "at": "2027-01-07T12:00:00-05:00", "kind": "scheduled", "status": "skipped", "decision": "skip", "cost_usd": 0.08,
+   "reason": "Request pr_sim_007 is still open (pending, last checked 11:05 today) for Friday's 8 Jan visit, and only one request can be open at a time, so no new plan can go in this week."
+  },
+  {
+   "at": "2027-01-11T00:05:00-05:00", "kind": "midweek", "status": "skipped", "decision": "skip", "cost_usd": 0.16,
+   "reason": "A paid midweek visit would cost $25, and by my estimate the sales it saves are worth only about $26 or less; the visit might not happen before Friday, and while it's open it would block the Friday order, so the fee isn't worth it."
+  },
+  {
+   "at": "2027-01-13T14:00:00-05:00", "kind": "scheduled", "status": "submitted", "decision": "submit", "cost_usd": 0.29,
+   "reason": "Seven slots are empty and most others are low, so I submitted Friday's full restock (request pr_sim_008) before today's Wednesday 23:59 Amazon cutoff; the preview had no refusals and the hash matched."
+  },
+  {
+   "at": "2027-01-14T12:00:00-05:00", "kind": "scheduled", "status": "skipped", "decision": "skip", "cost_usd": 0.09,
+   "reason": "Purchase request pr_sim_008 (submitted Wed 13 Jan, 20 lines, regular Friday visit) is still pending, and only one request can be open at a time, so no new plan or midweek visit can go in."
+  },
+  {
+   "at": "2027-01-18T00:05:00-05:00", "kind": "midweek", "status": "skipped", "decision": "skip", "cost_usd": 0.16,
+   "reason": "I didn't book the midweek visit because the sales it would save (about $19 by my estimate, $25.04 at most by the planner's) don't clearly cover the $25 fee, and it could hold up Friday's order."
+  },
+  {
+   "at": "2027-01-20T14:00:00-05:00", "kind": "scheduled", "status": "submitted", "decision": "submit", "cost_usd": 0.31,
+   "reason": "No request was open and most slots run low or empty before Friday, so I submitted the regular Friday restock (pr_sim_009, at most $163.00, expected $138.78). It fills every slot to its column at the current prices, and the preview raised no refusals."
+  },
+  {
+   "at": "2027-01-21T12:00:00-05:00", "kind": "scheduled", "status": "skipped", "decision": "skip", "cost_usd": 0.09,
+   "reason": "Request pr_sim_009 (Friday's regular full fill, sent Wed 20 Jan) is still pending and only one request can be open, so I can't send another plan; this dry run has no write tools anyway, so I made no preview."
+  },
+  {
+   "at": "2027-01-25T10:05:00-05:00", "kind": "midweek", "status": "skipped", "decision": "skip", "cost_usd": 0.15,
+   "reason": "I didn't send a midweek visit. The best case saves $27.31 in margin against a $25 fee, my own count puts the likely saving at about $18–20, and the late-arrival risk erases what's left."
+  },
+  {
+   "at": "2027-01-27T14:00:00-05:00", "kind": "scheduled", "status": "submitted", "decision": "submit", "cost_usd": 0.81,
+   "reason": "Before the Amazon cutoff I submitted pr_sim_010: a regular Friday restock that fills all 20 slots, with the same products and prices, at no more than $208.00 (about $178.87 expected) out of $1,656.98 spendable."
+  },
+  {
+   "at": "2027-01-28T12:00:00-05:00", "kind": "scheduled", "status": "skipped", "decision": "skip", "cost_usd": 0.09,
+   "reason": "I'm skipping because pr_sim_010, which covers all 20 slots for Friday's regular visit, is still open, and only one request can be open at a time."
+  },
+  {
+   "at": "2027-02-01T15:05:00-05:00", "kind": "midweek", "status": "skipped", "decision": "skip", "cost_usd": 0.16,
+   "reason": "A paid midweek visit would save about $16 of margin at most, and only if it arrived Wednesday afternoon, which is less than the $25 fee. Most visits arrive later than that, so the real saving is smaller."
+  },
+  {
+   "at": "2027-02-03T14:00:00-05:00", "kind": "scheduled", "status": "submitted", "decision": "submit", "cost_usd": 0.94,
+   "reason": "Seven slots are empty and the rest are running low, so I sent the full fill of all 20 slots for Friday's free visit before tonight's Amazon cutoff: request pr_sim_011, at most $129.00 (expected $109.44) against $1,815.43 spendable."
+  }
+ ],
+ "notes": ["Selections redacted: the season ran on the current assignment."],
+ "rehearsal": {
+  "schedule": "live",
+  "counts": {"weekly": 19, "midweek": 4, "by_outcome": {"skipped": 13, "submitted": 10}, "live": 14, "dry_run": 9},
+  "scheduled": [
+   {"due": "2026-12-02T14:00:00-05:00", "kind": "weekly", "mode": "dry-run", "outcome": "skipped", "run_id": 1},
+   {"due": "2026-12-03T12:00:00-05:00", "kind": "weekly", "mode": "live", "outcome": "submitted", "run_id": 2},
+   {"due": "2026-12-09T14:00:00-05:00", "kind": "weekly", "mode": "live", "outcome": "submitted", "run_id": 3},
+   {"due": "2026-12-10T12:00:00-05:00", "kind": "weekly", "mode": "dry-run", "outcome": "skipped", "run_id": 4},
+   {"due": "2026-12-16T14:00:00-05:00", "kind": "weekly", "mode": "live", "outcome": "submitted", "run_id": 5},
+   {"due": "2026-12-17T12:00:00-05:00", "kind": "weekly", "mode": "dry-run", "outcome": "skipped", "run_id": 6},
+   {"due": "2026-12-23T14:00:00-05:00", "kind": "weekly", "mode": "live", "outcome": "submitted", "run_id": 7},
+   {"due": "2026-12-24T12:00:00-05:00", "kind": "weekly", "mode": "dry-run", "outcome": "skipped", "run_id": 8},
+   {"due": "2026-12-30T14:00:00-05:00", "kind": "weekly", "mode": "live", "outcome": "submitted", "run_id": 9},
+   {"due": "2026-12-31T12:00:00-05:00", "kind": "weekly", "mode": "dry-run", "outcome": "skipped", "run_id": 10},
+   {"due": "2027-01-06T14:00:00-05:00", "kind": "weekly", "mode": "live", "outcome": "submitted", "run_id": 11},
+   {"due": "2027-01-07T12:00:00-05:00", "kind": "weekly", "mode": "dry-run", "outcome": "skipped", "run_id": 12},
+   {"due": "2027-01-11T00:05:00.000001-05:00", "kind": "midweek", "mode": "live", "outcome": "skipped", "run_id": 13},
+   {"due": "2027-01-13T14:00:00-05:00", "kind": "weekly", "mode": "live", "outcome": "submitted", "run_id": 14},
+   {"due": "2027-01-14T12:00:00-05:00", "kind": "weekly", "mode": "dry-run", "outcome": "skipped", "run_id": 15},
+   {"due": "2027-01-18T00:05:00.000001-05:00", "kind": "midweek", "mode": "live", "outcome": "skipped", "run_id": 16},
+   {"due": "2027-01-20T14:00:00-05:00", "kind": "weekly", "mode": "live", "outcome": "submitted", "run_id": 17},
+   {"due": "2027-01-21T12:00:00-05:00", "kind": "weekly", "mode": "dry-run", "outcome": "skipped", "run_id": 18},
+   {"due": "2027-01-25T10:05:00.000001-05:00", "kind": "midweek", "mode": "live", "outcome": "skipped", "run_id": 19},
+   {"due": "2027-01-27T14:00:00-05:00", "kind": "weekly", "mode": "live", "outcome": "submitted", "run_id": 20},
+   {"due": "2027-01-28T12:00:00-05:00", "kind": "weekly", "mode": "dry-run", "outcome": "skipped", "run_id": 21},
+   {"due": "2027-02-01T15:05:00.000001-05:00", "kind": "midweek", "mode": "live", "outcome": "skipped", "run_id": 22},
+   {"due": "2027-02-03T14:00:00-05:00", "kind": "weekly", "mode": "live", "outcome": "submitted", "run_id": 23}
+  ],
+  "day_one": {
+   "plan_id": 8, "submit_exit": 0, "warnings": 3,
+   "deviations": [
+    "C4_PERF-COSMIC-16CAN (alternate, Walmart): the pick buys 1 x 12 (12 units, at most $24.96); the alternate buys 1 x 12 (12 units, at most $24.98)"
+   ],
+   "refused_first": ["pick_deviation"],
+   "flags": ["--accept-deviations"]
+  },
+  "tracking_checks": {"sent": 62, "answered_200": 62, "outside": 0, "refused": []},
+  "price_checks": 10,
+  "refusals": {"preview_refused": 6, "submit_refused": 0, "tool_errors": 6},
+  "round_failures": 50,
+  "dashboard": [
+   {
+    "label": "mid-season", "snapshot_seconds": 1.111, "render_seconds": 0.021,
+    "unavailable": [],
+    "errors": [],
+    "panels": {"cards": 0.254, "money": 0.237, "leaderboards": 0.187, "runs": 0.087, "sales": 0.083, "stock": 0.051},
+    "other_panels_seconds": 0.122,
+    "run_pages": [
+     {"run_id": 9, "read_seconds": 0.023, "render_seconds": 0.001},
+     {"run_id": 7, "read_seconds": 0.023, "render_seconds": 0.0},
+     {"run_id": 5, "read_seconds": 0.021, "render_seconds": 0.0}
+    ]
+   },
+   {
+    "label": "end of season", "snapshot_seconds": 2.061, "render_seconds": 0.02,
+    "unavailable": [],
+    "errors": [],
+    "panels": {"cards": 0.762, "money": 0.378, "leaderboards": 0.294, "sales": 0.138, "runs": 0.127, "stock": 0.115},
+    "other_panels_seconds": 0.129,
+    "run_pages": [
+     {"run_id": 23, "read_seconds": 0.021, "render_seconds": 0.001},
+     {"run_id": 20, "read_seconds": 0.02, "render_seconds": 0.0},
+     {"run_id": 17, "read_seconds": 0.021, "render_seconds": 0.001}
+    ]
+   }
+  ],
+  "not_simulated": [
+   "Customers, the machine, the bridge and the student worker are made up (vending/simulate/world.py, bridge.py).",
+   "The agent's find_pack_price and the weekly price check's lookups make no web search: the tool isn't offered, the check runs as a dry run, and the world re-prices the sourcing table each Tuesday at 12:30.",
+   "Each agent run happens at one instant of the season's clock: a run that takes minutes live takes none here, so the run lease never expires mid-run and no deadline (60 min) is ever reached.",
+   "Model spend is test spend (purpose test) under a $4 daily cap, not the ledger's live spend.",
+   "The tracking check's money figures are compared with our own ledger's (the simulated bridge has no tax calculation of its own); only its counts are checked against the simulated machine.",
+   "Deliveries: one visit per request (Mon 30 Nov 15:00 for the fill, Friday for a weekly one); an Amazon line past its cutoff is paid, goes to back stock and is loaded by a later request's visit. Amazon always takes exactly two days; no store-side delays.",
+   "The worker runs in-process: no container, no /health, no restarts, no replicas, no network failures.",
+   "Visit-day live polls (vending.visit_polls) aren't simulated: the season polls hourly.",
+   "Catalog requests aren't decided: the round doesn't run sync_product_requests, so a request the agent files stays pending."
+  ]
+ }
+}

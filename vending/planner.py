@@ -75,7 +75,12 @@ MAX_SALE_PRICE_CENTS = 1000
 AGREED_CEILING_CENTS = 650
 AGREED_WILDCARD_CEILING_CENTS = 800
 AGREED_WILDCARD_CAP_CENTS = 8200
+# What spendable must still hold after any request's worst case (Kevin, 19 Nov; #90): one midweek fee ($25.00) plus
+# a week of model spend at the daily cap (7 x $4.00), so the agent can always pay for a visit and its own calls.
+# Config `spendable_floor_cents` may change it; the agent's `money` and `restocking` topics quote it (a test checks).
+SPENDABLE_FLOOR_CENTS = 5300
 MAX_PACK_DESCRIPTION = 100
+MAX_NOTE = 500                  # the request's note
 
 # David's cases, one per slot.
 NO_CHANGE = "no_change"
@@ -86,6 +91,10 @@ SWITCH = "switch"
 # Where a line's units come from (the API's `source`).
 PURCHASE = "purchase"
 BACK_STOCK = "back_stock"
+
+# The floor part for units already in a slot that stay there (`FloorPart.source`). Every other part
+# is a cost of units this visit loads: the closet's lots drawn, or a purchase option's max per unit.
+ON_HAND = "on hand"
 
 # A price as the agent or the database hands it over. See `to_cents`.
 Price = str | Decimal | int
@@ -144,10 +153,12 @@ class CatalogProduct:
     """One single-item product from /products. Inactive products are refused.
 
     `size` is the catalog's ("20 oz bottle"); it sets how many fit in a column.
+    `name` is the catalog's name ("Mountain Dew 20oz"), for the worker's directive only.
     """
     product: str
     active: bool = True
     size: str | None = None
+    name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -227,6 +238,9 @@ class DesiredState:
     slots: tuple[DesiredSlot, ...]
     off_cycle: bool = False
     sourcing: tuple[Sourcing, ...] = ()
+    # Buy each product once for all its slots: see "Pooled purchases" below. The agent's
+    # tool schema has no such field, so only a command that sets it (`vending.fill`) pools.
+    pool: bool = False
 
     def __post_init__(self):
         # The tool schema should already stop this; a truthy string here would
@@ -277,6 +291,9 @@ class Config:
     and $82.00, #100 and #90). See "The wildcard slot" below.
     """
     capacity_overrides: Mapping[str, int] = field(default_factory=dict)
+    # Catalog SKUs that are the same product as another SKU (config `product_aliases`): the duplicate warning
+    # counts them as one drink. Ours, from the team database, never a list typed here.
+    product_aliases: Mapping[str, str] = field(default_factory=dict)
     price_ceiling_cents: int = 650
     tax_percent: int = DEFAULT_TAX_PERCENT
     midweek_fee_cents: int = 2500
@@ -292,6 +309,7 @@ class Config:
     wildcard_ceiling_cents: int = 800
     wildcard_purchase_cap_cents: int = 8200
     wildcard_slot: str | None = None
+    spendable_floor_cents: int = SPENDABLE_FLOOR_CENTS
 
     def __post_init__(self):
         for name, cents in (("price ceiling", self.price_ceiling_cents),
@@ -328,7 +346,7 @@ class PlannedPurchase:
     max_price_per_pack_cents: int
     expected_price_per_pack_cents: int
     pack_description: str | None
-    units_to_closet: int        # bought beyond the slot's shortfall
+    units_to_closet: int        # bought beyond what this line's slots load (pooled: beyond all of them)
 
 
 @dataclass(frozen=True)
@@ -336,6 +354,8 @@ class Purchase:
     units_short: int            # what the slot needs loaded
     primary: PlannedPurchase
     alternate: PlannedPurchase | None
+    # Pooled: the other slots whose back-stock lines load units this purchase buys, and how many each.
+    feeds: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -359,6 +379,7 @@ class Line:
     purchase: Purchase | None
     pulled_product: str | None
     units_pulled: int
+    fed_by: str | None = None   # pooled: the slot whose purchase line buys what this back-stock line loads
 
     def to_api(self) -> dict:
         """This line as the bridge's PurchaseLine or BackStockLine."""
@@ -414,10 +435,16 @@ class FloorPart:
 
 @dataclass(frozen=True)
 class SlotFloor:
-    """A slot's floor and the arithmetic behind it, so the agent can see why."""
+    """A slot's floor and the arithmetic behind it, so the agent can see why.
+
+    `units_loaded_cost_unknown` counts the units this visit loads from closet lots of
+    unknown cost: only the lots the allocation actually draws, so a later lot of the same
+    product that stays unused never makes the known draws unknown. Those units leave no part.
+    """
     slot: str
     floor_cents: int
     parts: tuple[FloorPart, ...]
+    units_loaded_cost_unknown: int = 0
 
 
 @dataclass(frozen=True)
@@ -437,6 +464,7 @@ class Plan:
     refusals: tuple[Refusal, ...]
     plan_hash: str | None
     off_cycle: bool = False
+    note: str | None = None     # the request's `note`; set by a pooled plan
 
     @property
     def ok(self) -> bool:
@@ -446,7 +474,10 @@ class Plan:
         """The body for POST /api/v1/purchase-requests. A refused plan has none."""
         if self.refusals:
             raise ValueError("this plan has refusals, so there is no request to send; check `ok` first")
-        return {"off_cycle": self.off_cycle, "lines": [line.to_api() for line in self.lines]}
+        body = {"off_cycle": self.off_cycle, "lines": [line.to_api() for line in self.lines]}
+        if self.note is not None:
+            body["note"] = self.note
+        return body
 
 
 # --- Working state -----------------------------------------------------------
@@ -488,9 +519,11 @@ class _Slot:
     need: int = 0
     changes_product: bool = False
     from_back_stock: int = 0
+    unknown_cost_drawn: int = 0     # closet units drawn from lots of unknown cost
     shortfall: int = 0
     purchase: Purchase | None = None
     parts: list[FloorPart] = field(default_factory=list)
+    fed_by: str | None = None
 
     @property
     def price_changed(self) -> bool:
@@ -569,7 +602,7 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
         if s.staying and (s.need or s.price_changed):
             # Units staying in the slot sell at its new price too, so each cost among them sets a floor.
             for units, cost in s.state.layers or ((s.staying, s.state.unit_cost),):
-                _add_part(s, "on hand", cost, config, warnings, units)
+                _add_part(s, ON_HAND, cost, config, warnings, units)
         if not s.need:
             continue
         if check := capacity.fill_check(s.fill_to, capacities[s.product]):
@@ -590,11 +623,15 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
             if take:
                 lot.units -= take
                 remaining -= take
+                if lot.unit_cost is None:
+                    s.unknown_cost_drawn += take
                 _add_part(s, "back stock", lot.unit_cost, config, warnings, take)
         s.from_back_stock = s.need
 
     # 5. Size each purchase, separately per slot until David confirms one
-    #    line may load units bought on another.
+    #    line may load units bought on another. A pooled plan buys each product
+    #    once, on its first slot's line, for all its slots ("Pooled purchases").
+    feeds = _pool(slots, sources) if desired.pool else {}
     extras_placed: set[str] = set()
     for s in slots:
         if s.shortfall == 0:
@@ -613,20 +650,26 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
         if s.product not in extras_placed:
             extra = source.extras
             extras_placed.add(s.product)
-        primary = _size(source.primary, s.shortfall, extra)
-        alternate = source.alternate and _size(source.alternate, s.shortfall, extra)
-        s.purchase = Purchase(s.shortfall, primary, alternate)
+        fed = feeds.get(s.slot, ())
+        short = s.shortfall + sum(f.from_back_stock for f in fed)
+        primary = _size(source.primary, short, extra)
+        alternate = source.alternate and _size(source.alternate, short, extra)
+        s.purchase = Purchase(s.shortfall, primary, alternate, tuple((f.slot, f.from_back_stock) for f in fed))
         for label, option, planned in (("primary", source.primary, primary),
                                        ("alternate", source.alternate, alternate)):
             if option is None:
                 continue
-            s.parts.append(FloorPart(
+            part = FloorPart(
                 f"{label} {option.store} {option.units_per_pack}-pack, max {_dollars(option.max_cents)}",
                 Fraction(option.max_cents, option.units_per_pack),
-                pack_floor_cents(option.max_cents, option.units_per_pack, config.tax_percent)))
+                pack_floor_cents(option.max_cents, option.units_per_pack, config.tax_percent))
+            # A slot fed by this purchase sells its units, so their cost sets its floor too.
+            for t in (s, *fed):
+                t.parts.append(part)
             if planned.packs > MAX_PACKS:
+                whom = f"slot {s.slot}" + (f" (for slots {', '.join(t.slot for t in (s, *fed))})" if fed else "")
                 refusals.append(Refusal("too_many_packs", (
-                    f"slot {s.slot} needs {planned.packs} {option.units_per_pack}-packs from "
+                    f"{whom} needs {planned.packs} {option.units_per_pack}-packs from "
                     f"{option.store}, and a line takes at most {MAX_PACKS}; use a bigger pack, "
                     f"or lower fill_to or extra_units_to_closet"), s.slot))
     for product in sources.extras_wanted() - extras_placed:
@@ -638,21 +681,9 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
     # 7. Gates.
     # The cutoffs exist to get stock to the Friday visit. An off-cycle visit
     # happens on another day, so they don't apply to it.
-    used = {} if desired.off_cycle else _stores_used(slots)
-    now_local = now.astimezone(_tz(config.timezone)) if used else now
-    for store, slot_names in sorted(used.items()):
-        cutoff = config.cutoffs.get(store)
-        if cutoff is None or not _past_cutoff(now_local, cutoff, config.week_starts):
-            continue
-        when = f"{_WEEKDAYS[cutoff.weekday]} {cutoff.at:%H:%M}"
-        if store in config.soft_cutoff_stores:
-            warnings.append(
-                f"past the {store} cutoff ({when}) for slots {', '.join(slot_names)}; "
-                f"the order may arrive after the visit")
-        else:
-            refusals.append(Refusal("past_cutoff", (
-                f"past the {store} cutoff ({when}) for slots {', '.join(slot_names)}; "
-                f"switch to Amazon or wait for next week")))
+    late_warnings, late = _cutoff_gates({} if desired.off_cycle else _stores_used(slots), config, now)
+    warnings.extend(late_warnings)
+    refusals.extend(late)
 
     if current.pending:
         ids = ", ".join(p.request_id for p in current.pending)
@@ -663,7 +694,10 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
         refusals.append(Refusal("insufficient_balance", (
             f"max cost {_dollars(cost.max_cents)} (visit fee {_dollars(cost.visit_fee_cents)} "
             f"included) exceeds the spendable balance of {_dollars(current.balance_cents)}; "
-            f"buy less or cheaper")))
+            + _cash_short(slots, cost, cost.max_cents - current.balance_cents))))
+    # The floor limits what a plan spends: one that spends nothing (a closet-only load) never lowers spendable.
+    elif cost.max_cents > 0 and cost.balance_left_at_max_cents < config.spendable_floor_cents:
+        refusals.append(Refusal("below_spendable_floor", _below_floor(slots, cost, config.spendable_floor_cents)))
 
     floors: list[SlotFloor] = []
     # A slot whose own line was refused is held as it is; that refusal already says what to fix.
@@ -695,14 +729,20 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
                 f"one unit and there is no price-change route yet; load at least one unit "
                 f"or keep the old price"), s.slot))
         floor = slot_floor_cents([p.floor_cents for p in s.parts]) if s.parts else 0
-        floors.append(SlotFloor(s.slot, floor, tuple(s.parts)))
+        floors.append(SlotFloor(s.slot, floor, tuple(s.parts), s.unknown_cost_drawn))
         refusals.extend(check_price(s.price_cents, floor, config.ceiling_for(s.slot), s.slot))
     refusals.extend(_check_wildcard(slots, config, current, desired.off_cycle, warnings))
+    warnings.extend(_duplicates(slots, config))
 
     # 8. The plan, with every refusal found.
     # Only slots with a source get a line. A slot that couldn't be stocked is
     # already refused, and must not look like a back-stock load.
     lines = tuple(_line(s) for s in slots if s.purchase or s.from_back_stock)
+    note = _pool_note(lines) if desired.pool and lines else None
+    if note is not None and len(note) > MAX_NOTE:
+        refusals.append(Refusal("note_too_long", (
+            f"the request's note, which names each slot's load, is {len(note)} characters and the bridge takes at "
+            f"most {MAX_NOTE}; load fewer slots in this request")))
     if not lines and not refusals:
         # Only when nothing else is wrong: a refused slot already says why
         # it loads nothing, and the API refuses a request with no lines.
@@ -714,16 +754,19 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
             refusals.append(Refusal("nothing_to_load", (
                 "no slot loads anything, so there is no request to send; "
                 "skip this week's request")))
-    plan = Plan(lines, _directive(desired.off_cycle, slots), cost, tuple(floors),
-                tuple(warnings), tuple(refusals), None, desired.off_cycle)
+    plan = Plan(lines, _directive(desired.off_cycle, slots, _names(current.catalog)), cost, tuple(floors),
+                tuple(warnings), tuple(refusals), None, desired.off_cycle, note)
     if refusals:
         return plan
     week = _week_of(now.astimezone(_tz(config.timezone)), config.week_starts)
-    # What it could cost goes in too: a new visit fee leaves the request body as it was.
+    # What it could cost goes in too: a new visit fee leaves the request body as it was. Spendable cash and the
+    # price ceiling are not in it: the gates above check them each time the planner runs, and the day-one fill
+    # (`vending.fill`) runs the planner again right before its POST.
     body = json.dumps({"week": week.isoformat(), "request": plan.request(),
-                       "max_cents": cost.max_cents, "visit_fee_cents": cost.visit_fee_cents}, sort_keys=True)
+                       "max_cents": cost.max_cents, "visit_fee_cents": cost.visit_fee_cents,
+                       "spendable_floor_cents": config.spendable_floor_cents}, sort_keys=True)
     return Plan(lines, plan.directive, cost, plan.floors, plan.warnings, (),
-                hashlib.sha256(body.encode()).hexdigest(), desired.off_cycle)
+                hashlib.sha256(body.encode()).hexdigest(), desired.off_cycle, note)
 
 
 # --- The wildcard slot ---------------------------------------------------------
@@ -820,6 +863,40 @@ def _check_wildcard(slots: list[_Slot], config: Config, current: CurrentState, o
                 f"{w.product} goes on trial in the wildcard, slot {w.slot}, so slot {', '.join(into)} can't switch "
                 "to it; the wildcard's product is in no other slot"), w.slot))
     return refusals
+
+
+# --- Variety ------------------------------------------------------------------
+# A second slot of the same drink adds stock, not sales: it earns its place only
+# when one slot would sell out before the Friday restock (Kevin, 22 Nov; #230).
+# The plan may still do it, so it is a warning, never a refusal. Slots no receipt
+# describes are left out (we can't say what they hold), and so is the wildcard,
+# whose own rules (`_check_wildcard`) keep its product out of every other slot.
+
+DUPLICATE_HINT = ("a second slot adds stock, not sales: keep it only if one slot would sell out before Friday "
+                  "(get_project_rules variety)")
+
+
+def _duplicates(slots: list[_Slot], config: Config) -> list[str]:
+    """One warning per drink that two or more of our regular slots hold after this visit. SKUs that config
+    `product_aliases` maps to one product count as that one drink."""
+    by_product: dict[str, list[_Slot]] = defaultdict(list)
+    for s in slots:
+        if s.slot != config.wildcard_slot and s.product and not (s.state.unsure and not s.changes_product):
+            by_product[config.product_aliases.get(s.product, s.product)].append(s)
+    warnings = []
+    for product, group in by_product.items():
+        where = [s.slot for s in group]
+        if len(where) < 2:
+            continue
+        if len(where) == 2:
+            who = f"slot {where[0]} and slot {where[1]} both get"
+        else:
+            who = f"slots {', '.join(where[:-1])} and {where[-1]} all get"
+        other = sorted({s.product for s in group} - {product})
+        alias = (f" ({', '.join(other)} {'is' if len(other) == 1 else 'are'} the same product, config "
+                 "product_aliases)") if other else ""
+        warnings.append(f"{who} {product}{alias}; {DUPLICATE_HINT}")
+    return warnings
 
 
 def _check_promotion(w: _Slot, into: list[str], current: CurrentState, off_cycle: bool) -> list[Refusal]:
@@ -1101,9 +1178,94 @@ def _add_part(s: _Slot, source: str, unit_cost: Fraction | int | None,
     s.parts.append(FloorPart(source, cost, floor_cents(cost, config.tax_percent)))
 
 
+# --- Pooled purchases ------------------------------------------------------------
+# A day-one plan (round 6) counts the units each product needs across all its slots, then
+# rounds that total up to whole packs: ten slots of 7 Coca-Cola is six 12-packs, not ten.
+# The bridge's purchase line buys whole packs (at least one) for one slot and has no load
+# target, so a pooled plan sends:
+#
+# - one purchase line per product, on its first slot in our order, sized for all its slots;
+# - a back-stock line for each of its other slots, loading that slot's units, which the
+#   worker takes from the packs just bought (the closet holds them after the purchase line);
+# - the request's `note`, naming every slot's load, the purchase lines' too, since a
+#   purchase line otherwise loads whatever fits. It groups the loads by supplier: each
+#   purchase with the slots it feeds (`fed_by`), and apart from them any back-stock line
+#   that loads units already in the closet (`_pool_note`).
+#
+# The spec doesn't say whether a line may load what another line of the same request bought
+# (asked of David on 19 Oct, docs/planning/tool-list.md), so the agent's plans don't pool.
+# Only `vending.fill` sets `pool`: the fill was picked as a pooled plan, and buying a pack
+# per slot would cost about twice as much. The cost of the fed slots' units is on the
+# purchase line, so the money gate, the cutoffs and the floors all see it.
+
+def _pool(slots: list[_Slot], sources: _Sources) -> dict[str, tuple[_Slot, ...]]:
+    """For each product to buy, its first slot and the other slots it feeds; marks those as fed."""
+    groups: dict[str, list[_Slot]] = defaultdict(list)
+    for s in slots:
+        if s.shortfall and s.product and sources.get(s.product) is not None:
+            groups[s.product].append(s)
+    feeds = {}
+    for first, *rest in groups.values():
+        for s in rest:
+            s.from_back_stock, s.shortfall, s.fed_by = s.shortfall, 0, first.slot
+        feeds[first.slot] = tuple(rest)
+    return feeds
+
+
+def _pool_note(lines: tuple[Line, ...]) -> str:
+    """The request's note for a pooled plan: every slot's load, grouped by where its units come from.
+
+    Each purchase line that feeds other slots gets "From slot X's purchase:" with its own load and each fed
+    slot's (`fed_by` per line). A purchase line that feeds nobody is "Own purchase". A back-stock line no
+    purchase feeds loads stock already in the closet, so it is listed apart and never sent to the new units.
+    The groups keep it short: 20 slots fit well under the bridge's 500 characters."""
+    def loads(group: list[Line]) -> str:
+        return ", ".join(f"{ln.slot}={ln.units_to_load}" for ln in group)
+
+    fed: dict[str, list[Line]] = defaultdict(list)
+    for ln in lines:
+        if ln.fed_by:
+            fed[ln.fed_by].append(ln)
+    parts, alone = [], []
+    for ln in lines:
+        if ln.purchase is None:
+            continue
+        if fed.get(ln.slot):
+            parts.append(f"From slot {ln.slot}'s purchase: {loads([ln, *fed[ln.slot]])}.")
+        else:
+            alone.append(ln)
+    if alone:
+        parts.append(f"Own purchase: {loads(alone)}.")
+    if closet := [ln for ln in lines if ln.purchase is None and not ln.fed_by]:
+        parts.append(f"From closet stock: {loads(closet)}.")
+    if any(ln.purchase is not None for ln in lines):
+        parts.append("Leftovers go to back stock.")
+    return " ".join(["Units to load per slot.", *parts])
+
+
+def packs_for(units: int, units_per_pack: int) -> int:
+    """Whole packs covering `units`; the rest goes to the closet."""
+    return round_up_to_step(Fraction(units), units_per_pack) // units_per_pack
+
+
+def pack_usable(units_per_pack: int, units: int) -> bool:
+    """Whether a pack size can buy `units` on one purchase line: a size the purchase API takes, and at most
+    `MAX_PACKS` packs (`packs_for`). Extras go to the closet at cost, so a bigger pack is still usable."""
+    return 1 <= units_per_pack <= MAX_UNITS_PER_PACK and packs_for(units, units_per_pack) <= MAX_PACKS
+
+
+def cutoff_deadline(visit: date, cutoff: Cutoff, zone: str | tzinfo = "America/New_York") -> datetime:
+    """The end of the last minute to order from a store for a stocking on `visit`.
+
+    The cutoffs are for a Friday visit (in-store Thursday 23:59, Amazon Wednesday 23:59). Another visit day
+    keeps the same lead time: for Mon 30 Nov, in-store Sun 29 Nov and Amazon Sat 28 Nov."""
+    day = visit - timedelta(days=(_FRIDAY - cutoff.weekday) % 7)
+    return datetime.combine(day, cutoff.at, _tz(zone)) + timedelta(seconds=59)
+
+
 def _size(option: _Option, short: int, extra: int) -> PlannedPurchase:
     """Whole packs covering the shortfall plus extras; the rest goes to the closet."""
-    packs = round_up_to_step(Fraction(short + extra), option.units_per_pack) // option.units_per_pack
+    packs = packs_for(short + extra, option.units_per_pack)
     expected = option.max_cents if option.expected_cents is None else option.expected_cents
     return PlannedPurchase(option.store, option.url, option.units_per_pack, packs,
                            option.max_cents, expected, option.pack_description,
@@ -1131,9 +1293,37 @@ def _cost_plan(slots: list[_Slot], off_cycle: bool, config: Config, balance: int
     return Cost(tuple(lines), fee, expected, worst, balance, balance - worst)
 
 
+def _below_floor(slots: list[_Slot], cost: Cost, floor_cents: int) -> str:
+    """Why a plan that would leave spendable under the floor is refused, and how to cut it."""
+    return (f"max cost {_dollars(cost.max_cents)} (visit fee {_dollars(cost.visit_fee_cents)} included) would leave "
+            f"{_dollars(cost.balance_left_at_max_cents)} of the spendable {_dollars(cost.balance_cents)}, under the "
+            f"{_dollars(floor_cents)} spendable floor (a midweek fee plus a week of model spend); "
+            + _cash_short(slots, cost, floor_cents - cost.balance_left_at_max_cents))
+
+
+def _cash_short(slots: list[_Slot], cost: Cost, short_cents: int) -> str:
+    """The cash-short recipe, the same for `insufficient_balance` and `below_spendable_floor`: how much to cut,
+    in what order, and how. A slot with no receipts (the first fill) needs a line, so it is never offered keep."""
+    buying = sorted((c for c in cost.lines if c.max_cents), key=lambda c: (-c.max_cents, c.slot))
+    listed = ", ".join(f"slot {c.slot} {_dollars(c.max_cents)}" for c in buying) or "none"
+    first = sorted(s.slot for s in slots if s.state.unsure and any(c.slot == s.slot for c in buying))
+    text = (f"cut at least {_dollars(short_cents)}. Cut slow-seller purchases first, then keep the slots with the "
+            f"most margin per class day first: give a slot a smaller explicit fill_to, or keep it if nothing fits, "
+            f"or buy a cheaper product or pack; then preview again. The order of the plan's entries sets no "
+            f"priority. Slots that buy, at their max cost: {listed}")
+    if first:
+        names = ", ".join(first)
+        text += (f". slot{'s' if len(first) > 1 else ''} {names} {'have' if len(first) > 1 else 'has'} no receipts "
+                 f"yet (a first fill): give {'them' if len(first) > 1 else 'it'} a cheaper product or pack, or a "
+                 f"smaller fill_to, but never keep {'them' if len(first) > 1 else 'it'} or leave "
+                 f"{'them' if len(first) > 1 else 'it'} out")
+    return text
+
+
 # --- Step 7 helpers ----------------------------------------------------------
 
 _WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+_FRIDAY = 4
 
 
 def _tz(zone: str | tzinfo) -> tzinfo:
@@ -1155,6 +1345,46 @@ def _past_cutoff(now_local: datetime, cutoff: Cutoff, week_starts: int) -> bool:
             > position(cutoff.weekday, cutoff.at.hour, cutoff.at.minute))
 
 
+def _cutoff_gates(used: Mapping[str, list[str]], config: Config, now: datetime) -> tuple[list[str], list[Refusal]]:
+    """(warnings, refusals) for the stores `used` (store: the slots it stocks) past their cutoff at `now`."""
+    warnings: list[str] = []
+    refusals: list[Refusal] = []
+    now_local = now.astimezone(_tz(config.timezone)) if used else now
+    for store, slot_names in sorted(used.items()):
+        cutoff = config.cutoffs.get(store)
+        if cutoff is None or not _past_cutoff(now_local, cutoff, config.week_starts):
+            continue
+        when = f"{_WEEKDAYS[cutoff.weekday]} {cutoff.at:%H:%M}"
+        if store in config.soft_cutoff_stores:
+            warnings.append(
+                f"past the {store} cutoff ({when}) for slots {', '.join(slot_names)}; "
+                f"the order may arrive after the visit")
+        else:
+            refusals.append(Refusal("past_cutoff", (
+                f"past the {store} cutoff ({when}) for slots {', '.join(slot_names)}; "
+                f"switch to Amazon or wait for next week")))
+    return warnings, refusals
+
+
+def cutoff_refusals(plan: Plan, config: Config, now: datetime) -> list[Refusal]:
+    """The plan's store cutoffs again at `now`: the submit tool's check with the clock at the send, so a plan made
+    at Thursday 23:59 isn't sent after midnight. The same rule as the planner's step 7 (never for an off-cycle
+    visit), from the plan's own lines."""
+    if plan.off_cycle:
+        return []
+    used: dict[str, list[str]] = defaultdict(list)
+    for line in plan.lines:
+        if line.purchase is None:
+            continue
+        for o in (line.purchase.primary, line.purchase.alternate):
+            if o is None:
+                continue
+            for slot in (line.slot, *(f for f, _ in line.purchase.feeds)):
+                if slot not in used[o.store]:
+                    used[o.store].append(slot)
+    return _cutoff_gates(used, config, now)[1]
+
+
 def _week_of(now_local: datetime, week_starts: int) -> date:
     """The day this week began: the latest `week_starts` weekday on or before now."""
     return now_local.date() - timedelta(days=(now_local.weekday() - week_starts) % 7)
@@ -1166,8 +1396,12 @@ def _stores_used(slots: list[_Slot]) -> dict[str, list[str]]:
         if s.purchase is None:
             continue
         for o in (s.purchase.primary, s.purchase.alternate):
-            if o is not None and s.slot not in used[o.store]:
-                used[o.store].append(s.slot)
+            if o is None:
+                continue
+            # A pooled purchase stocks the slots it feeds as well, so a late store makes them late too.
+            for slot in (s.slot, *(f for f, _ in s.purchase.feeds)):
+                if slot not in used[o.store]:
+                    used[o.store].append(slot)
     return used
 
 
@@ -1192,23 +1426,63 @@ def _line(s: _Slot) -> Line:
         units_to_load=s.need,
         purchase=s.purchase,
         pulled_product=pulled,
-        units_pulled=s.on_hand if pulled else 0)
+        units_pulled=s.on_hand if pulled else 0,
+        fed_by=s.fed_by)
 
 
-def _directive(off_cycle: bool, slots: list[_Slot]) -> str:
-    """The plan as the worker reads it: one row per slot, then what to buy where."""
+# A catalog name longer than this is cut in the directive, so one long name can't widen every row.
+MAX_NAME = 40
+# What to pull when a slot changes product and no receipt says what it holds now (#88).
+PULL_UNKNOWN = "remove whatever is in it to the closet"
+
+
+def _names(catalog: tuple[CatalogProduct, ...]) -> dict[str, str]:
+    """Each SKU's catalog name as one short line, for the directive. A name that is blank after
+    cleaning is left out, so the SKU stands alone. Runs of spaces become one: the simulator reads
+    the table's columns by two or more spaces (`vending.simulate.bridge.directive_loads`)."""
+    names = {}
+    for p in catalog:
+        name = " ".join("".join(c if c.isprintable() else " " for c in p.name or "").split())
+        if name:
+            names[p.product] = name if len(name) <= MAX_NAME else name[:MAX_NAME - 3].rstrip() + "..."
+    return names
+
+
+def _label(sku: str | None, names: Mapping[str, str]) -> str:
+    """A product as the worker reads it: the catalog's name with the SKU beside it, else the SKU alone."""
+    if sku is None:
+        return "-"
+    name = names.get(sku)
+    return f"{name} ({sku})" if name and name != sku else sku
+
+
+def _pull(s: _Slot, names: Mapping[str, str]) -> str:
+    """The directive's Pull cell: what to take out before loading. A product change into a slot whose
+    contents no receipt names tells the worker to empty it, rather than say nothing."""
+    if not s.changes_product:
+        return "-"
+    if s.state.unsure:
+        return PULL_UNKNOWN
+    return f"{s.on_hand} {_label(s.state.product, names)} to closet" if s.on_hand else "-"
+
+
+def _directive(off_cycle: bool, slots: list[_Slot], names: Mapping[str, str] | None = None) -> str:
+    """The plan as the worker reads it: one row per slot, then what to buy where. `names` is each
+    SKU's catalog name (`_names`); a SKU without one prints alone."""
+    names = names or {}
     rows = [("Slot", "Action", "Product", "Price", "Load", "From", "Pull")]
     for s in slots:
         source = "-"
         if s.purchase:
             source = "buy"
+        elif s.fed_by:
+            source = f"slot {s.fed_by}'s purchase"
         elif s.from_back_stock:
             source = "back stock"
-        pull = f"{s.on_hand} {s.state.product} to closet" if s.changes_product and s.on_hand else "-"
         rows.append((
-            s.slot, s.action.replace("_", " "), s.product or "-",
+            s.slot, s.action.replace("_", " "), _label(s.product, names),
             _dollars(s.price_cents) if s.price_cents is not None else "-",
-            str(s.need) if s.need else "-", source, pull))
+            str(s.need) if s.need else "-", source, _pull(s, names)))
     widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
     out = [f"Visit: {'midweek (off cycle)' if off_cycle else 'scheduled'}", ""]
     out += ["  ".join(c.ljust(w) for c, w in zip(r, widths)).rstrip() for r in rows]
@@ -1218,9 +1492,9 @@ def _directive(off_cycle: bool, slots: list[_Slot]) -> str:
         if s.purchase is None:
             continue
         p = s.purchase
-        shopping[p.primary.store].append(_shopping_row(s, p.primary, None))
+        shopping[p.primary.store].append(_shopping_row(s, p.primary, None, names))
         if p.alternate is not None:
-            shopping[p.alternate.store].append(_shopping_row(s, p.alternate, p.primary.store))
+            shopping[p.alternate.store].append(_shopping_row(s, p.alternate, p.primary.store, names))
     if shopping:
         out += ["", "Shopping list"]
         for store in sorted(shopping):
@@ -1229,9 +1503,12 @@ def _directive(off_cycle: bool, slots: list[_Slot]) -> str:
     return "\n".join(out)
 
 
-def _shopping_row(s: _Slot, o: PlannedPurchase, alternate_for: str | None) -> str:
-    row = (f"  {s.product}: {o.packs} x {o.units_per_pack}-pack, max "
-           f"{_dollars(o.max_price_per_pack_cents)} a pack, for slot {s.slot}")
+def _shopping_row(s: _Slot, o: PlannedPurchase, alternate_for: str | None,
+                  names: Mapping[str, str] | None = None) -> str:
+    fed = [f for f, _ in s.purchase.feeds] if s.purchase else []
+    row = (f"  {_label(s.product, names or {})}: {o.packs} x {o.units_per_pack}-pack, max "
+           f"{_dollars(o.max_price_per_pack_cents)} a pack, for slot{'s' if fed else ''} "
+           f"{', '.join([s.slot, *fed])}")
     if o.units_to_closet:
         row += f" ({o.units_to_closet} to closet)"
     if alternate_for:

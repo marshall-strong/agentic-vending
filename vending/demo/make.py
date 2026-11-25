@@ -1,7 +1,9 @@
 """Make the demo dashboard's made-up snapshot (`vending/demo/snapshot.json`).
 
     DATABASE_URL=postgresql://...@127.0.0.1:PORT/postgres python -m vending.demo.make
-    python -m vending.demo.make --check      # is the committed file what this makes?
+    python -m vending.demo.make --check      # are the committed files what this makes?
+
+It also makes the demo Products page's data (`vending/demo/products.json`, #55) from the same schema.
 
 It builds a throwaway schema in a LOCAL Postgres (it refuses any other host), fills it with made-up
 data, and runs the dashboard's own `snapshot()` on it as the public page does. So the file has exactly
@@ -318,9 +320,25 @@ def _entry(slot: str, sku: str, fill: int, price: str, reason: str) -> dict:
     return {"slot": slot, "product": sku, "fill_to": fill, "sale_price": price, "reason": reason}
 
 
+# The demand estimate the day-one run recorded with its plan (`vending.agent.capture_forecast`): made-up units per
+# class day, near but not equal to what the simulation sells, so the forecast panel has misses to show.
+FORECAST = {"11": "2.40", "13": "1.20", "16": "0.90", "17": "0.80", "22": "1.00", "24": "0.90", "25": "0.70",
+            "28": "0.80", "31": "1.70", "33": "1.70", "36": "0.70", "37": "3.40", "41": "1.30", "44": "0.70",
+            "46": "0.60", "47": "0.70", "52": "0.80", "54": "1.00", "55": "0.70", "58": "0.80"}
+FORECAST_BASIS = "fall prior: {segment}; 0 in-stock class days of our own so far, own rate after 5"
+
+
+def forecast() -> dict:
+    return {"source": "get_machine_state", "unit": "class_day", "as_of": _utc(2, 18).isoformat(),
+            "slots": [{"slot": s, "rate": FORECAST[s],
+                       "basis": FORECAST_BASIS.format(segment="fast seller" if float(FORECAST[s]) >= 1.5 else
+                                                      "slow seller, low-priced")} for s, *_ in DAY_ONE]}
+
+
 def plan_one() -> dict:
     return {"visit": "scheduled", "reason": PLAN_ONE_REASON,
-            "slots": [_entry(s, sku, fill, price, why) for s, sku, fill, price, _, why in DAY_ONE]}
+            "slots": [_entry(s, sku, fill, price, why) for s, sku, fill, price, _, why in DAY_ONE],
+            "forecast": forecast()}
 
 
 def plan_next() -> dict:
@@ -378,6 +396,16 @@ def seed_runs(conn) -> dict[str, int]:
     return ids
 
 
+def midweek_draft(red_bull: str) -> dict:
+    """A draft the run in progress previews: Friday's plan as a midweek visit, Red Bull (37) at `red_bull`. A
+    desired state lists every slot of ours (`planner._check_slot_list`)."""
+    slots = [{k: v for k, v in e.items() if k != "reason"} for e in plan_next()["slots"]]
+    for e in slots:
+        if e["slot"] == "37":
+            e["sale_price"] = red_bull
+    return {"off_cycle": True, "slots": slots}
+
+
 def seed_steps(conn, ids: dict[str, int]) -> None:
     steps = {
         "one": [
@@ -409,9 +437,21 @@ def seed_steps(conn, ids: dict[str, int]) -> None:
              "empty or nearly again, and Pepsi ran out on Sunday. Their price is too low for the demand, and a "
              "quarter more should still clear them.", False),
             (2, _utc(7, 14, 5), "tool_call", "get_sales_history", '{"slot": "31"}', False),
-            (2, _utc(7, 14, 5), "tool_result", "get_sales_history", "7 sold by Sunday night, empty since", False),
+            (2, _utc(7, 14, 5), "tool_result", "get_sales_history",
+             '{"data": [{"slot": "31", "price": "2.50", "units_sold_in_window": 7, "stock_on_hand": 0}]}', False),
+            (2, _utc(7, 14, 6), "tool_call", "get_sales_history", '{"slot": "37"}', False),
+            (2, _utc(7, 14, 6), "tool_result", "get_sales_history",
+             '{"data": [{"slot": "37", "price": "3.00", "units_sold_in_window": 24, "stock_on_hand": 0}]}', False),
             (3, _utc(7, 14, 7), "thinking", None, "vitaminwater sold 1 since Thursday. GORGIE was approved in "
              "November; try it there. Snapple sold 1, so pull it and swap a new product in next week.", False),
+            (3, _utc(7, 14, 7), "tool_call", "get_sales_history", '{"slot": "28"}', False),
+            (3, _utc(7, 14, 7), "tool_result", "get_sales_history",
+             '{"data": [{"slot": "28", "price": "2.50", "units_sold_in_window": 1, "stock_on_hand": 6}]}', False),
+            (3, _utc(7, 14, 7), "tool_call", "find_pack_price",
+             '{"sku": "GORGIE-ORIGINAL-20BOT", "store": "Walmart", "units_per_pack": 12}', False),
+            (3, _utc(7, 14, 7), "tool_result", "find_pack_price",
+             '{"success": true, "store": "Walmart", "units_per_pack": 12, "price_per_pack": "15.00", "stock": "in_stock"}',
+             False),
             (3, _utc(7, 14, 8), "tool_call", "preview_desired_state", '{"slots": 20}', False),
             (3, _utc(7, 14, 8), "tool_result", "preview_desired_state", "most we pay $173.40, 0 refusals", False),
             (4, _utc(7, 14, 10), "tool_call", "submit_desired_state", '{"slots": 20}', False),
@@ -423,6 +463,16 @@ def seed_steps(conn, ids: dict[str, int]) -> None:
             (1, _utc(9, 14, 51), "tool_result", "get_machine_state", "20 lanes; last poll 1 h 21 min ago", False),
             (2, _utc(9, 14, 53), "tool_call", "submit_desired_state", '{"slots": 20}', False),
             (2, _utc(9, 14, 53), "tool_result", "submit_desired_state", "refused: a request for Friday is already pending (pr-002)", True),
+            (3, _utc(9, 14, 56), "thinking", None, "Friday's request is in. Red Bull is down to 2 with two class days "
+             "to go: preview a midweek top-up to see what it costs.", False),
+            (3, _utc(9, 14, 57), "tool_call", "preview_desired_state", json.dumps({"desired": midweek_draft("3.00")}),
+             False),
+            (3, _utc(9, 14, 57), "tool_result", "preview_desired_state", json.dumps(
+                {"ok": True, "plan_hash": "demo-1", "most_we_pay": "45.40"}), False),
+            (4, _utc(9, 14, 59), "thinking", None, "The visit costs $25 and Red Bull's two days make about $11. "
+             "Try $3.25 instead, as Friday's plan does.", False),
+            (4, _utc(9, 14, 59), "tool_call", "preview_desired_state", json.dumps({"desired": midweek_draft("3.25")}),
+             False),
         ],
     }
     with conn.cursor() as cur:
@@ -430,6 +480,24 @@ def seed_steps(conn, ids: dict[str, int]) -> None:
             cur.executemany(
                 "insert into agent_steps (run_id, turn, at, kind, tool, content, is_error) values (%s, %s, %s, %s, %s, %s, %s)",
                 [(ids[key], *row) for row in rows])
+
+
+# The run in progress's model calls so far (`model_calls`, as the harness writes them): turns 1 to 3 answered,
+# turn 4 still at its worst case. The run cap is the team's $2 (`model_run_cap_cents`).
+RUN_CALLS = (("1", "0.19", "ok"), ("2", "0.24", "ok"), ("3", "0.27", "ok"), ("4", "0.41", "pending"))
+RUN_CAP_CENTS = 200
+
+
+def seed_model_calls(conn, run_id: int) -> None:
+    from vending import agent_runs
+
+    for turn, cost, status in RUN_CALLS:
+        conn.execute("insert into model_calls (at, purpose, label, run_id, model, key_env, status, max_tokens,"
+                     " worst_case_usd, cost_usd, recorded_by) values (%s, 'live', %s, %s, %s,"
+                     " 'VENDING_ANTHROPIC_API_KEY', %s, 16000, %s, %s, 'agent')",
+                     (_utc(9, 14, 50 + 2 * int(turn)), f"agent run {run_id} turn {turn}",
+                      agent_runs.harness_key(run_id), MODEL, status,
+                      Decimal("0.41") if status == "pending" else Decimal(cost), Decimal(cost)))
 
 
 def seed_actions(conn) -> None:
@@ -531,6 +599,23 @@ def seed_ledger(conn) -> None:
         ledger.record_tokens(conn, cost, MODEL, 40000, 2500, f"demo_run_{key}", at=at)
 
 
+def seed_midweek_wake(conn) -> None:
+    """This week's wake-up (#219), decided Monday 7 Dec after the sync round, requested then too.
+
+    Made-up slots and numbers from SELECTIONS. The reason is the shape `vending.midweek_wake.decide`
+    writes: which slots, their projection, the planner's cost, the saved margin against the fee, the rule."""
+    conn.execute(
+        "insert into midweek_wakeups (week_start, decided_at, reason, slots, saved_margin_cents,"
+        " requested_at, requested_by) values (%s, %s, %s, %s, %s, %s, %s)",
+        (_utc(5, 0).date(), _utc(7, 15, 5),
+         "Slots 16, 17 and 25 are projected to sell out before Friday's restock (16: empty now; "
+         "17: 1 on hand at 1.4 a class day; 25: empty now). A midweek visit requested now plans on "
+         "Wednesday afternoon; the planner prices it at up to $85.84 with the $25.00 fee, and the "
+         "sales it would save before Friday are worth $31.02 in margin at the most we pay, more than "
+         "the fee (docs/restock-policy.md, section 2).",
+         ["16", "17", "25"], 3102, _utc(7, 15, 5), "midweek_wake"))
+
+
 def seed_visits(conn) -> None:
     """The Visitors tile: made-up counts. A browser is a made-up id, as the counter's cookie would be."""
     conn.execute("update page_visit_totals set browsers = 5, sign_ins = 9, visits = 31, since = %s", (_utc(2, 16),))
@@ -542,8 +627,8 @@ def seed_visits(conn) -> None:
         # (page_visits has an index on `at`; the writer's own bookkeeping isn't needed to read the counts.)
 
 
-def seed(conn) -> None:
-    """Fill a migrated, empty schema with the made-up week."""
+def seed(conn) -> dict[str, int]:
+    """Fill a migrated, empty schema with the made-up week. Returns the runs' ids by their keys."""
     from vending import config, slots
 
     conn.execute("insert into slot_assignment (team, device_id, slots, first_read_at, last_checked_at, response)"
@@ -557,11 +642,118 @@ def seed(conn) -> None:
     seed_purchases(conn, sim)
     ids = seed_runs(conn)
     seed_steps(conn, ids)
+    seed_model_calls(conn, ids["now"])
+    config.set_value(conn, "model_run_cap_cents", RUN_CAP_CENTS, "kevin")
     seed_counts(conn)
+    seed_sourcing(conn)
+    seed_price_checks(conn)
+    seed_midweek_wake(conn)
     seed_visits(conn)
     config.set_halted(conn, False, "kevin")
     conn.execute("update config set updated_at = %s where key = 'halted'", (_utc(2, 14),))
     seed_actions(conn)
+    return ids
+
+
+# Runs with a page of their own in the demo (`vending.run_page`): the one in progress, the last finished one and
+# the failure.
+RUN_PAGES = ("now", "friday", "failed")
+
+
+# Sourcing and the day-one plan go in with the dashboard's seed, so the price-check panel and the plan history
+# see them; the Products page reads the same rows. The two day-one products that found no seller have no sourcing
+# row (both pages flag them), Snapple's and Recess's prices are stale, GORGIE is sourced but not in the day-one
+# plan, and Coca-Cola has an alternate.
+UNSOURCED = ("TOPOCHICO-ORIGINAL-16BOT", "MOUNTAIN-BAJA_BLA-20BOT")
+STALE_SOURCING = {"SNAPPLE-ORIGINAL-16BOT": _utc(25, 17, month=11), "RECESS-LIME-12CAN": _utc(30, 15, month=11)}
+CATALOG_SYNCED = _utc(9, 14, 5)
+
+
+def seed_sourcing(conn) -> None:
+    """Our sourcing rows and the picked day-one plan."""
+    from psycopg.types.json import Jsonb
+
+    from vending.sourcing import default_max
+
+    rows = [(sku, "primary", "Walmart", units, _cents(price), default_max(_cents(price)),
+             STALE_SOURCING.get(sku, _utc(4, 16)))
+            for sku, (_, _, _, _, units, price) in PRODUCTS.items() if sku not in UNSOURCED]
+    rows.append(("COCA-ORIGINAL-20BOT", "alternate", "Costco", 24, 3149, 3600, _utc(4, 16)))
+    with conn.cursor() as cur:
+        cur.executemany(
+            "insert into sourcing_options (sku, rank, store, units_per_pack, expected_cents, max_cents, checked_at,"
+            " checked_by) values (%s, %s, %s, %s, %s, %s, %s, 'demo')", rows)
+    day_one = [{"slot": slot, "sku": sku, "units": fill, "price_cents": _cents(price), "why": why}
+               for slot, sku, fill, price, _, why in DAY_ONE]
+    conn.execute("insert into first_fill_plans (loaded_at, loaded_by, label, source_note, plan, projection, slots, picked)"
+                 " values (%s, 'demo', '6', 'made up', %s, '{}', %s, true)",
+                 (_utc(28, 15, month=11), Jsonb({"day_one": day_one}), list(SELECTIONS)))
+
+
+# The weekly price checks: a dry run on Tue 1 Dec, then the first live one on Tue 8 Dec (12:00 Eastern), on Haiku
+# with the Sonnet check. (sku, store, kind, minutes after noon, units, price in cents or None, outcome, model).
+CHEAP, CHECKER = "claude-haiku-5-5", "claude-sonnet-5-5"
+PRICE_CHECK_DUE = (_utc(1, 17), _utc(8, 17))
+LOOKUPS = (
+    ("COCA-ORIGINAL-20BOT", "Walmart", "search", 2, 12, 1740, "found", CHEAP),
+    ("COCA-ORIGINAL-20BOT", "Costco", "search", 3, 24, 3149, "found", CHEAP),
+    ("COCA-ORIGINAL-20BOT", "Amazon", "search", 4, None, None, "not_found", CHEAP),
+    ("PEPSI-ORIGINAL-20BOT", "Walmart", "listing", 6, 12, 1620, "found", CHEAP),
+    ("REDBULL-ORIGINAL-8_4CAN", "Walmart", "listing", 8, 12, 2190, "found", CHEAP),
+    ("REDBULL-ORIGINAL-8_4CAN", "Walmart", "check", 9, 12, 2190, "found", CHECKER),
+    ("MONSTER-ORIGINAL-16CAN", "Walmart", "listing", 11, 12, 2340, "found", CHEAP),
+    ("MONSTER-ORIGINAL-16CAN", "Walmart", "check", 12, 12, 2110, "check_disagrees", CHECKER),
+    ("PREMIER-CHOCOLAT-11CAR", "Walmart", "listing", 14, 12, 3720, "found", CHEAP),
+    ("PREMIER-CHOCOLAT-11CAR", "Walmart", "check", 15, 12, 3720, "found", CHECKER),
+    ("GORGIE-ORIGINAL-20BOT", "Walmart", "listing", 17, 12, 1500, "found", CHEAP),
+    ("TOPOCHICO-ORIGINAL-16BOT", "Amazon", "search", 20, None, None, "not_found", CHEAP),
+    ("TOPOCHICO-ORIGINAL-16BOT", "Walmart", "search", 21, None, None, "not_found", CHEAP),
+    ("TOPOCHICO-ORIGINAL-16BOT", "Costco", "search", 22, None, None, "not_found", CHEAP),
+    ("TOPOCHICO-ORIGINAL-16BOT", "BJs", "search", 23, None, None, "not_found", CHEAP),
+    ("MOUNTAIN-BAJA_BLA-20BOT", "Walmart", "search", 26, None, None, "not_found", CHEAP),
+    ("MOUNTAIN-BAJA_BLA-20BOT", "Amazon", "search", 27, 12, 1890, "out_of_stock", CHEAP),
+)
+# The readings before them: a person's lookups on Tue 1 Dec, on Sonnet.
+EARLIER_LOOKUPS = (("REDBULL-ORIGINAL-8_4CAN", 2040), ("MONSTER-ORIGINAL-16CAN", 2100),
+                   ("PREMIER-CHOCOLAT-11CAR", 3120), ("COCA-ORIGINAL-20BOT", 1740))
+
+
+def seed_price_checks(conn) -> None:
+    """The weekly price checks, their lookups and the sourcing rows the live one refreshed."""
+    from vending import config, price_schedule
+
+    config.set_value(conn, price_schedule.DB_MODE_KEY, "live", "kevin")
+    rows = [(_utc(1, 18) + timedelta(minutes=n), sku, "Walmart", "search", 12, 12, 12, cents, "found", CHECKER,
+             Decimal("0.0400"), "kevin") for n, (sku, cents) in enumerate(EARLIER_LOOKUPS)]
+    due = PRICE_CHECK_DUE[1]
+    for sku, store, kind, minutes, units, cents, outcome, model in LOOKUPS:
+        cost = Decimal("0.0400") if model == CHECKER else Decimal("0.0150")
+        rows.append((due + timedelta(minutes=minutes), sku, store, kind, 12, 12, units, cents, outcome, model, cost,
+                     price_schedule.BY))
+    with conn.cursor() as cur:
+        cur.executemany(
+            "insert into price_lookups (at, sku, store, kind, asked_min, asked_max, units_per_pack, price_cents, outcome,"
+            " model, cost_usd, by) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)", rows)
+    spent = sum(r[10] for r in rows if r[11] == price_schedule.BY)
+    # What the live check stored: Red Bull's confirmed price (Premier's was over its max, Monster's not confirmed).
+    conn.execute("update sourcing_options set expected_cents = 2190, checked_at = %s, checked_by = 'agent-search',"
+                 " note = 'weekly price check' where sku = 'REDBULL-ORIGINAL-8_4CAN' and rank = 'primary'",
+                 (due + timedelta(minutes=10),))
+    conn.execute("update sourcing_options set checked_at = %s, checked_by = 'agent-search', note = 'weekly price check'"
+                 " where sku in ('COCA-ORIGINAL-20BOT', 'PEPSI-ORIGINAL-20BOT', 'GORGIE-ORIGINAL-20BOT')",
+                 (due + timedelta(minutes=18),))
+    conn.execute(
+        "insert into price_check_runs (due_at, latest_at, mode, compare, claimed_at, finished_at, outcome, drinks,"
+        " changed, failures, cost_usd) values (%s, %s, 'dry-run', true, %s, %s, 'done', 18, 0, 0, 0),"
+        " (%s, %s, 'live', true, %s, %s, 'partial', 9, 1, 2, %s)",
+        (PRICE_CHECK_DUE[0], PRICE_CHECK_DUE[0] + timedelta(hours=8), PRICE_CHECK_DUE[0],
+         PRICE_CHECK_DUE[0] + timedelta(minutes=2), due, due + timedelta(hours=8), due, due + timedelta(minutes=30),
+         spent))
+
+
+def seed_products(conn) -> None:
+    """The catalog's last sync, for the Products page (its sourcing and plan went in with the dashboard's seed)."""
+    conn.execute("insert into catalog_syncs (synced_at, product_count) values (%s, %s)", (CATALOG_SYNCED, len(PRODUCTS)))
 
 
 # --- Making the file --------------------------------------------------------------------------------------
@@ -573,6 +765,8 @@ def sync_round() -> dict:
     start = _utc(9, 14, 0)
     return {"status": "ok", "started_at": _utc(2, 15, 30).isoformat(), "rounds": 162,
             "last_round_at": start.isoformat(), "next_round_at": _utc(9, 15, 0).isoformat(),
+            "price_check": {"mode": "live", "next_at": _utc(15, 17).isoformat(), "problem": None,
+                            "last": {"due_at": PRICE_CHECK_DUE[1].isoformat(), "mode": "live", "outcome": "partial"}},
             "results": [{"job": job, "started_at": start.isoformat(), "seconds": seconds, "exit_code": 0, "outcome": "ok"}
                         for job, seconds in jobs]}
 
@@ -580,14 +774,35 @@ def sync_round() -> dict:
 def make(writer, reader) -> dict:
     """The demo snapshot from a migrated empty schema: `writer` seeds it, `reader` (read-only, like the
     dashboard's own connection) is snapshotted the way the public page is."""
-    from vending import dashboard, slots
+    from vending import dashboard, money_panel, run_page, slots
 
     # Our slots are read as the clock stood at AS_OF, a week after the lock.
     with mock.patch.object(slots, "clock", lambda conn: AS_OF):
-        seed(writer)
+        ids = seed(writer)
         snap = dashboard.snapshot(reader, AS_OF, public=True, syncs=sync_round())
+        # Each run page's data, as the public route reads it (`pages._run`); served from this file by id.
+        snap["run_pages"] = {str(ids[key]): run_page.read(reader, ids[key], AS_OF, public=True) for key in RUN_PAGES}
+        # Retain the replay, dialogue and development spend notes from the fictional seed.
+        # The served demo reads the finished file and never calls these readers.
+        tags = {slot: row["price"] for slot, row in snap["sales"]["data"]["slots"].items()}
+        snap["runs"]["data"] = dashboard._runs(reader, AS_OF, tags, dashboard.our_selections(snap),
+                                                modes=("live", "dry-run", "replay"))
+        snap["money"]["data"]["notes"] = money_panel.read(reader, AS_OF)["notes"]
+    for run in snap["runs"]["data"]:
+        if run["status"] == "failed" and run["detail"]:
+            run["detail"] = dashboard.HIDDEN
     snap["demo"] = True
     return snap
+
+
+def make_products(writer, reader) -> dict:
+    """The demo Products page's data, after `make` on the same schema: the extra seed, then the page's own
+    `read`, as the public page does."""
+    from vending import products_page, slots
+
+    with mock.patch.object(slots, "clock", lambda conn: AS_OF):
+        seed_products(writer)
+        return products_page.read(reader, AS_OF, public=True)
 
 
 def _require_local(url: str) -> None:
@@ -640,7 +855,7 @@ def render_file(snap: dict) -> str:
 
 
 def main(argv: list[str]) -> int:
-    from vending import settings
+    from vending import products_page, settings
     from vending.demo import SNAPSHOT
 
     parser = argparse.ArgumentParser(prog="python -m vending.demo.make", description=__doc__.splitlines()[0])
@@ -651,12 +866,15 @@ def main(argv: list[str]) -> int:
     _require_local(url)
     with scratch_schema(url) as (writer, reader):
         text = render_file(make(writer, reader))
+        products = products_page.render_file(make_products(writer, reader))
+    files = ((args.out, text), (args.out.with_name(products_page.DEMO_FILE.name), products))
     if args.check:
-        same = args.out.read_text(encoding="utf-8") == text
-        print("the committed snapshot is what the generator makes" if same else "the committed snapshot is OUT OF DATE; run without --check")
+        same = all(path.read_text(encoding="utf-8") == body for path, body in files)
+        print("the committed files are what the generator makes" if same else "the committed files are OUT OF DATE; run without --check")
         return 0 if same else 1
-    args.out.write_text(text, encoding="utf-8")
-    print(f"wrote {args.out} ({len(text):,} bytes, sha256 {hashlib.sha256(text.encode()).hexdigest()[:12]})")
+    for path, body in files:
+        path.write_text(body, encoding="utf-8")
+        print(f"wrote {path} ({len(body):,} bytes, sha256 {hashlib.sha256(body.encode()).hexdigest()[:12]})")
     return 0
 
 

@@ -1,7 +1,11 @@
-"""The machine close-up on the dashboard: each of our lanes drawn top-down, Now and Next Friday.
+"""The machine close-up on the dashboard: each of our lanes drawn top-down, Now and Next restock.
 
-`vending.dashboard` calls `closeup_html` for "In the machine". It draws no photos: every
-package is vector art built from a small shape library, picked by the catalog's `size`
+"Next restock" is the plan's next visit: almost always the free Friday visit, but a paid midweek
+visit is a restock too, and either can change anything.
+
+`vending.dashboard` calls `split_html` for "In the machine": the machine's whole front, and the
+close-up of a picked selection's shelf with its facts. It draws no photos: every package is
+vector art built from a small shape library, picked by the catalog's `size`
 ("12 oz can", "20 oz bottle") and coloured from a look table, so a product added to the
 catalog today draws correctly with no image and no edit here. Only string building, no
 model calls, no network.
@@ -17,8 +21,8 @@ model calls, no network.
    `config.capacity_overrides`). With none, no empty slots are drawn beyond what the plan fills,
    and the lane says "capacity not counted yet".
 
-Only our selections (the stored assignment) are drawn. Every other selection is a grey card
-with its number and "Not ours": nothing else about it is in the HTML.
+Only our selections (the stored assignment) are drawn. Every other selection is a grey card, half
+as wide as ours, with its number and "Not ours": nothing else about it is in the HTML.
 """
 
 from __future__ import annotations
@@ -34,6 +38,9 @@ from typing import Any
 from vending import capacity, config
 
 SHELVES, COLUMNS = 5, 8
+# The mark on the wildcard slot (#166, config `wildcard_slot`): the one fixed slot that tests products.
+WILD_TITLE = "The wildcard: the one fixed slot that tests products and may sell above the regular ceiling"
+WILD_PILL = f'<span class="pill wild" title="{WILD_TITLE}">wildcard</span>'
 
 # --- Package shapes -------------------------------------------------------------------------------
 # d = body diameter (or width), h = overall height, in mm. Bottles add body, shoulder, neck and
@@ -136,17 +143,19 @@ def _f(v: float) -> str:
 def lane_products(snap: Mapping, ours: Iterable[str]) -> list[str]:
     """Every product our lanes hold now or the plan puts in them, for `read_products`. Only ours."""
     ours = set(ours)
-    found: set[str] = set()
+    named: list = []
     stock = snap.get("stock") or {}
     if stock.get("ok"):
-        found.update(v.get("product") for s, v in stock["data"]["slots"].items() if s in ours)
+        named += [v.get("product") for s, v in stock["data"]["slots"].items() if s in ours]
     counts = snap.get("counts") or {}
     if counts.get("ok"):
-        found.update(v.get("product") for s, v in counts["data"].items() if s in ours)
+        named += [v.get("product") for s, v in counts["data"].items() if s in ours]
     plan = snap.get("weekly_plan", snap.get("plan")) or {}
     if plan.get("ok") and plan["data"]:
-        found.update((s.get("now") or {}).get("product") for s in plan["data"]["slots"] if s["slot"] in ours)
-    return sorted(p for p in found if isinstance(p, str) and p)
+        named += [(s.get("now") or {}).get("product") for s in plan["data"]["slots"] if s["slot"] in ours]
+    # Only text is a product: a stored plan can hold anything, and a list or dict here (unhashable)
+    # used to crash the whole snapshot.
+    return sorted({p for p in named if isinstance(p, str) and p})
 
 
 def read_products(conn: Any, skus: list[str]) -> dict:
@@ -485,6 +494,7 @@ class Lane:
     def __init__(self, slot: str, view: dict, products: dict | None):
         now, nxt = view["now"], view["next"]
         self.slot, self.view, self.change = slot, view, view.get("change")
+        self.wildcard = bool(view.get("wildcard"))
         self.shelf, self.col = (int(slot[0]), int(slot[1])) if len(slot) == 2 and slot.isdigit() else (0, 0)
         self.source = now["source"]
         self.counted = self.source in ("photo", "door")
@@ -495,8 +505,8 @@ class Lane:
         self.next = nxt
         self.fill = _int(view["fill_to"])
         self.next_item = self.now_item
-        self.swap = False      # Friday replaces the product in the lane with another
-        self.new = False       # Friday puts a product into a lane with none on record
+        self.swap = False      # the next restock replaces the product in the lane with another
+        self.new = False       # the next restock puts a product into a lane with none on record
         self.pulled = bool(nxt and nxt["pulled"])
         self.next_units = self.units
         if nxt is not None and nxt["in_plan"]:
@@ -517,14 +527,14 @@ class Lane:
 
     @property
     def back(self) -> int | None:
-        """How many go back Friday: the plan's fill less the units on hand, when both are known."""
+        """How many go back at the next restock: the plan's fill less the units on hand, when both are known."""
         if self.fill is None or self.units is None or self.swap or self.pulled:
             return None
         return max(self.fill - self.units, 0)
 
     @property
     def added(self) -> int | None:
-        """Units that go into the lane Friday: the refill, or all of a swap's or a new product's."""
+        """Units that go into the lane at the next restock: the refill, or all of a swap's or a new product's."""
         if self.swap or self.new:
             return self.next_units
         return self.back
@@ -537,7 +547,7 @@ class Lane:
         return f"<b>{shown}</b>{tail}"
 
     def aria(self) -> str:
-        parts = [f"Selection {self.slot}"]
+        parts = [f"Selection {self.slot}" + (", the wildcard" if self.wildcard else "")]
         item = self.now_item
         if self.counted_empty:
             parts.append("counted empty")
@@ -557,16 +567,16 @@ class Lane:
         elif not nxt["in_plan"]:
             parts.append("not in the plan")
         elif self.pulled:
-            parts.append("pulled on Friday")
+            parts.append("pulled at the next restock")
         elif (self.swap or self.new) and self.next_item:
-            parts.append(f"{'swapped' if self.swap else 'loaded'} Friday to {self.next_item.name}"
+            parts.append(f"{'swapped' if self.swap else 'loaded'} at the next restock to {self.next_item.name}"
                          + (f", {self.next_units} loaded" if self.next_units is not None else ""))
         elif self.fill is not None:
             back = self.back
-            parts.append(f"filled to {self.fill} on Friday"
+            parts.append(f"filled to {self.fill} at the next restock"
                          + ("" if back is None else f", {back} go back" if back else ", nothing to add"))
         if nxt and nxt["old_price"] is not None:
-            parts.append(f"price {money(nxt['old_price'])} to {money(nxt['price'])} Friday")
+            parts.append(f"price {money(nxt['old_price'])} to {money(nxt['price'])} at the next restock")
         if self.change and self.change.get("reason"):
             parts.append(f"reason: {_cut(self.change['reason'])}")
         return ". ".join(parts) + "."
@@ -639,8 +649,8 @@ def _badge(x: float, y: float, text: str, cls: str, fill: str, ink: str) -> str:
 
 def _layer(lane: Lane, item: Item, have: int | None, want: int | None, cap: int | None, estimate: bool,
            animate: bool) -> str:
-    """The packages on one rail. `have` is on the rail now (None: unknown), `want` after Friday
-    (None: the same as now). With `animate`, the slots Friday fills drop in on the Next Friday view."""
+    """The packages on one rail. `have` is on the rail now (None: unknown), `want` after the next restock
+    (None: the same as now). With `animate`, the slots the restock fills drop in on the Next restock view."""
     s, xc, yb = _rail(lane.col)
     pitch = item.pitch(cap)
     unknown = have is None
@@ -702,7 +712,7 @@ def _tag(price: Any, x: float = 54, w: float = 40) -> str:
 
 
 def _price_change(old: Any, new: Any) -> str:
-    """Friday's tag: the old price struck through, then the new one, outlined."""
+    """The tag after the next restock: the old price struck through, then the new one, outlined."""
     return (f'<rect x="35" y="183" width="28" height="16" rx="3" fill="#c9ccd1"/><text x="49" y="194.6" '
             f'text-anchor="middle" font-size="8" font-weight="800" fill="#4a5059" font-family="Arial,sans-serif">'
             f'{_e(money(old))}</text><line x1="37" y1="191.6" x2="61" y2="191.6" stroke="#d6232a" stroke-width="1.6"/>'
@@ -755,28 +765,28 @@ def lane_card(lane: Lane, prev: str | None, nxt_slot: str | None, linked: bool) 
     item, nxt = lane.now_item, lane.next
     estimate = lane.source == "photo" and not lane.counted_empty
     now_count = lane.count_text(lane.units, lane.cap, item, estimate)
-    # Now: what Friday does to the lane.
+    # Now: what the next restock does to the lane.
     if nxt is None:
         now_chip = _chip("no plan yet")
     elif not nxt["in_plan"]:
         now_chip = _chip("not in plan")
     elif lane.pulled:
-        now_chip = _chip("pulled Friday", "bad")
+        now_chip = _chip("pulled at restock", "bad")
     elif lane.swap and lane.next_item:
-        now_chip = _chip("swap Friday", "info")
+        now_chip = _chip("swap at restock", "info")
     elif lane.new and lane.next_item:
-        now_chip = _chip("new product Friday", "info")
+        now_chip = _chip("new product at restock", "info")
     elif lane.fill is None:
         now_chip = _chip("price change" if nxt["old_price"] is not None else "keep as is")
     elif lane.units is None:
-        now_chip = _chip("+? back Friday", "unk")
+        now_chip = _chip("+? at restock", "unk")
     elif lane.back:
-        now_chip = _chip(f"+{lane.back} back Friday", "fri")
+        now_chip = _chip(f"+{lane.back} at restock", "fri")
     else:
         now_chip = _chip(f"plan {lane.fill}, nothing to add")
     if lane.units == 0:
         now_chip = _chip("empty", "bad") + " " + now_chip
-    # Next Friday.
+    # Next restock.
     next_item = lane.next_item
     if nxt is None or not nxt["in_plan"]:
         next_count, next_chip = now_count, now_chip
@@ -814,7 +824,7 @@ def lane_card(lane: Lane, prev: str | None, nxt_slot: str | None, linked: bool) 
             target.append(f'<p class="ma-nt">capacity {cap} ({it.cap_note})</p>')
     if nxt is not None and nxt["old_price"] is not None:
         notes_next.append(f'<p class="ma-nt ma-price"><s>{_e(money(nxt["old_price"]))}</s> &rarr; '
-                          f'<b>{_e(money(nxt["price"]))}</b> from Friday</p>')
+                          f'<b>{_e(money(nxt["price"]))}</b> from the next restock</p>')
     reason = (lane.change or {}).get("reason")
     if reason:
         notes_next.append(f'<p class="ma-why" title="{_e(" ".join(str(reason).split()))}">{_e(_cut(reason))}</p>')
@@ -832,10 +842,11 @@ def lane_card(lane: Lane, prev: str | None, nxt_slot: str | None, linked: bool) 
                + (f'<a href="#lane-{_e(nxt_slot)}" data-lane="{_e(nxt_slot)}" aria-label="Next lane, selection '
                   f'{_e(nxt_slot)}">&rsaquo;</a>' if nxt_slot else '<span></span>') + '</div>')
     plan_link = (f'<a class="ma-plan" href="#slot-{_e(lane.slot)}">plan row</a>' if linked else "")
-    classes = ["ma-lane"] + (["ma-changed"] if lane.change else [])
+    classes = ["ma-lane"] + (["ma-changed"] if lane.change else []) + (["ma-wild"] if lane.wildcard else [])
     return (f'<article class="{" ".join(classes)}" id="lane-{_e(lane.slot)}" role="group" '
             f'aria-label="{_e(lane.aria())}">{nav}{lane_svg(lane)}<div class="ma-meta">{head_now}{head_next}'
-            f'<p class="ma-ct"><span class="v-now">{now_count}</span><span class="v-next">{next_count}</span></p>'
+            + (f'<p class="ma-wl" title="{WILD_TITLE}">wildcard</p>' if lane.wildcard else "")
+            + f'<p class="ma-ct"><span class="v-now">{now_count}</span><span class="v-next">{next_count}</span></p>'
             f'<p class="ma-chips"><span class="v-now">{now_chip}</span><span class="v-next">{next_chip}</span></p>'
             + (f'<div class="v-now">{"".join(notes_now)}</div>' if notes_now else "")
             + (f'<div class="v-next">{"".join(notes_next)}</div>' if notes_next else "")
@@ -847,131 +858,308 @@ def _not_ours(slot: str) -> str:
             f'<div><span class="ma-n">{_e(slot)}</span><span class="ma-t">Not ours</span></div></article>')
 
 
-# --- The machine front, to pick a shelf ----------------------------------------------------------------
+# --- The machine front: every selection; ours open their close-up --------------------------------------
 
-FW, FH = 250, 476
-GX, GY, GW, PITCH = 14, 24, 222, 78
-FS = 0.245   # mm to front-map units: packages keep their true sizes to each other
+def _shown(units: int | None, estimate: bool) -> str:
+    """A lane's count as the front shows it: 5, ~4 (photo count), 0, or ? (no record)."""
+    if units is None:
+        return "?"
+    return f"~{units}" if estimate and units else str(units)
 
 
-def _front(lanes: dict[str, Lane], ours: set[str]) -> str:
-    out = [f'<svg class="ma-front" viewBox="0 0 {FW} {FH}" aria-hidden="true" focusable="false">'
-           f'<rect width="{FW}" height="{FH}" rx="12" fill="#16181c" stroke="#2c3037" stroke-width="2"/>'
-           f'<rect x="{GX}" y="{GY}" width="{GW}" height="{PITCH * SHELVES + 8}" rx="3" fill="url(#ma-glass)" '
-           f'stroke="#444a54" stroke-width="2"/>']
-    width = GW / COLUMNS
+def _gauge(units: int | None, size: int, cls: str) -> str:
+    """One view's fill bar, as a share of `size` (the capacity, else the plan's fill)."""
+    if not units or not size:
+        return ""
+    return f'<i class="{cls}" style="width:{100 * min(units, size) / size:.0f}%"></i>'
+
+
+def _front_marks(lane: Lane) -> str:
+    """What the next restock does to the lane, as one or two small badges on its front cell."""
+    nxt = lane.next
+    if nxt is None or not nxt["in_plan"]:
+        return ""
+    marks = []
+    if lane.pulled:
+        marks.append(("pull", "bad", "pulled at the next restock"))
+    elif lane.swap and lane.next_item is not None:
+        marks.append(("swap", "info", f"swapped at the next restock to {lane.next_item.name}"))
+    elif lane.new and lane.next_item is not None:
+        marks.append(("new", "info", f"loaded at the next restock with {lane.next_item.name}"))
+    elif lane.back:
+        marks.append((f"+{lane.back}", "fri", f"+{lane.back} at restock"))
+    elif lane.fill and lane.units is None:
+        marks.append(("+?", "unk", f"filled to {lane.fill} at the next restock; how many go back is unknown"))
+    if nxt["old_price"] is not None and not lane.pulled:
+        marks.append(("$", "warn", f"price {money(nxt['old_price'])} to {money(nxt['price'])} at the next restock"))
+    return "".join(f'<span class="fc-mk {tone}" title="{_e(title)}">{_e(tag)}</span>' for tag, tone, title in marks)
+
+
+def _front_art(lane: Lane, after_item: Item | None, after_units: int | None) -> str:
+    """The front package of the lane, Now and after the next restock, true to size against every other cell."""
+    parts = []
+    at = "translate(23 66) scale(0.285)"
+    blank = "EMPTY" if lane.counted_empty else "?"
+    for cls, item, units, empty in (("v-now", lane.now_item, lane.units, blank),
+                                    ("v-next", after_item, after_units, "PULL" if lane.pulled else blank)):
+        if item is None:
+            parts.append(f'<text class="{cls}" x="23" y="44" text-anchor="middle" font-size="{14 if empty == "?" else 9}" '
+                         f'font-weight="800" fill="#7c8796" font-family="Arial,sans-serif">{empty}</text>')
+        elif units == 0:
+            parts.append(f'<use class="ma-ghost {cls}" href="#ma-s-{item.key}" transform="{at}"/>')
+        else:
+            parts.append(f'<use class="{cls}" href="#ma-f-{item.key}" style="{_style(item)}" transform="{at}"/>')
+    return f'<svg class="fc-art" viewBox="0 0 46 68" aria-hidden="true" focusable="false">{"".join(parts)}</svg>'
+
+
+def _front_count(units: int | None, cap: int | None, estimate: bool, cls: str) -> str:
+    tone = "unk" if units is None else "zero" if units == 0 else ""
+    tail = f"<small>/{cap}</small>" if cap and units is not None else ""
+    return f'<span class="fc-ct {cls}"><b class="{tone}">{_shown(units, estimate)}</b>{tail}</span>'
+
+
+def pick_href(slot: str) -> str:
+    """Where a link that picks one of ours goes. With scripts the page picks in place; without them the
+    #target shows the close-up, and the query asks the server to keep the pick through the timed reload."""
+    return f"?sel={_e(slot)}#sel-{_e(slot)}"
+
+
+def front_cell(lane: Lane) -> str:
+    """One of our selections on the machine's front: number, next-restock badge, package, count against
+    capacity, price, name and fill bar, Now and Next restock. A link that opens the selection's close-up."""
+    estimate = lane.source == "photo" and not lane.counted_empty
+    nxt = lane.next
+    planned = nxt is not None and nxt["in_plan"]
+    after_item = (None if lane.pulled else lane.next_item) if planned else lane.now_item
+    after_units = (0 if lane.pulled else lane.next_units) if planned else lane.units
+    counts = (_front_count(lane.units, lane.cap, estimate, "v-now")
+              + _front_count(after_units, lane.next_cap if planned else lane.cap, estimate and not planned, "v-next"))
+    if nxt is not None and nxt["old_price"] is not None:
+        price = (f'<span class="fc-pr v-now">{_e(money(lane.price))}</span>'
+                 f'<span class="fc-pr v-next"><b class="up">{_e(money(nxt["price"]))}</b></span>')
+    elif nxt is not None and nxt["price"] is not None and lane.price is None:
+        price = (f'<span class="fc-pr v-now unk">$?</span>'
+                 f'<span class="fc-pr v-next">{_e(money(nxt["price"]))}</span>')
+    elif lane.price is None:
+        price = '<span class="fc-pr unk">$?</span>'
+    else:
+        price = f'<span class="fc-pr">{_e(money(lane.price))}</span>'
+    name_now = ("Empty" if lane.counted_empty else "No record") if lane.now_item is None else lane.now_item.name
+    name_next = ("Pulled" if lane.pulled else after_item.name if after_item is not None else name_now) \
+        if planned else name_now
+    names = f'<span class="fc-nm v-now">{_e(name_now)}</span><span class="fc-nm v-next">{_e(name_next)}</span>'
+    # A bar needs a known size: the capacity, else the plan's fill. Without either it is an outlined,
+    # empty gauge, never a bar that reads as full; with units unknown it is hatched.
+    size = max(lane.cap or 0, lane.fill or 0)
+    after_size = max(lane.next_cap or 0, lane.fill or 0)
+    tone = " unk" if lane.units is None else "" if size else " open"
+    now_size = max(size, lane.units or 0) if size else 0
+    next_size = max(after_size, after_units or 0) if after_size else 0
+    bar = (f'<span class="fc-g{tone}">' + _gauge(lane.units, now_size, "v-now")
+           + (_gauge(after_units, next_size, "v-next fri") if planned else _gauge(lane.units, now_size, "v-next"))
+           + "</span>")
+    classes = ("fc" + (" fc-chg" if lane.change else "") + (" fc-zero" if lane.units == 0 else "")
+               + (" fc-wild" if lane.wildcard else ""))
+    wild = f'<span class="fc-w" title="{WILD_TITLE}">W</span>' if lane.wildcard else ""
+    return (f'<a class="{classes}" id="fc-{_e(lane.slot)}" href="{pick_href(lane.slot)}" data-sel="{_e(lane.slot)}" '
+            f'aria-label="{_e(lane.aria())} Opens its close-up.">'
+            f'<span class="fc-top"><span class="fc-n">{_e(lane.slot)}</span>{wild}{_front_marks(lane)}</span>'
+            f'<span class="fc-mid">{_front_art(lane, after_item, after_units)}<span class="fc-st">{counts}{price}'
+            f'</span></span>{names}{bar}</a>')
+
+
+def _not_ours_cell(slot: str) -> str:
+    """A selection not assigned to us, half as wide as ours: its number and "Not ours", and nothing else."""
+    return f'<span class="fc fc-no"><span class="fc-n">{_e(slot)}</span><span class="fc-t">Not ours</span></span>'
+
+
+def _shelf_line(lanes: dict[str, Lane], mine: list[str]) -> str:
+    """'14 on hand · +15 at restock' for a shelf's lanes of ours."""
+    known = [lanes[s].units for s in mine if lanes[s].units is not None]
+    seen = f"{sum(known)}{'+?' if len(known) < len(mine) else ''}" if known else "?"
+    backs = [lanes[s].added for s in mine if lanes[s].added is not None]
+    open_ = any(lanes[s].fill is not None and lanes[s].added is None and not lanes[s].pulled for s in mine)
+    planned = any(lanes[s].fill is not None or lanes[s].swap or lanes[s].new or lanes[s].pulled for s in mine)
+    back = f"+{sum(backs)}{'+?' if open_ else ''}" if backs else "+?" if open_ else "+0" if planned else ""
+    restock = f'<span class="ma-fr">{back}</span> at restock' if back else "no restock plan"
+    return f'{seen} on hand &middot; {restock}'
+
+
+def front_html(lanes: dict[str, Lane], ours: set[str]) -> str:
+    """The machine's whole front, 5 shelves of 8. Ours show their package, count, price, name, fill
+    bar and next-restock badge, and open their close-up; every other selection is a grey "Not ours" cell
+    half as wide, with its number only. Beside each shelf, what it holds and what the next restock adds."""
+    rows = []
     for r in range(1, SHELVES + 1):
-        y_top = GY + 4 + PITCH * (r - 1)
-        base = y_top + 54
-        out.append(f'<rect x="{GX}" y="{base + 1}" width="{GW}" height="6" fill="url(#ma-ledge-g)"/>')
-        for c in range(1, COLUMNS + 1):
-            slot, x = f"{r}{c}", GX + (c - 1) * width
-            if slot not in ours:
-                out.append(f'<rect x="{x + 1:.1f}" y="{y_top}" width="{width - 2:.1f}" height="{PITCH - 12}" '
-                           f'fill="url(#ma-grey)" opacity=".9"/>')
-                continue
-            lane = lanes[slot]
-            cx = x + width / 2
-            at = f"translate({cx:.1f} {base - 1}) scale({FS})"
-            for cls, item, units in (("v-now", lane.now_item, lane.units),
-                                     ("v-next", lane.next_item if not lane.pulled else None, lane.next_units)):
-                if item is None:
-                    continue
-                if units == 0:
-                    out.append(f'<use class="ma-ghost {cls}" href="#ma-s-{item.key}" transform="{at}"/>')
-                else:
-                    out.append(f'<use class="{cls}" href="#ma-f-{item.key}" style="{_style(item)}" transform="{at}"/>')
-            gx, gw, gy = x + 3, width - 6, base + 10
-            # A bar needs a known size: the capacity, else the plan's fill. Without either, the
-            # lane draws an outlined, empty gauge rather than a bar that would read as full.
-            denom = max(lane.cap or 0, lane.fill or 0)
-            sized = denom > 0
-            denom = max(denom, lane.units or 0, 1)
-            out.append(f'<rect x="{gx:.1f}" y="{gy}" width="{gw:.1f}" height="5" rx="2" '
-                       + ('fill="url(#ma-hatch)" stroke="#f3bb52" stroke-width=".8"/>' if lane.units is None
-                          else 'fill="#fff" fill-opacity=".14"/>' if sized
-                          else 'fill="none" stroke="#fff" stroke-opacity=".35" stroke-dasharray="2 2"/>'))
-            if lane.units and sized:
-                out.append(f'<rect class="v-now" x="{gx:.1f}" y="{gy}" width="{gw * min(lane.units, denom) / denom:.1f}" '
-                           f'height="5" rx="2" fill="#e3e9f0"/>')
-            after = lane.next_units
-            after_size = max(lane.next_cap or 0, lane.fill or 0)
-            if after and after_size:
-                after_denom = max(after_size, after, 1)
-                out.append(f'<rect class="v-next" x="{gx:.1f}" y="{gy}" width="{gw * after / after_denom:.1f}" '
-                           f'height="5" rx="2" fill="#52d6a4"/>')
-        out.append(f'<rect class="ma-hl ma-hl{r}" x="{GX - 3}" y="{y_top - 3}" width="{GW + 6}" height="{PITCH - 2}" rx="5"/>')
-    out.append(f'<path d="M{GX + 10} {GY + 8}L{GX + 70} {GY + 8}L{GX + 20} {GY + PITCH * SHELVES}L{GX + 4} '
-               f'{GY + PITCH * SHELVES}Z" fill="#fff" fill-opacity=".05"/>'
-               f'<rect x="{GX}" y="{GY + PITCH * SHELVES + 26}" width="{GW}" height="40" rx="5" fill="#07080a" '
-               f'stroke="#3a3f48"/></svg>')
-    return "".join(out)
+        mine = [f"{r}{c}" for c in range(1, COLUMNS + 1) if f"{r}{c}" in ours]
+        if mine:
+            # The link opens the shelf's first selection of ours, so without scripts a phone's sheet
+            # opens too (the sheet shows for a targeted selection, not a targeted shelf).
+            rail = (f'<a class="fm-sh" id="rail-{r}" href="{pick_href(mine[0])}" data-shelf="{r}" '
+                    f'aria-label="Shelf {r}: {len(mine)} of {COLUMNS} selections ours; opens {_e(mine[0])}">'
+                    f'<b>Shelf {r}</b><small>{_shelf_line(lanes, mine)}</small></a>')
+        else:
+            rail = f'<span class="fm-sh fm-none"><b>Shelf {r}</b><small>none ours</small></span>'
+        cells = "".join(front_cell(lanes[f"{r}{c}"]) if f"{r}{c}" in ours else _not_ours_cell(f"{r}{c}")
+                        for c in range(1, COLUMNS + 1))
+        rows.append(f'<div class="fm-shelf" data-n="{r}"><div class="fm-row">{cells}</div>{rail}</div>')
+    return ('<nav class="fm" aria-label="The machine&rsquo;s front: pick one of our selections to see it close up">'
+            + "".join(rows) + "</nav>")
 
 
-# --- The whole close-up --------------------------------------------------------------------------------
+# --- The picked selection's facts, under its shelf -------------------------------------------------
 
-def closeup_html(view: dict[str, dict], products: dict | None, linked: bool) -> str:
-    """Our lanes, one shelf at a time, beside the machine's front for picking the shelf.
+def _restock(lane: Lane) -> tuple[str, str]:
+    """What the next restock does to the lane, in words (escaped), and its tone."""
+    nxt = lane.next
+    if nxt is None:
+        return "No plan yet.", ""
+    if not nxt["in_plan"]:
+        return "Not in the plan: left as it is.", ""
+    if lane.pulled:
+        return "Pulled: the lane is emptied.", "bad"
+    if (lane.swap or lane.new) and lane.next_item is not None:
+        verb = "Swapped to" if lane.swap else "Loaded with"
+        n = f", {lane.next_units} loaded" if lane.next_units is not None else ""
+        return f"{verb} {_e(lane.next_item.name)}{n}.", "info"
+    if lane.fill is None:
+        return ("Price change only." if nxt["old_price"] is not None else "Kept as it is."), ""
+    if lane.units is None:
+        return f"Filled to {lane.fill}; how many go back is unknown (+?).", "unk"
+    if lane.back:
+        return f"Filled to {lane.fill}: +{lane.back} back.", "fri"
+    return f"Plan {lane.fill}: nothing to add.", ""
+
+
+def detail_html(lane: Lane, sold: Mapping | None, span: str, linked: bool, first: Mapping | None = None,
+                fill_check: str | None = None) -> str:
+    """The picked selection's facts in words, each saying where it comes from: product, on hand,
+    price, what the slot sold, the next restock, capacity and the agent's whole reason. `first` is the
+    selection's line in the plan for the first fill, before the slot lock. Shown with its shelf
+    while the selection is picked."""
+    item, nxt = lane.now_item, lane.next
+    estimate = lane.source == "photo" and not lane.counted_empty
+    if lane.counted_empty:
+        name, on_hand = "Empty", "0, counted empty"
+    elif item is None:
+        name, on_hand = "No record yet", "unknown: no receipt or count yet"
+    else:
+        name = item.name
+        on_hand = ("unknown" if lane.units is None else
+                   (f"~{lane.units}" if estimate else str(lane.units)) + (f" of {lane.cap}" if lane.cap else ""))
+    if lane.counted and lane.view["now"].get("counted_at") is not None:
+        on_hand += (f" &middot; {_e(lane.source)} count {_e(_day(lane.view['now']['counted_at']))}"
+                    + (", less sales since" if lane.source == "photo" else ""))
+    elif lane.source == "receipt":
+        on_hand += " &middot; from receipts and polls"
+    price = f"{_e(money(lane.price))} on the tag" if lane.price is not None else "unknown: no price from the polls"
+    if nxt is not None and nxt["old_price"] is not None:
+        price += f' &middot; <b class="sd-up">{_e(money(nxt["price"]))}</b> from the next restock'
+    if sold is None or sold.get("sold") is None:
+        sales = "unknown: no sales from the polls"
+    else:
+        per_day = sold.get("per_day")
+        sales = (f"{_e(sold['sold'])} {_e(span)}" + (f" &middot; {float(per_day):.1f} a day" if per_day is not None
+                                                     else "") + ", whatever it held")
+    restock, tone = _restock(lane)
+    rows = [("On hand", on_hand), ("Price", price), ("The slot sold", sales),
+            ("Next restock", f'<span class="sd-fr {tone}">{restock}</span>' if tone else restock)]
+    if fill_check:          # the plan's fill against the column's capacity (`capacity.fill_check`)
+        tone = "" if fill_check == capacity.NOT_COUNTED else "unk"
+        rows.append(("Fill check", f'<span class="sd-fr {tone}">{_e(fill_check)}</span>' if tone else _e(fill_check)))
+    if first:
+        rows.append(("First fill", _e(first["text"])))
+    if lane.wildcard:
+        rows.append(("Wildcard", "the one fixed slot that tests products for the others; it may sell above the "
+                                 "regular ceiling (config <code>wildcard_slot</code>)"))
+    caps = []
+    for it, cap in ((item, lane.cap), (lane.next_item if lane.next_item is not item else None, lane.next_cap)):
+        if it is not None and cap is None:
+            caps.append(f"{_e(it.name)}: capacity not counted yet")
+        elif it is not None and it.cap_note:
+            caps.append(f"{_e(it.name)}: {cap} ({_e(it.cap_note)})")
+        elif it is not None:
+            caps.append(f"{_e(it.name)}: {cap}")
+    if caps:
+        rows.append(("Capacity", " &middot; ".join(caps)))
+    grid = "".join(f"<div><dt>{k}</dt><dd>{v}</dd></div>" for k, v in rows)
+    whys = []
+    reason = lane.view.get("reason") or (lane.change or {}).get("reason")
+    if reason:
+        whys.append(("The agent&rsquo;s reason", reason))
+    if first and first.get("reason"):
+        whys.append(("Why, for the first fill", first["reason"]))
+    why = "".join(f'<p class="sd-why"><span>{title}</span>{_e(" ".join(str(text).split()))}</p>' for title, text in whys)
+    plan_link = f'<a class="sd-plan" href="#slot-{_e(lane.slot)}">plan row</a>' if linked else ""
+    detail = f"<small>{_e(item.detail)}</small>" if item is not None and item.detail else ""
+    return (f'<div class="sd" id="sel-{_e(lane.slot)}" data-sel="{_e(lane.slot)}" tabindex="-1">'
+            f'<div class="sd-art" aria-hidden="true"></div><div class="sd-body">'
+            f'<div class="sd-h"><span class="sd-n">{_e(lane.slot)}</span><div class="sd-t"><b>{_e(name)}</b>'
+            f'{" " + WILD_PILL if lane.wildcard else ""}{detail}'
+            f'</div>{plan_link}</div><dl class="sd-g">{grid}</dl>{why}</div></div>')
+
+
+# --- The whole machine view ------------------------------------------------------------------------
+
+def split_html(view: dict[str, dict], products: dict | None, linked: bool, sold: Mapping | None = None,
+               span: str = "in the last 7 days", first_fill: Mapping | None = None,
+               fill_checks: Mapping | None = None) -> tuple[str, str]:
+    """The machine's front, and the close-up's shelves: for each shelf with one of ours, its lanes
+    drawn from above (not ours half as wide) and the facts of each of ours. Which one shows is the
+    page's choice (`data-sel`, `selection_css`).
 
     `view` is `dashboard.machine_view`: our selections only. `products` is the products read
     (None when it failed: packages are then guessed from names and capacity is unknown).
-    `linked` puts a link to each lane's plan row.
+    `linked` puts a link to each lane's plan row. `sold` is the polls' sales by selection, ours
+    only, and `span` says what window they cover. `first_fill` is each selection's line in the
+    plan for the first fill, before the slot lock.
     """
     ours = set(view)
     lanes = {slot: Lane(slot, v, products) for slot, v in view.items()}
     keys = {i.key for lane in lanes.values() for i in (lane.now_item, lane.next_item) if i is not None}
-    rows, panels = [], []
+    panels = []
     for r in range(1, SHELVES + 1):
         mine = [f"{r}{c}" for c in range(1, COLUMNS + 1) if f"{r}{c}" in ours]
-        top = 100 * (GY + 4 + PITCH * (r - 1) - 3) / FH
-        pos = f"top:{top:.2f}%;height:{100 * (PITCH - 2) / FH:.2f}%"
+        if not mine:
+            continue
         where = {1: " (top)", SHELVES: " (bottom)"}.get(r, "")
-        if mine:
-            known = [lanes[s].units for s in mine if lanes[s].units is not None]
-            seen = f"{sum(known)}{'+?' if len(known) < len(mine) else ''}" if known else "?"
-            backs = [lanes[s].added for s in mine if lanes[s].added is not None]
-            open_ = any(lanes[s].fill is not None and lanes[s].added is None and not lanes[s].pulled for s in mine)
-            planned = any(lanes[s].fill is not None or lanes[s].swap or lanes[s].new or lanes[s].pulled for s in mine)
-            back = f"+{sum(backs)}{'+?' if open_ else ''}" if backs else "+?" if open_ else "+0" if planned else ""
-            friday = f'<span class="ma-fr">{back}</span> Friday' if back else "no Friday plan"
-            line = f'{seen} on hand &middot; {friday}'
-            rows.append(f'<a class="ma-row ma-pick{r}" href="#shelf-{r}" data-shelf="{r}" style="{pos}" '
-                        f'aria-label="Shelf {r}: {len(mine)} of {COLUMNS} selections ours">'
-                        f'<b>Shelf {r}</b><small>{line}</small></a>')
-            cards = []
-            for c in range(1, COLUMNS + 1):
-                slot = f"{r}{c}"
-                if slot not in ours:
-                    cards.append(_not_ours(slot))
-                    continue
-                k = mine.index(slot)
-                cards.append(lane_card(lanes[slot], mine[k - 1] if k else None,
-                                       mine[k + 1] if k + 1 < len(mine) else None, linked))
-            body = (f'<p class="ma-hint">Two lanes at a time: swipe, drag the scroll bar, use &lsaquo; &rsaquo;, '
-                    f'or focus the strip and use the arrow keys.</p><div class="ma-stage"><div class="ma-strip" '
-                    f'tabindex="0" role="region" aria-label="Shelf {r} lanes, scrolls sideways">{"".join(cards)}'
-                    '</div></div>')
-            head = f"{len(mine)} of {COLUMNS} selections ours"
-        else:
-            rows.append(f'<a class="ma-row ma-pick{r} ma-none" href="#shelf-{r}" data-shelf="{r}" style="{pos}" '
-                        f'aria-label="Shelf {r}: none ours"><b>Shelf {r}</b><small>Not ours</small></a>')
-            body = f'<p class="ma-nonote">None of selections {r}1&ndash;{r}{COLUMNS} are ours.</p>'
-            head = "none ours"
+        cards = "".join(lane_card(lanes[f"{r}{c}"], None, None, linked) if f"{r}{c}" in ours
+                        else _not_ours(f"{r}{c}") for c in range(1, COLUMNS + 1))
+        details = "".join(detail_html(lanes[s], (sold or {}).get(s), span, linked, (first_fill or {}).get(s),
+                                      (fill_checks or {}).get(s))
+                          for s in mine)
         panels.append(f'<div class="ma-shelf" id="shelf-{r}" data-n="{r}" role="group" aria-label="Shelf {r}">'
                       f'<div class="ma-sh"><h3>Shelf {r}{where} &middot; {r}1&ndash;{r}{COLUMNS}</h3>'
-                      f'<span class="dim">{head}</span></div>{body}</div>')
-    return (f'{_defs(keys, (lane.col for lane in lanes.values()))}<div class="ma">'
-            f'<nav class="ma-fm" aria-label="The machine\'s front: pick a shelf"><div class="ma-fmgrid"><div>'
-            f'{_front(lanes, ours)}</div><div class="ma-rows">{"".join(rows)}</div></div></nav>'
-            f'<div class="ma-shelves">{"".join(panels)}</div></div>')
+                      f'<span class="dim">{len(mine)} of {COLUMNS} selections ours</span></div>'
+                      f'<div class="ma-stage"><div class="ma-strip" role="region" aria-label="Shelf {r} lanes">'
+                      f'{cards}</div></div><div class="sd-list">{details}</div></div>')
+    front = _defs(keys, (lane.col for lane in lanes.values())) + front_html(lanes, ours)
+    return front, "".join(panels)
 
 
-def default_shelf(view: Mapping[str, Any]) -> int:
-    """The first shelf with one of ours on it, shown until a viewer picks another."""
-    for r in range(1, SHELVES + 1):
-        if any(f"{r}{c}" in view for c in range(1, COLUMNS + 1)):
-            return r
-    return 1
+def closeup_html(view: dict[str, dict], products: dict | None, linked: bool) -> str:
+    """The front and the close-up's shelves in one piece, for a caller that doesn't lay them out itself."""
+    front, panels = split_html(view, products, linked)
+    return f'<div class="ma">{front}<div class="ma-shelves">{panels}</div></div>'
+
+
+def selection_css(ours: Iterable[str]) -> str:
+    """The rules that show the picked selection: its front cell marked, its shelf and facts shown and
+    its lane widened. One set per selection of ours, from the stored assignment, so no list is fixed
+    here. With scripts the page sets `data-sel`; without them the link's #target picks."""
+    ours = sorted(s for s in ours if re.fullmatch(r"[A-Za-z0-9_]+", s))
+    if not ours:
+        return ""
+
+    def each(*templates: str) -> str:
+        return ", ".join(t.format(s=s, r=s[0]) for s in ours for t in templates)
+    return ("<style>"
+            + each('.vm[data-sel="{s}"] .fc[data-sel="{s}"]', '.vm:not([data-js]):has(#sel-{s}:target) .fc[data-sel="{s}"]')
+            + " { outline:3px solid #52d6a4; outline-offset:-1px; background:#173229 } "
+            + each('.vm[data-sel="{s}"] #lane-{s}', '.vm:not([data-js]):has(#sel-{s}:target) #lane-{s}')
+            + " { flex-grow:1.8; box-shadow:inset 0 0 0 3px #52d6a4 } "
+            + each('.vm[data-sel="{s}"] #shelf-{r}') + " { display:flex } "
+            + each('.vm[data-sel="{s}"] #sel-{s}') + " { display:block }</style>")
 
 
 # The close-up's styles, added to the dashboard's. The cabinet's inside is dark in both themes
@@ -980,45 +1168,72 @@ STYLE = """
 .ma-defs { position:absolute; width:0; height:0; overflow:hidden }
 .ma-tx { font-family:Arial, sans-serif; font-weight:800; text-anchor:middle }
 .ma { display:grid; grid-template-columns:minmax(0, 1fr); gap:14px; min-width:0 } .ma > * { min-width:0 }
-.ma-fmgrid { display:grid; grid-template-columns:minmax(0, 46%) minmax(0, 1fr); gap:8px; max-width:440px }
-.ma-front { display:block; width:100%; height:auto }
-.ma-rows { position:relative }
-.ma-row { position:absolute; left:0; right:0; display:flex; flex-direction:column; justify-content:center; padding:2px 8px;
-  border-radius:8px; text-decoration:none; color:var(--ink); border:2px solid transparent; line-height:1.15; overflow:hidden }
-.ma-row b { font-size:13px } .ma-row small { font-size:11px; color:var(--muted) } .ma-row .ma-fr { color:var(--ok); font-weight:700 }
-.ma-row.ma-none b { color:var(--muted); font-weight:600 }
-.ma-row:hover, .ma-row:focus-visible { border-color:var(--line) }
-.ma-hl { fill:none; stroke:#52d6a4; stroke-width:2.5; opacity:0 }
-.ma-shelf { display:none; min-width:0 }
+/* The machine's front: 5 shelves of 8. Ours are twice as wide as not ours. Dark in both themes: it is a black machine. */
+.fm { display:flex; flex-direction:column; gap:3px; background:linear-gradient(#1d2026, #121418); border:1px solid #2c3037;
+  border-radius:12px; padding:6px; color:#e8ecf2; box-shadow:inset 0 0 0 2px #0b0d10 }
+.fm-shelf { display:grid; grid-template-columns:minmax(0, 1fr) 74px; gap:4px; align-items:stretch }
+.fm-row { display:flex; gap:3px; min-width:0; padding:3px 3px 0; background:linear-gradient(#20262e, #0d1115); border-radius:5px;
+  border-bottom:5px solid #4d545e }
+.fm-sh { display:flex; flex-direction:column; justify-content:center; gap:1px; padding:3px 6px; border-radius:6px; text-decoration:none;
+  color:#e8ecf2; background:#151a22; border:1px solid #2a313c; line-height:1.2; min-width:0 }
+.fm-sh b { font-size:11px; color:#fff; white-space:nowrap } .fm-sh small { font-size:10px; color:#9aa5b4 }
+.fm-sh .ma-fr { color:#7ff0c4; font-weight:700 } .fm-none b, .fm-none small { color:#6f7a89 }
+a.fm-sh:hover, a.fm-sh:focus-visible { border-color:#6ea8ff; outline:none }
+.fc { position:relative; display:flex; flex-direction:column; gap:1px; flex:2 1 0; min-width:0; border-radius:5px; padding:3px 4px;
+  margin-bottom:3px; background:linear-gradient(#1b222c, #12171e); border:1px solid #343d4b; color:#e8ecf2; text-decoration:none;
+  overflow:hidden }
+a.fc:hover { border-color:#7d8896; background:#1c2635 } a.fc:focus-visible { outline:3px solid #4d8dff; outline-offset:-2px }
+.fc-chg { border-color:#4b79c7 } .fc-zero { border-color:#7a3036 }
+.fc-top { display:flex; align-items:center; gap:2px; line-height:1; min-height:14px }
+.fc-n { font:800 10px/1 Arial, sans-serif; color:#fff; background:#07090c; border:1px solid #4c5563; border-radius:3px; padding:1px 3px }
+.fc-mk { font:800 9px/1 Arial, sans-serif; padding:2px 4px; border-radius:999px; white-space:nowrap }
+.fc-mk:first-of-type { margin-left:auto }
+.fc-mk.info { background:#18345e; color:#9cc3ff } .fc-mk.warn { background:#4b3309; color:#f7c96b }
+.fc-mk.bad { background:#541b20; color:#ffb0a8 } .fc-mk.fri { background:#0f4a37; color:#7ff0c4 }
+.fc-mk.unk { background:#4a3508; color:#f8cd75 }
+.fc-wild { border-color:#c99a2e; border-style:dashed } .fc-w { font:800 9px/1 Arial, sans-serif; padding:2px 4px; border-radius:3px;
+  background:#c99a2e; color:#1b1404 }
+.ma-wl { margin:2px 0 0; display:inline-block; font-size:10px; font-weight:800; padding:1px 6px; border-radius:999px;
+  background:#4a3508; color:#f8cd75 } .ma-wild { box-shadow:inset 0 -3px 0 #c99a2e }
+.fc-mid { display:flex; align-items:center; gap:3px; min-height:44px }
+.fc-art { flex:none; display:block; width:29px; height:44px }
+.fc-st { display:flex; flex-direction:column; gap:1px; min-width:0 }
+.fc-ct { font-size:10px; color:#9aa5b5; line-height:1.1; white-space:nowrap } .fc-ct b { font-size:15px; font-weight:800; color:#fff }
+.fc-ct small { font-size:10px } .fc-ct b.zero { color:#ff8d85 } .fc-ct b.unk { color:#f3bb52 }
+.vm[data-view="next"] .fc-ct b { color:#7ff0c4 }
+.fc-pr { font:700 11px/1.2 Arial, sans-serif; color:#f4f3ee; white-space:nowrap } .fc-pr.unk { color:#f3bb52 }
+.fc-pr b.up { color:#7ff0c4 }
+.fc-nm { font-size:10.5px; color:#c5cedb; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; line-height:1.2 }
+.fc-g { position:relative; display:block; height:4px; margin:1px 0 0; border-radius:2px; background:rgba(255,255,255,.15); overflow:hidden }
+.fc-g i { position:absolute; left:0; top:0; bottom:0; border-radius:2px; background:#e3e9f0 } .fc-g i.fri { background:#52d6a4 }
+.fc-g.unk { background:repeating-linear-gradient(45deg, #f3bb52 0 2px, rgba(243,187,82,.15) 2px 5px) }
+.fc-g.open { background:none; box-shadow:inset 0 0 0 1px rgba(255,255,255,.4) }
+.fc-no { flex:1 1 0; align-items:center; justify-content:center; text-align:center; gap:2px; padding:3px 1px;
+  background:repeating-linear-gradient(135deg, #1a1f26 0 7px, #12161b 7px 14px); border:1px dashed #2c333d; color:#7e8999 }
+.fc-no .fc-n { background:none; border:0; font-size:12px; color:#8d97a6; padding:0 }
+.fc-no .fc-t { font-size:8.5px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; line-height:1.1 }
+/* The close-up: the picked selection's shelf from above, not ours half as wide, then its facts. */
+.ma-shelf { display:none; flex-direction:column; min-width:0 }
 .ma-sh { display:flex; flex-wrap:wrap; gap:2px 10px; align-items:baseline; margin:0 0 6px }
-.ma-sh h3 { margin:0; font-size:15px; color:var(--ink); text-transform:none; letter-spacing:0 }
-.ma-hint { display:none; font-size:12px; color:var(--muted); margin:0 0 4px }
-.ma-nonote { color:var(--muted); background:var(--sunk); border:1px dashed var(--line); border-radius:10px; padding:16px; margin:0 }
-.ma-stage { position:relative; border-radius:12px; overflow:hidden; background:#0b0e12; border:1px solid var(--line) }
-.ma-strip { display:flex; overflow-x:auto; scroll-snap-type:x mandatory; overscroll-behavior-x:contain; scrollbar-width:auto;
-  scrollbar-color:#6b7684 #1a1f26; background:radial-gradient(120% 90% at 50% 0, #222a33 0, #0b0e12 70%) }
-.ma-strip::-webkit-scrollbar { height:12px } .ma-strip::-webkit-scrollbar-track { background:#1a1f26 }
-.ma-strip::-webkit-scrollbar-thumb { background:#6b7684; border-radius:6px; border:2px solid #1a1f26 }
-.ma-strip:focus-visible, .ma-lane:focus-visible { outline:3px solid #4d8dff; outline-offset:-3px }
-.ma-lane { flex:0 0 43%; scroll-snap-align:start; position:relative; border-right:1px solid rgba(255,255,255,.07); color:#e8ecf2;
-  min-width:0; scroll-margin:0 }
+.ma-sh h3 { margin:0; font-size:14px; color:var(--ink); text-transform:none; letter-spacing:0 }
+.ma-stage { position:relative; border-radius:10px; overflow:hidden; background:#0b0e12; border:1px solid var(--line) }
+.ma-strip { display:flex; background:radial-gradient(120% 90% at 50% 0, #222a33 0, #0b0e12 70%) }
+.ma-lane { flex:1 1 0; position:relative; border-right:1px solid rgba(255,255,255,.07); color:#e8ecf2; min-width:0;
+  transition:flex-grow .25s }
+article.ma-lane:not(.ma-notours) { cursor:pointer }
 .ma-lane svg { display:block; width:100%; height:auto }
-.ma-notours { flex:0 0 26%; display:flex; align-items:center; justify-content:center; text-align:center; color:#8a95a5;
-  background:repeating-linear-gradient(135deg, #1a1f26 0 9px, #12161b 9px 18px); min-height:220px }
-.ma-n { display:block; font-size:22px; font-weight:800; color:#a8b2c0 }
-.ma-t { font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase }
+.ma-notours { flex:.5 1 0; display:flex; align-items:center; justify-content:center; text-align:center; color:#8a95a5;
+  background:repeating-linear-gradient(135deg, #1a1f26 0 9px, #12161b 9px 18px); min-height:120px; cursor:default }
+.ma-n { display:block; font-size:16px; font-weight:800; color:#a8b2c0 }
+.ma-t { display:block; font-size:9px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; line-height:1.15 }
 .ma-nav { display:none }
-.ma-nav a { display:inline-flex; align-items:center; justify-content:center; width:44px; height:44px; border-radius:50%;
-  background:rgba(10,13,17,.72); border:1px solid rgba(255,255,255,.35); color:#fff; font-size:26px; line-height:1;
-  text-decoration:none; font-weight:700 }
-.ma-nav a:hover, .ma-nav a:focus-visible { background:#52d6a4; color:#04221a; outline:none }
-.ma-meta { padding:8px 8px 12px; background:rgba(0,0,0,.35); min-height:112px }
-.ma-nm { margin:0; font-weight:700; font-size:13px; line-height:1.2; overflow-wrap:anywhere }
-.ma-nm span { display:block; font-weight:500; color:#aab4c3; font-size:12px }
-.ma-ct { margin:5px 0 4px; font-size:12px; color:#aab4c3 }
-.ma-ct b { font-size:24px; line-height:1; color:#fff }
+.ma-meta { padding:5px 5px 7px; background:rgba(0,0,0,.35) }
+.ma-nm { margin:0; font-weight:700; font-size:11.5px; line-height:1.2; overflow-wrap:anywhere }
+.ma-nm span { display:block; font-weight:500; color:#aab4c3; font-size:11px }
+.ma-ct { margin:4px 0 3px; font-size:11px; color:#aab4c3 }
+.ma-ct b { font-size:18px; line-height:1; color:#fff }
 .ma-chips { margin:0 }
-.ma-chip { display:inline-block; border-radius:999px; padding:2px 8px; font-size:11px; font-weight:800; background:#24303b; color:#e8ecf2;
+.ma-chip { display:inline-block; border-radius:999px; padding:1px 6px; font-size:10px; font-weight:800; background:#24303b; color:#e8ecf2;
   margin:0 2px 2px 0 }
 .ma-chip.fri { background:#0f4a37; color:#7ff0c4 } .ma-chip.unk { background:#4a3508; color:#f8cd75 }
 .ma-chip.bad { background:#4b1c1f; color:#ffb0a8 } .ma-chip.info { background:#16294a; color:#9cc3ff }
@@ -1035,20 +1250,35 @@ STYLE = """
 .ma-out { transition:opacity .35s }
 .vm[data-view="next"] .ma-fill { opacity:1; transform:none }
 .vm[data-view="next"] .ma-go, .vm[data-view="next"] .ma-out { opacity:0 }
-.vm[data-shelf="1"] .ma-shelf[data-n="1"], .vm[data-shelf="2"] .ma-shelf[data-n="2"], .vm[data-shelf="3"] .ma-shelf[data-n="3"],
-.vm[data-shelf="4"] .ma-shelf[data-n="4"], .vm[data-shelf="5"] .ma-shelf[data-n="5"], .vm:not([data-js]) .ma-shelf:target { display:block }
-.vm:not([data-js]):has(.ma-shelf:target) .ma-shelf:not(:target) { display:none }
-.vm[data-shelf="1"] .ma-hl1, .vm[data-shelf="2"] .ma-hl2, .vm[data-shelf="3"] .ma-hl3, .vm[data-shelf="4"] .ma-hl4,
-.vm[data-shelf="5"] .ma-hl5 { opacity:1 }
-.vm[data-shelf="1"] .ma-pick1, .vm[data-shelf="2"] .ma-pick2, .vm[data-shelf="3"] .ma-pick3, .vm[data-shelf="4"] .ma-pick4,
-.vm[data-shelf="5"] .ma-pick5 { border-color:var(--ok); background:var(--surface) }
+/* The picked selection's facts: where each number comes from. */
+.sd { display:none; margin-top:8px; padding:8px 10px; background:var(--surface); border:1px solid var(--line); border-radius:10px;
+  outline:none }
+.sd-art { display:none }
+.sd-h { display:flex; align-items:center; gap:8px } .sd-t { min-width:0; flex:1 } .sd-t b { display:block; font-size:14px; overflow-wrap:anywhere }
+.sd-t small { color:var(--muted); font-size:12px }
+.sd-n { flex:none; font:800 14px/1 Arial, sans-serif; background:#07080a; color:#fff; border:1px solid #6b727c; border-radius:4px;
+  padding:4px 6px }
+.sd-plan { font-size:12px; white-space:nowrap }
+.sd-g { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:5px 12px; margin:6px 0 0 }
+.sd-g div { min-width:0 } .sd-g dt { font-size:10px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--muted) }
+.sd-g dd { margin:0; font-size:12.5px; overflow-wrap:anywhere }
+.sd-fr.fri { color:var(--ok); font-weight:600 } .sd-fr.bad { color:var(--bad); font-weight:600 } .sd-fr.info { color:var(--info); font-weight:600 }
+.sd-fr.unk { color:var(--warn) } .sd-up { color:var(--ok) }
+.sd-why { margin:6px 0 0; font-size:12.5px; border-left:3px solid var(--accent); padding-left:8px; overflow-wrap:anywhere }
+.sd-why span { display:block; font-size:10px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--muted) }
+/* Without scripts a link picks by its #target: that shelf and its facts show. */
+.vm:not([data-js]) .ma-shelf:target, .vm:not([data-js]) .ma-shelf:has(.sd:target) { display:flex }
+.vm:not([data-js]) .sd:target { display:block }
 @media (max-width:819px) {
-  .ma-nav { display:flex; position:absolute; top:6px; left:4px; right:4px; justify-content:space-between; z-index:2; pointer-events:none }
-  .ma-nav a, .ma-nav span { pointer-events:auto } .ma-nav span { width:44px }
-  .ma-fmgrid { max-width:340px } .ma-hint { display:block } .ma-stage { margin:0 -16px; border-radius:0; border-left:0; border-right:0 } }
-@media (min-width:820px) {
-  .ma-strip { overflow:visible; scroll-snap-type:none } .ma-lane, .ma-notours { flex:1 1 0; scroll-snap-align:none }
-  .ma-ct b { font-size:22px } .ma-meta { padding:8px 6px 12px } }
-@media (min-width:1180px) { .ma { grid-template-columns:300px minmax(0, 1fr); align-items:start } .ma-fmgrid { max-width:none } }
-@media (prefers-reduced-motion:reduce) { .ma-fill, .ma-ghost, .ma-unk, .ma-out { transition:none !important } }
+  .fm { padding:4px; margin:0 -4px } .fm-shelf { grid-template-columns:minmax(0, 1fr); gap:2px }
+  .fm-sh { order:-1; flex-direction:row; flex-wrap:wrap; justify-content:space-between; align-items:baseline; gap:0 8px;
+    padding:1px 6px; background:none; border:0 }
+  .fm-row { gap:2px; padding:2px 2px 0 } .fc { padding:2px 2px; align-items:center }
+  .fc-top { align-self:stretch } .fc-mid { flex-direction:column; gap:0; min-height:0 } .fc-art { width:24px; height:36px }
+  .fc-st { align-items:center } .fc-ct b { font-size:12.5px } .fc-ct small { font-size:9px } .fc-pr { font-size:9.5px }
+  .fc-nm { display:none } .fc-g { align-self:stretch } .fc-n { font-size:9px; padding:1px 2px }
+  .fc-mk { font-size:8px; padding:1px 3px } .fc-mk + .fc-mk { display:none }
+  .fc-no .fc-t { display:none } .fc-no .fc-n { font-size:10px }
+  .sd-g { grid-template-columns:minmax(0, 1fr) } }
+@media (prefers-reduced-motion:reduce) { .ma-fill, .ma-ghost, .ma-unk, .ma-out, .ma-lane { transition:none !important } }
 """

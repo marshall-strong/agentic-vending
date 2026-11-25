@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import TYPE_CHECKING
+from fractions import Fraction
 
 from vending.class_days import EASTERN, eastern_date, is_class_day
 
@@ -33,6 +34,13 @@ if TYPE_CHECKING:
     from vending.stock import Applied
 
 OWN_RATE_AFTER = 5   # in-stock class days before a slot's own rate replaces the prior (Proposed, #110 item 6)
+
+# The share of a class day's units sold in each Eastern hour (the hour it starts). 66% sell 8 to 11 AM
+# (`analysis/REPORT.md`, finding 7); the rest of the day is assumed. The simulator's demand
+# (`vending.simulate.world`) and the midweek wake check's "rest of today" (`share_left`) both read it.
+HOUR_SHARE = {7: Fraction(2, 100), 8: Fraction(26, 100), 9: Fraction(22, 100), 10: Fraction(18, 100),
+              11: Fraction(8, 100), 12: Fraction(7, 100), 13: Fraction(6, 100), 14: Fraction(4, 100),
+              15: Fraction(3, 100), 16: Fraction(2, 100), 17: Fraction(1, 100), 18: Fraction(1, 100)}
 
 
 @dataclass(frozen=True)
@@ -61,6 +69,15 @@ class Demand:
     class_days_in_stock: int              # since the product went in
     units_sold: int                       # since the product went in
     class_days_since_sale: int | None = None   # in-stock class days since its last sale; set by the machine state
+
+
+def share_left(hour: int, minute: int = 0) -> Fraction:
+    """The share of a class day's units still to sell from `hour`:`minute` Eastern (`HOUR_SHARE`).
+
+    7:30 AM leaves 0.99 of the day (half of 7 o'clock's 2%, and everything after); 8 PM leaves none.
+    The current hour counts by the minutes left in it."""
+    left = sum((share for h, share in HOUR_SHARE.items() if h > hour), Fraction(0))
+    return left + HOUR_SHARE.get(hour, Fraction(0)) * Fraction(60 - minute, 60)
 
 
 def segment_for(price_cents: int) -> Segment:

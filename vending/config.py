@@ -87,6 +87,29 @@ def _slot(value: Any) -> str | None:
     return None
 
 
+# What the worker's scheduled agent runs do (`vending.agent_schedule`). The lower of this and the container's
+# `AGENT_SCHEDULE_MODE` wins, so both must say so before the worker runs the agent, and both must say `live`
+# before a scheduled run may send a restock request. The team agrees before anyone sets `live`.
+SCHEDULE_MODES = ("off", "dry-run", "live")
+
+
+def _schedule_mode(value: Any) -> str | None:
+    if value not in SCHEDULE_MODES:
+        return f"must be off, dry-run or live, not {json.dumps(value)}"
+    return None
+
+
+def _priced_model(value: Any) -> str | None:
+    """A model `vending/model_prices.json` prices, so the harness can reserve its worst case."""
+    from vending.harness import PRICES_FILE, load_prices      # here: the harness imports this module
+
+    models = sorted(load_prices().models)
+    if not isinstance(value, str) or value not in models:
+        return (f"must be a model {PRICES_FILE.name} prices, in quotes, one of {', '.join(models)}; "
+                f"not {json.dumps(value)}")
+    return None
+
+
 # Set once, never changed: the wildcard is a fixed slot.
 WRITE_ONCE = frozenset({"wildcard_slot"})
 
@@ -112,9 +135,38 @@ def _overrides(value: Any) -> str | None:
     return None
 
 
+def _sku(sku: Any) -> str | None:
+    if not isinstance(sku, str) or not sku.strip():
+        return "a blank SKU"
+    if any(c.isspace() for c in sku):
+        return f"SKU {json.dumps(sku)} has a space in it; SKUs have none, so it would never match"
+    return None
+
+
+def _aliases(value: Any) -> str | None:
+    """SKU -> the SKU of the same product that counts for it: one level only, so a lookup is a single step."""
+    if not isinstance(value, dict):
+        return ('must be a JSON object of SKU to SKU, like {"REDBULL-SUGARFREE-8_4CAN": "REDBULL-SUGARFRE-8_4CAN"}, '
+                f"not {json.dumps(value)}")
+    for alias, product in value.items():
+        if not isinstance(product, str):
+            return f"{alias} must be a SKU in quotes, not {json.dumps(product)}"
+        for sku in (alias, product):
+            problem = _sku(sku)
+            if problem:
+                return f"has {problem}" if problem.startswith("a blank") else problem
+        if alias == product:
+            return f"maps {alias} to itself"
+        if product in value:
+            return f"maps {alias} to {product}, but {product} is itself an alias; map both to the one SKU that counts"
+    return None
+
+
 KNOWN: dict[str, Setting] = {
     "capacity_overrides": Setting("units per column for products a person counted; replaces the whole "
                                   "object, wins over the loading chart (default none)", _overrides),
+    "product_aliases": Setting("catalog SKUs that are the same product as another SKU, mapped to that SKU; the "
+                               "planner counts them as one drink; replaces the whole object (default none)", _aliases),
     "price_ceiling_cents": Setting("highest sale price the planner allows (default and most 650)",
                                    _ceiling(AGREED_CEILING_CENTS)),
     "wildcard_slot": Setting("the one slot that may sell above the ceiling and tests products; set once after "
@@ -125,12 +177,44 @@ KNOWN: dict[str, Setting] = {
                                            "maximum (default and most 8200)", _cap),
     "tax_percent": Setting("sales tax inside the shelf price (default 8)", lambda v: _whole(v, 0, 100, "percent")),
     "midweek_fee_cents": Setting("what a midweek visit costs (default 2500)", _fee),
+    "spendable_floor_cents": Setting("spendable every request must leave at its worst case: a midweek fee plus a "
+                                     "week of model spend (default 5300)", lambda v: _whole(v, 0, 60000, "cents")),
     "model_run_cap_cents": Setting("most one agent cycle or replay may spend on model calls (default 100)",
                                    lambda v: _whole(v, 1, 60000, "cents")),
     "model_daily_cap_cents": Setting("most live model calls may spend in one Eastern day (default 400)",
                                      lambda v: _whole(v, 1, 60000, "cents")),
+    "agent_schedule_mode": Setting("what the worker's scheduled agent runs do: off, dry-run or live; the lower of "
+                                   "this and the container's AGENT_SCHEDULE_MODE wins, so a run is live only when "
+                                   "both say live (default off)", _schedule_mode),
     "model_test_daily_cap_cents": Setting("most test calls (replays, sweeps) may spend in one Eastern day "
                                           "(default 2000)", lambda v: _whole(v, 1, 60000, "cents")),
+    "price_search_searches_per_run": Setting("web searches one live agent run may make to look up pack prices; "
+                                             "0 turns the lookup off (default and most 4)",
+                                             lambda v: _whole(v, 0, 4, "searches")),
+    "price_search_daily_cap_cents": Setting("most the agent's price lookups may spend in one Eastern day, searches "
+                                            "and tokens, inside the model caps (default and most 100)",
+                                            lambda v: _whole(v, 0, 100, "cents")),
+    "price_search_model": Setting("the model the price lookups run on, the agent's tool and python -m "
+                                  "vending.price_search alike; --model overrides it (default: the agent's model)",
+                                  _priced_model),
+    "price_check_model": Setting("the model that checks a cheaper lookup model's find before it is stored: one "
+                                 "re-check of that listing, stored only if the two agree within 2% (default "
+                                 "claude-sonnet-5-5)", _priced_model),
+    "price_check_percent": Setting("a cheaper model's find this many percent or less from the stored price for that "
+                                   "drink, store and pack is stored without a check (default 5)",
+                                   lambda v: _whole(v, 0, 100, "percent")),
+    "price_check_mode": Setting("what the worker's weekly price check does: off, dry-run (lists what it would look "
+                                "up, spends nothing) or live; the lower of this and the container's "
+                                "PRICE_CHECK_MODE wins (default off)", _schedule_mode),
+    "price_check_weekly_cap_cents": Setting("most the weekly price check's lookups may spend in 7 days, searches and "
+                                            "tokens (default 300, most 1000)",
+                                            lambda v: _whole(v, 0, 1000, "cents")),
+    "price_compare_every_days": Setting("how often the weekly price check compares every store; in between it "
+                                        "re-checks each drink's primary store (default 14)",
+                                        lambda v: _whole(v, 1, 365, "days")),
+    "price_dead_end_days": Setting("days a store that had no listing for a drink is skipped by price lookups; "
+                                   "--full ignores it, 0 turns it off (default 21)",
+                                   lambda v: _whole(v, 0, 365, "days")),
 }
 
 
@@ -259,11 +343,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(error, file=sys.stderr)
                 return 1
             print(f"{args.key} = {json.dumps(value)}")
-            if args.key == "capacity_overrides" and isinstance(before, dict):
-                # `set` replaces the whole object, so name any count it just threw away.
+            if args.key in ("capacity_overrides", "product_aliases") and isinstance(before, dict):
+                # `set` replaces the whole object, so name any entry it just threw away.
                 dropped = {sku: units for sku, units in before.items() if sku not in value}
                 if dropped:
-                    print(f"Removed counts that were in the old value: {json.dumps(dropped)}. "
+                    what = "counts" if args.key == "capacity_overrides" else "aliases"
+                    print(f"Removed {what} that were in the old value: {json.dumps(dropped)}. "
                           "To keep them, set the object again with them included.", file=sys.stderr)
             return 0
         for key, value, at, by in conn.execute("select key, value, updated_at, updated_by from config order by key"):
