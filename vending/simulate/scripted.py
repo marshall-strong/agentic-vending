@@ -15,6 +15,7 @@ The rule (the bar the model should clear; deliberately simple):
   the closet's biggest product in an empty slot when it fills a column, inside the same floor;
 - our slots are the ones `get_machine_state` lists, which come from the stored assignment, as for
   the model; the rule names no selection of its own;
+- a midweek run (its opening says the wake check started it) sends the same refill as an off-cycle visit;
 - price: the product's reference price (docs/agent/price-history.md), raised to the preview's floor
   where the floor is higher, the same in every slot of a product; never a price test, never a switch.
 """
@@ -69,6 +70,7 @@ class Scripted:
         self.desired: dict | None = None
         self.wish: list[dict] = []
         self.day_one = False
+        self.midweek = False        # started by the midweek wake check: only an off-cycle visit may be sent
 
     def with_options(self, **_):
         return self
@@ -112,6 +114,8 @@ class Scripted:
     def _next(self, messages: list) -> tuple[list, str]:
         seen = self._results(messages)
         if self.step == 0:
+            first = messages[0]["content"] if messages else ""
+            self.midweek = MIDWEEK_MARK in (first if isinstance(first, str) else json.dumps(first, default=str))
             return [_tool(0, "get_machine_state"), _tool(0, "get_purchase_requests", {"pending_only": True})], "tool_use"
         if self.step == 1:
             if (seen.get("get_purchase_requests") or {}).get("pending"):
@@ -168,7 +172,10 @@ class Scripted:
 
     def _desired(self, chosen: list[dict]) -> dict:
         given = {s["slot"]: s for s in chosen}
-        return {"slots": [given.get(name, {"slot": name, "keep": True}) for name in self.slots]}
+        out = {"slots": [given.get(name, {"slot": name, "keep": True}) for name in self.slots]}
+        if self.midweek:
+            out["off_cycle"] = True
+        return out
 
     @staticmethod
     def _closet_pick(seen: dict) -> str | None:
@@ -194,6 +201,8 @@ def wide_day_one(slots: list[str] | tuple[str, ...]) -> dict[str, str]:
     return {slot: skus[i % len(skus)] for i, slot in enumerate(fill_order(day_one(slots)))}
 
 
+# How a midweek run's opening begins (`vending.agent_schedule.MIDWEEK_OCCASION`).
+MIDWEEK_MARK = "started by the midweek wake check"
 FLOOR = 5300          # the spendable floor, $53.00 (docs/opening-capital-plan.md)
 DAY_ONE_CAP = FILL_CAP_CENTS   # the day-one fill cap, most-we-pay (docs/opening-capital-plan.md)
 

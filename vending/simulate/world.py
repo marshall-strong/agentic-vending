@@ -187,6 +187,38 @@ PRODUCTS: tuple[Product, ...] = (
 )
 BY_SKU = {p.sku: p for p in PRODUCTS}
 
+# A drink from an export (`vending.simulate.export`) whose product line has no fall history and no product above:
+# the mean of the mid segments, at the plan's own price (assumed). A drink of a line above takes that line's rate.
+UNKNOWN_LINE_RATE = MID
+
+
+def product_for(entry: dict, units_per_pack: int, pack_cents: int, price_cents: int | None) -> Product | None:
+    """A world product for a catalog drink the world doesn't have (`entry`: the bridge's product fields), bought
+    in `units_per_pack` for `pack_cents`. Its rate and reference price are its product line's, where a product
+    above has that line, else `UNKNOWN_LINE_RATE` at `price_cents` (the plan's price; $3.00 without one). None
+    when the loading chart can't size it."""
+    if capacity.from_size(entry.get("size") or "") is None:
+        return None
+    kin = next((p for p in PRODUCTS if p.line.casefold() == str(entry.get("line") or "").casefold()), None)
+    if kin is not None:
+        rate, reference, basis = kin.rate, kin.reference_cents, f"{kin.line}'s rate ({kin.rate_basis})"
+    else:
+        rate, reference = UNKNOWN_LINE_RATE, price_cents or 300
+        basis = "no fall line: the mid segments' mean, at the plan's price (assumed)"
+    return Product(entry["sku"], entry.get("name") or entry["sku"], entry.get("line") or "", entry.get("flavor") or "",
+                   entry["size"], units_per_pack, pack_cents, None, True, reference, rate, basis)
+
+
+def register(products: list[dict]) -> list[str]:
+    """Add products (a `Product`'s fields, as a season keeps them) to the world, for this process. A SKU the world
+    already has keeps its own. Returns the SKUs added."""
+    added = []
+    for fields in products:
+        if fields["sku"] not in BY_SKU:
+            BY_SKU[fields["sku"]] = Product(**fields)
+            added.append(fields["sku"])
+    return added
+
 # The tag on an empty slot before its first load (assumed). The machine starts empty, and the worker sets
 # each slot's tag to the sale price of what it loads, so this only shows in the polls of empty slots.
 OPENING_PRICE_CENTS = 250
@@ -379,6 +411,12 @@ def _store_unit_prices() -> dict[tuple[str, str], Fraction]:
 
 
 STORE_UNIT_PRICE = _store_unit_prices()
+
+
+def register_prices(rows: list[tuple[str, str, int, int]]) -> None:
+    """Unit prices from an export, as (sku, store, pack cents, units per pack): they win over the sourcing files'."""
+    for sku, store, cents, units in rows:
+        STORE_UNIT_PRICE[(sku, store.casefold())] = Fraction(cents, units)
 
 
 def market_pack_cents(seed: int, sku: str, units_per_pack: int, store: str, on: date) -> int:

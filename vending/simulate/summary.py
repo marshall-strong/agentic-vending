@@ -114,8 +114,33 @@ def build(detail: Path, season_id: str, name: str | None = None, strategy: str |
         "decisions": [_decision(r) for r in runs],
         "notes": list(notes),
     }
+    if season.get("rehearsal"):
+        summary["rehearsal"] = rehearsal(season["rehearsal"])
     check(summary)
     return summary
+
+
+def rehearsal(r: dict) -> dict:
+    """A live-schedule season's own facts, cut down: the scheduled runs by kind and outcome, the day-one fill, the
+    round's jobs, the dashboard's timings, and what the season couldn't simulate (`vending.simulate.live`)."""
+    dash = []
+    for d in r.get("dashboard") or []:
+        dash.append({"label": d.get("label"), "snapshot_seconds": d.get("snapshot_seconds"),
+                     "render_seconds": d.get("render_seconds"), "unavailable": d.get("unavailable") or [],
+                     "errors": d.get("errors") or [],
+                     "panels": {p["panel"]: p["seconds"] for p in d.get("panels") or []},
+                     "run_pages": [{k: v for k, v in run.items() if k in ("run_id", "read_seconds", "render_seconds",
+                                                                          "error")} for run in d.get("runs") or []]})
+    day_one = r.get("day_one") or {}
+    return {"schedule": r.get("schedule"), "counts": r.get("counts"),
+            "scheduled": [{k: row.get(k) for k in ("due", "kind", "mode", "outcome", "run_id")}
+                          for row in r.get("scheduled_rows") or []],
+            "day_one": {"plan_id": day_one.get("plan_id"), "submit_exit": (day_one.get("submit") or {}).get("exit"),
+                        "warnings": len((day_one.get("preview") or {}).get("warnings") or []),
+                        "deviations": (day_one.get("preview") or {}).get("deviations") or []},
+            "tracking_checks": r.get("tracking_checks"), "price_checks": len(r.get("price_checks") or []),
+            "refusals": r.get("refusals"), "round_failures": len(r.get("round_failures") or []),
+            "dashboard": dash, "not_simulated": r.get("not_simulated") or []}
 
 
 # --- writing: one line per small object, so a summary stays short ------------------------------

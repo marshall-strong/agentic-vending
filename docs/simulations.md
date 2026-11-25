@@ -74,6 +74,34 @@ have. They show that agent, not main's.
    python -m vending.simulate.summary --check
    ```
 
+## A live-schedule rehearsal
+
+`--schedule live` runs the season the way the competition will run (`vending/simulate/live.py`):
+
+| Live | In the rehearsal |
+|---|---|
+| Sun 29 Nov: `ledger reset-test-opening`, `ledger open --amount 600.00`, `python -m vending.fill --submit` of the picked plan | The same commands at 20:00 ET Sun 29 Nov, against the simulated bridge |
+| The worker's scheduler: `AGENT_SCHEDULE` `wed 14:00-22:00,thu 12:00-20:00` from 2 Dec, both switches `live` | `vending.agent_schedule.Scheduler` itself, with those settings, on the season's clock |
+| Midweek wake-ups (`MIDWEEK_WAKE=on`), the run lease, `model_run_cap_cents` | The same code |
+| The daily tracking check (`TRACKING_DAILY=on`) | `tracking_daily.run` against the simulated bridge's books |
+| The weekly price check (`PRICE_CHECK_MODE`) | `price_schedule.PriceChecks` as a dry run; the world re-prices on Tuesday noon |
+| Sourcing and prices: the team database's four-store rows | `--from-export`: the same rows, exported read-only |
+
+The real scheduler, the run lease and the submit's checks read the database's clock, so the scratch database gets
+the season's clock (`vending/simulate/dbclock.py`: `now()` and `clock_timestamp()` in the schema, before
+`pg_catalog` on the search path). The simulator adds that to the URL itself.
+
+```
+python -m vending.simulate.export --plan 8 --out sim-out/export.json      # read only; DATABASE_URL is the team's
+python -m vending.simulate --database-url postgresql://postgres:...@127.0.0.1:PORT/postgres \
+    --schedule live --from-export sim-out/export.json --decider scripted --out sim-out/rehearsal
+```
+
+The report's `rehearsal.json` (and the summary's `rehearsal`) lists every scheduled row, the day-one steps, the
+round's failures, the tracking and price checks, and the dashboard timed against the scratch database mid-season and
+at the end (`vending/simulate/dashcheck.py`: each panel's seconds, panels unavailable, `/dashboard/run/<id>` for
+the newest runs). `live.NOT_SIMULATED` says what it still can't do.
+
 To get the full detail of the seven seasons above, check out
 `add_full_competition_simulation` (PR #151, closed). Its `docs/simulations/data/<id>/` keeps them.
 `python -m vending.simulate.summary <dir> --id <id>` turns one into a summary.
