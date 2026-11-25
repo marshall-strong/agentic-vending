@@ -315,12 +315,20 @@ python -m vending.alternates --write --by NAME     # store them
   per unit wins.
 - **Its max.** The price plus 25%, held to the pick's most-we-pay per pack. A price above that is left out.
 - **An existing alternate** whose max alone is over the pick's gets its max lowered to the pick's (C4 on 25 Nov).
+- **A substitute** when no other store fits: another drink of the plan (Kevin, 25 Nov: "double stock two slots if
+  needed"), at its own primary row checked within `--max-age`, at a store whose cutoff hasn't passed. Cheapest per
+  unit first. Its max per pack keeps its packs within the pick's most-we-pay for the line. Stored in
+  `fill_substitutes` for the picked plan; the fill sends it as the alternate with its own `sku`
+  ([`plan-page.md`](plan-page.md)). Not on a pooled line: those are listed. A same-drink alternate always wins,
+  and replaces a stored substitute. A stored one is kept only while its price is fresh, its store's cutoff hasn't
+  passed and it still fits; otherwise another is picked, or it is removed.
 - **The fill's checks.** Each one is tried on the fill's planner first. It is kept only if the fill gains no
   refusal and no `pick_deviation`, its most-we-pay stays within the $400 cap, and the spendable floor holds out of
   the $600 opening. The fill counts each line at its dearer choice. While the fill is over the cap or the floor,
   only a change that lowers it is kept, and `--write` writes nothing (`over_limit`).
-- **Output.** Each line: kept, set, replaced, lowered, or none with each store's reason. Then the lines with a
-  backup before and after, and the cap room.
+- **Output.** Each line: kept, set, replaced, lowered, substitute, or none with each store's reason. Then pooled
+  lines left without one, how many backups are the same drink and how many a substitute, the lines with a backup
+  before and after, and the cap room.
 - **Stored** with `sourcing.set_option` in the write gate: `checked_by` `agent-search`, dated when it was looked up,
   the note naming you. A changed pick, or any changed row of the plan's drinks, refuses the write
   (`changed_meanwhile`). `set_option` takes the SKU lock every writer takes, so a `sourcing set` at the same time

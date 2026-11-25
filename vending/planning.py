@@ -27,6 +27,8 @@ can say exactly what a person has to do before the agent can plan.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import math
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -281,11 +283,14 @@ def to_planner(desired: schema.DesiredState, *, pool: bool = False) -> planner.D
 
 
 def plan(conn: psycopg.Connection, desired: schema.DesiredState, bridge: Bridge,
-         now: datetime | None = None, *, pool: bool = False,
-         count_takings: bool = True) -> tuple[planner.Plan, Gathered]:
+         now: datetime | None = None, *, pool: bool = False, count_takings: bool = True,
+         adjust: Callable[[Gathered], Gathered] | None = None) -> tuple[planner.Plan, Gathered]:
     """Run the planner on live data. Raises `NotReady` when a person has to act first. `count_takings`: see
-    `gather`; never the agent's."""
+    `gather`; never the agent's. `adjust` changes what was gathered before it is planned: the day-one fill's
+    substitutes (`vending.fill.with_substitutes`); never the agent's."""
     gathered = gather_live(conn, bridge, now, count_takings=count_takings)
+    if adjust is not None:
+        gathered = adjust(gathered)
     return plan_gathered(gathered, desired, pool=pool), gathered
 
 

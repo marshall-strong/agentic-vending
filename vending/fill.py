@@ -58,6 +58,14 @@ slot, sized for all of them, and a back-stock line for each other slot that load
 `note` names every slot's load, since the bridge's purchase line has no load target. See "Pooled
 purchases" in `vending.planner`.
 
+A line whose drink has no same-drink alternate may buy a substitute instead: another drink, stored for the
+picked plan in `fill_substitutes` (`python -m vending.alternates`). Its store, pack, link and price are the
+substitute's own primary sourcing row; its max per pack is the lower of that row's and the one stored. The
+request's alternate then names the substitute's `sku`. The planner refuses one on a pooled line, one that
+isn't active in the catalog, and one that doesn't fit the column (`bad_sourcing`). Its row must have a checked
+price (`no_checked_price`) from the last week (`stale_price`), and its most-we-pay must not pass the pick's for
+the line (`pick_deviation`).
+
 The submit needs `--hash`, the hash the preview printed, and refuses
 (`plan_changed`) when the plan now hashes to anything else. The hash covers the
 request (its lines, the worst-case cost and the visit fee), the picked plan's ID
@@ -112,7 +120,7 @@ import json
 import math
 import sys
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -207,6 +215,63 @@ class Preview:
         return approval_hash(self.plan.plan_hash, self.picked.id, self.ours) if self.ok else None
 
 
+@dataclass(frozen=True)
+class Substitute:
+    """Another drink a line's alternate buys (`fill_substitutes`, migration 039)."""
+    sku: str            # the line's drink in the pick
+    substitute: str     # the drink to buy instead, at its own primary sourcing row
+    max_cents: int      # the most per pack for it here; the row's own max applies when lower
+
+
+def substitutes(conn: psycopg.Connection, plan_id: int) -> dict[str, Substitute]:
+    """The picked plan's stored substitutes, by the line's drink."""
+    return {sku: Substitute(sku, sub, most) for sku, sub, most in conn.execute(
+        "select sku, substitute_sku, max_cents from fill_substitutes where plan_id = %s order by sku",
+        (plan_id,)).fetchall()}
+
+
+def with_substitutes(gathered: planning.Gathered, checked: plan_rounds.Round,
+                     subs: dict[str, Substitute]) -> tuple[planning.Gathered, list[Refusal]]:
+    """`gathered` with each substitute as its line's alternate, and a refusal for each whose drink has no checked
+    primary row. Pure. A line with a same-drink alternate keeps it: a substitute is only for a line with none.
+    The substitute's row is the table's (`gathered.sourcing_rows`), so the guards judge it as the planner used it."""
+    rows = {(o.sku, o.rank): o for o in gathered.sourcing_rows}
+    table = {s.product: s for s in gathered.current.sourcing_table}
+    ours = {s.sku for s in checked.slots.values() if s.sku}
+    refusals = []
+    for sku, sub in sorted(subs.items()):
+        source = table.get(sku)
+        if sku not in ours or source is None or source.alternate is not None:
+            continue
+        row = rows.get((sub.substitute, "primary"))
+        if row is None or not row.store or row.expected_cents is None:
+            used = sorted(s.slot for s in checked.slots.values() if s.sku == sku)
+            refusals.append(Refusal(NO_CHECKED_PRICE, (
+                f"{sku}'s substitute {sub.substitute} has no checked primary price, and the request would send it "
+                f"for slot{'s' if len(used) > 1 else ''} {', '.join(used)}; look it up (python -m "
+                f"vending.price_search {sub.substitute} --pack N --compare --by NAME), or run python -m "
+                "vending.alternates again"), used[0] if len(used) == 1 else None))
+            continue
+        table[sku] = replace(source, alternate=planner.PurchaseOption(
+            store=row.store, units_per_pack=row.units_per_pack, max_price_per_pack=min(row.max_cents, sub.max_cents),
+            url=row.url, expected_price_per_pack=row.expected_cents, pack_description=row.pack_description,
+            sku=sub.substitute))
+    current = replace(gathered.current, sourcing_table=tuple(table[k] for k in sorted(table)))
+    return replace(gathered, current=current), refusals
+
+
+def _substituting(conn: psycopg.Connection, pick: Picked,
+                  found: dict) -> Callable[[planning.Gathered], planning.Gathered]:
+    """The planner's `adjust` for the fill: the picked plan's substitutes, read now. Their refusals go in
+    `found["refusals"]`."""
+    subs = substitutes(conn, pick.id)
+
+    def adjust(gathered: planning.Gathered) -> planning.Gathered:
+        adjusted, found["refusals"] = with_substitutes(gathered, pick.round, subs)
+        return adjusted
+    return adjust
+
+
 def picked(conn: psycopg.Connection, ours: tuple[str, ...]) -> Picked:
     """The picked plan, checked against `ours` when it was loaded for the same assignment."""
     row = _picked_row(conn)
@@ -275,10 +340,29 @@ def input_refusals(checked: plan_rounds.Round, gathered: planning.Gathered) -> l
     the opening its balance counted from. Re-reading the tables instead could pass rows the planner never used."""
     skus = {s.sku for s in checked.slots.values() if s.sku}
     rows = [o for o in gathered.sourcing_rows if o.sku in skus]
-    return [*_unpriced(rows, checked), *_stale(rows, checked, gathered.now), *_test_opening(gathered.opening)]
+    return [*_unpriced(rows, checked), *_stale(_used_rows(checked, gathered), checked, gathered.now,
+                                               _substituted(gathered, skus)),
+            *_test_opening(gathered.opening)]
 
 
-def _stale(options: Sequence[sourcing.Option], checked: plan_rounds.Round, now: datetime) -> list[Refusal]:
+def _substituted(gathered: planning.Gathered, skus: set[str]) -> dict[str, set[str]]:
+    """Each substitute the planner was given, with the plan's drinks it stands in for."""
+    found: dict[str, set[str]] = {}
+    for s in gathered.current.sourcing_table:
+        if s.product in skus and s.alternate is not None and s.alternate.sku:
+            found.setdefault(s.alternate.sku, set()).add(s.product)
+    return found
+
+
+def _used_rows(checked: plan_rounds.Round, gathered: planning.Gathered) -> list[sourcing.Option]:
+    """The sourcing rows the request may buy from: the plan's drinks' rows, and each substitute's primary."""
+    skus = {s.sku for s in checked.slots.values() if s.sku}
+    subs = _substituted(gathered, skus)
+    return [o for o in gathered.sourcing_rows if o.sku in skus or (o.sku in subs and o.rank == "primary")]
+
+
+def _stale(options: Sequence[sourcing.Option], checked: plan_rounds.Round, now: datetime,
+           substituted: dict[str, set[str]] | None = None) -> list[Refusal]:
     """A refusal per primary or alternate row checked more than a week before `now` (`Option.is_stale`). The
     planner only warns about these; the fill sends both choices to the stocker as the day-one purchase, so each
     must be a price checked within the week (round 4, finding 3)."""
@@ -286,9 +370,11 @@ def _stale(options: Sequence[sourcing.Option], checked: plan_rounds.Round, now: 
     for o in options:
         if o.expected_cents is None or not o.is_stale(now):
             continue    # no checked price at all is `no_checked_price`'s
-        used = sorted(s.slot for s in checked.slots.values() if s.sku == o.sku)
+        stands_for = (substituted or {}).get(o.sku, set()) if o.rank == "primary" else set()
+        used = sorted(s.slot for s in checked.slots.values() if s.sku == o.sku or s.sku in stands_for)
         found.append(Refusal(STALE_PRICE, (
-            f"{o.sku}'s {o.rank} price ({o.store}) was checked {o.checked_at:%Y-%m-%d}, {(now - o.checked_at).days} "
+            f"{o.sku}'s {o.rank} price ({o.store}"
+            f"{', the substitute for ' + ', '.join(sorted(stands_for)) if stands_for else ''}) was checked {o.checked_at:%Y-%m-%d}, {(now - o.checked_at).days} "
             f"days ago, and the request would send it for slot{'s' if len(used) > 1 else ''} {', '.join(used)}; "
             f"look it up again (python -m vending.price_search --plan picked --by NAME) or record it (python -m "
             f"vending.sourcing set {o.sku}"
@@ -365,10 +451,17 @@ def deviations(plan: planner.Plan, checked: plan_rounds.Round) -> list[str]:
                   f"{_usd(pick.most_cents)})")
         if _differs(primary, pick):
             found.append(f"{sku}: the pick buys {theirs}; this request buys {primary[-1]}")
-        alternates = [p.alternate for p in mine if p.alternate is not None]
+        alternates = [p.alternate for p in mine if p.alternate is not None and p.alternate.sku in (None, sku)]
         if alternates and _differs(alternate := _bought(alternates), pick):
             stores = ", ".join(sorted({a.store for a in alternates}))
             found.append(f"{sku} (alternate, {stores}): the pick buys {theirs}; the alternate buys {alternate[-1]}")
+        # A substitute is another drink, so its packs can't match the pick's: only its cost is compared.
+        subs = [p.alternate for p in mine if p.alternate is not None and p.alternate.sku not in (None, sku)]
+        if subs and (sub_cost := _bought(subs))[3] > pick.most_cents:
+            names = ", ".join(sorted({a.sku for a in subs}))
+            stores = ", ".join(sorted({a.store for a in subs}))
+            found.append(f"{sku} (substitute {names}, {stores}): the pick buys {theirs}; the substitute buys "
+                         f"{sub_cost[-1]}")
     return found
 
 
@@ -461,11 +554,13 @@ def preview(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = Non
                 "anyway, add --late to the submit"] if late else []
     if pick.round is None:
         return Preview(pick, None, None, tuple(own), tuple(deadline), ours=ours, late=late)
+    swapped: dict = {}
     try:
-        plan, gathered = planning.plan(conn, desired_state(pick.round), bridge, now, pool=True, count_takings=False)
+        plan, gathered = planning.plan(conn, desired_state(pick.round), bridge, now, pool=True, count_takings=False,
+                                       adjust=_substituting(conn, pick, swapped))
     except planning.NotReady as blocked:
         return Preview(pick, None, None, tuple(own), tuple(deadline), blocked=str(blocked), ours=ours, late=late)
-    own = _unique([*own, *input_refusals(pick.round, gathered)])
+    own = _unique([*own, *swapped.get("refusals", ()), *input_refusals(pick.round, gathered)])
     return Preview(pick, plan, gathered, _merge(own, plan.refusals),
                    (*deadline, *plan.warnings, *day_one_warnings(plan, gathered.now, visit),
                     *_plan_warnings(pick.round)), ours=ours, late=late,
@@ -507,16 +602,19 @@ def submit(conn: psycopg.Connection, bridge: Callable[[], Bridge], connect: Call
         if pick.round is None:
             raise Refused([*own, *_deadline(conn, now, late)])
         desired = desired_state(pick.round)
+        swapped: dict = {}
+        adjust = _substituting(conn, pick, swapped)
         if own:
             try:
-                plan, _ = planning.plan(conn, desired, bridge(), now, pool=True, count_takings=False)
+                plan, _ = planning.plan(conn, desired, bridge(), now, pool=True, count_takings=False, adjust=adjust)
             except planning.NotReady:
                 raise Refused([*own, *_deadline(conn, now, late)]) from None
             raise Refused([*_merge(own, plan.refusals), *_deadline(conn, now, late)])
 
         def before_send(conn: psycopg.Connection, plan: planner.Plan,
                         gathered: planning.Gathered) -> list[Refusal]:
-            found = [*input_refusals(pick.round, gathered), *_inputs_changed(conn, gathered),
+            found = [*swapped.get("refusals", ()), *input_refusals(pick.round, gathered),
+                     *_inputs_changed(conn, gathered),
                      *_before_send(conn, plan, pick, ours, expected, now, late)]
             if devs := deviations(plan, pick.round):
                 if accept_deviations:
@@ -537,7 +635,7 @@ def submit(conn: psycopg.Connection, bridge: Callable[[], Bridge], connect: Call
 
         return submit_tool.submit_desired_state(desired, bridge, connect, now, pool=True, before_send=before_send,
                                                 before_post=before_post, purpose=PURPOSE,
-                                                count_takings=False)(conn)
+                                                count_takings=False, adjust=adjust)(conn)
 
     # The gate logs `arguments` after the action has filled in the plan's ID.
     return run_write(conn, TOOL, arguments, action)
@@ -577,7 +675,8 @@ def hold_inputs(conn: psycopg.Connection) -> None:
     busy = "someone is changing the pick, our slots, the sourcing table, our catalog copy or the ledger right now"
     _nowait(conn, "lock table first_fill_plans in share mode nowait", INPUTS_BUSY, busy)
     _nowait(conn, "select 1 from slot_assignment where id = 1 for share nowait", INPUTS_BUSY, busy)
-    _nowait(conn, "lock table sourcing_options, catalog_products, ledger_entries in share mode nowait",
+    _nowait(conn, "lock table sourcing_options, catalog_products, ledger_entries, fill_substitutes in share mode"
+            " nowait",
             INPUTS_BUSY, busy)
 
 
@@ -653,8 +752,8 @@ def _at_the_post(conn: psycopg.Connection, p: Preview, now: datetime | None, lat
     due = conn.execute("select min(at) from ledger_entries where at > %s", (at,)).fetchone()[0]
     last = now or ledger.db_now(conn)   # the final clock reading, right before the POST
     skus = {s.sku for s in p.picked.round.slots.values() if s.sku}
-    fresh = [o for o in p.gathered.sourcing_rows if o.sku in skus and not o.is_stale(p.gathered.now)]
-    found = _stale(fresh, p.picked.round, last)
+    fresh = [o for o in _used_rows(p.picked.round, p.gathered) if not o.is_stale(p.gathered.now)]
+    found = _stale(fresh, p.picked.round, last, _substituted(p.gathered, skus))
     cash = math.floor(balance.cash_without_takings_cents) if balance is not None else 0
     if cost is not None and cost.max_cents > cash:
         found.append(Refusal("insufficient_balance", (
@@ -777,7 +876,8 @@ def _table(plan: planner.Plan) -> str:
                      f"{_unit(o.expected_price_per_pack_cents, o.units_per_pack)} / "
                      f"{_unit(o.max_price_per_pack_cents, o.units_per_pack)}",
                      _usd(ln.sale_price_cents),
-                     f"{alt.store} {alt.packs} x {alt.units_per_pack}" if alt else "-"))
+                     f"{alt.sku + ' ' if alt and alt.sku else ''}{alt.store} {alt.packs} x {alt.units_per_pack}"
+                     if alt else "-"))
     widths = [max(len(r[i]) for r in rows) for i in range(len(header))]
     return "\n".join("  ".join(cell.ljust(w) for cell, w in zip(r, widths)).rstrip() for r in rows)
 
