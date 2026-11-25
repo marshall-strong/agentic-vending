@@ -113,7 +113,7 @@ details[open] summary { margin-bottom: 10px; }
 
   <div class="controls" role="group" aria-label="What the charts show">
     <div><span class="ctl-name">Split by</span>
-      <span class="seg"><label><input type="radio" name="split" value="purpose" checked><span>Purpose</span></label><label><input type="radio" name="split" value="model"><span>Model</span></label></span></div>
+      <span class="seg"><label><input type="radio" name="split" value="purpose" checked><span>Category</span></label><label><input type="radio" name="split" value="model"><span>Model</span></label></span></div>
     <div><span class="ctl-name">Per</span>
       <span class="seg"><label><input type="radio" name="unit" value="weekly" checked><span>Week</span></label><label><input type="radio" name="unit" value="daily"><span>Day</span></label></span></div>
     <label class="check"><input type="checkbox" id="after"> Test calls after the opening (there should be none) <small id="after-note"></small></label>
@@ -142,22 +142,7 @@ details[open] summary { margin-bottom: 10px; }
     <div class="scroll"><table id="buckets"></table></div>
   </details>
 
-  <section class="card notes">
-    <h2>How it is counted</h2>
-    <ul>
-      <li>Development ends at the ledger's opening entry. A model call before it, live or test, doesn't come out of
-        the $600 (docs/opening-capital-plan.md, #104). The opening is recorded before the day-one fill is fulfilled,
-        about 30 Nov, not on 3 Dec.</li>
-      <li>Every call the harness sends is a row in <code>model_calls</code>; ledger token entries with no such row
-        (older code, or recorded by hand) are added. A call never corrected from its worst case is shown hatched as
-        <b>unconfirmed</b>: it may have cost less, or nothing.</li>
-      <li>Weeks run Saturday to Friday in Eastern time, the ledger's week. Costs are list prices from
-        <code>vending/model_prices.json</code>; the Claude Console's Usage and Cost pages are Anthropic's own record.</li>
-      <li>Live calls after the opening are the competition's money and are not on this page.</li>
-      <li>Testing finishes before the opening, so there should be no test calls after it. If one is recorded, the
-        box above says so; the page keeps it out of every figure and shows it only when the box is ticked.</li>
-    </ul>
-  </section>
+
 </div>
 <div id="tip" role="tooltip" hidden></div>
 </div>
@@ -167,6 +152,10 @@ const DATA = /*DATA*/null;
 const SVGNS = "http://www.w3.org/2000/svg";
 const MODEL_ORDER = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"];
 const SLOTS = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6"];      // --s7 is kept for test calls after the opening
+const CATEGORIES = [
+  ["agent runs", "Agent runs"], ["price search", "Price search"],
+  ["simulations/bench", "Simulations/bench"], ["manual", "Manual"],
+];
 const state = { split: "purpose", unit: "weekly", after: false };
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -227,7 +216,7 @@ function money(node) {
   if (!node || typeof node !== "object") return;
   for (const [k, v] of Object.entries(node)) {
     if (k.endsWith("_usd")) node[k] = dec(v);
-    else if (k.startsWith("by_")) for (const name of Object.keys(v)) v[name] = dec(v[name]);
+    else if (k.startsWith("by_") || k === "unconfirmed_by_category") for (const name of Object.keys(v)) v[name] = dec(v[name]);
     else money(v);
   }
 }
@@ -265,8 +254,10 @@ function models(r) {
 function series(r) {
   let out;
   if (state.split === "purpose") {
-    out = [{ name: "Live", color: "--s1", get: b => b.by_purpose.live || ZERO },
-           { name: "Test", color: "--s2", get: b => b.by_purpose.test || ZERO }];
+    out = CATEGORIES.map(([key, name], i) => ({
+      name, color: SLOTS[i],
+      get: b => minus(b.by_category[key] || ZERO, b.unconfirmed_by_category[key] || ZERO),
+    }));
   } else {
     const m = models(r);
     out = m.list.map((name, i) => ({ name, color: SLOTS[i], get: b => b.by_model[name] || ZERO }));
@@ -274,12 +265,12 @@ function series(r) {
                                    get: b => sum(m.other.map(k => b.by_model[k] || ZERO)) });
   }
   if (r.buckets.some(b => !isZero(b.unconfirmed_usd))) {
-    out.push({ name: "Unconfirmed (worst case, never corrected)", color: "--unconf", hatch: true, get: b => b.unconfirmed_usd });
+    out.push({ name: "Unconfirmed", color: "--unconf", hatch: true, get: b => b.unconfirmed_usd });
   }
   if (state.after) {
-    out.push({ name: "Test, after the opening (shouldn't happen)", color: "--s7", get: b => minus(b.after_opening_test_usd, b.after_opening_test_unconfirmed_usd) });
+    out.push({ name: "Tests after opening", color: "--s7", get: b => minus(b.after_opening_test_usd, b.after_opening_test_unconfirmed_usd) });
     if (r.buckets.some(b => !isZero(b.after_opening_test_unconfirmed_usd)))
-      out.push({ name: "After opening: unconfirmed (worst case)", color: "--unconf", hatch: true, get: b => b.after_opening_test_unconfirmed_usd });
+      out.push({ name: "Unconfirmed after opening", color: "--unconf", hatch: true, get: b => b.after_opening_test_unconfirmed_usd });
   }
   return out;
 }
@@ -447,7 +438,13 @@ function drawCumulative() {
   const place = openingPlace(r);
   const last = place ? place.index : buckets.length - 1;
   const dev = buckets.slice(0, last + 1);
-  const f = frame(host, 220, buckets, Math.max(...dev.map(b => num(b.cumulative_usd))), r);
+  const cap = num(r.cap_usd);
+  const f = frame(host, 220, buckets, Math.max(cap, ...dev.map(b => num(b.cumulative_usd))), r);
+  const capY = f.y(cap);
+  f.root.append(svg("line", { x1: M.left, x2: M.left + f.plotW, y1: capY, y2: capY,
+                              stroke: cssVar("--s7"), "stroke-dasharray": "5 4" }));
+  f.root.append(svg("text", { x: M.left + 6, y: capY - 5, class: "end-label" },
+                    `Cap ${usdShort(r.cap_usd)}`));
   f.root.setAttribute("aria-label", "Development spend so far, at the end of each " + r.unit + ". The table view below lists every value.");
   const color = cssVar("--s1"), surface = cssVar("--surface-1");
   // Each total is drawn where its bucket ends, and the opening's bucket ends at the opening.
@@ -504,26 +501,12 @@ function tile(label, value, note, hero) {
 function drawTiles() {
   const r = weeksReport(), t = r.totals, host = document.getElementById("tiles");
   host.replaceChildren();
-  const dev = r.runs.filter(x => !x.after_opening);
-  const demo = r.source.includes("not the ledger");
-  const unconf = !isZero(t.unconfirmed_usd) ? `${usd(t.unconfirmed_usd)} of it unconfirmed (worst case)` :
-                 demo ? "as the run notes give it" : "all of it as the API billed";
-  host.append(tile("Total development spend", usdShort(t.total_usd), unconf, true));
-  host.append(tile("Calls", count(t.calls) + (t.calls_unknown ? "+" : ""),
-                   t.calls_unknown ? `${t.calls_unknown} run${t.calls_unknown === 1 ? "" : "s"} in the notes don't say how many`
-                   : t.tokens_unknown ? `tokens not known for ${t.tokens_unknown}` : `${count(t.tokens_in)} tokens in, ${count(t.tokens_out)} out`));
-  host.append(tile("Average per run", dev.length ? usd(t.total_usd, 2, dev.length) : "–", dev.length ? `${dev.length} runs` : "no runs yet"));
-  const dear = dev.slice().sort((a, b) => cmp(b.total_usd, a.total_usd))[0];
-  host.append(tile("Dearest run", dear ? usdShort(dear.total_usd) : "–", dear ? `${dear.label || "(no label)"}, ${short(dear.first_at)}` : ""));
-  const place = openingPlace(r);
-  const weeks = place ? r.buckets.slice(0, place.index + 1) : r.buckets;
-  const cur = weeks[weeks.length - 1], prev = weeks[weeks.length - 2];
-  if (cur) {
-    const name = place ? "Last week of development" : "This week";
-    const delta = prev ? minus(cur.total_usd, prev.total_usd) : null;
-    const note = prev ? `${cmp(delta, ZERO) >= 0 ? "up" : "down"} ${usdShort(abs(delta))} from the week of ${short(prev.start)} (${usdShort(prev.total_usd)})`
-                      : "no week before it";
-    host.append(tile(`${name} (from ${short(cur.start)})`, usdShort(cur.total_usd), note));
+  const unconf = !isZero(t.unconfirmed_usd) ? `Unconfirmed ${usd(t.unconfirmed_usd)}` : "";
+  host.append(tile("Development spend", `${usdShort(t.total_usd)} / ${usdShort(r.cap_usd)}`, unconf, true));
+  for (const [key, name] of CATEGORIES) {
+    const amount = t.unconfirmed_by_category[key] || ZERO;
+    host.append(tile(name, usdShort(t.by_category[key] || ZERO),
+                     isZero(amount) ? "" : `Unconfirmed ${usd(amount)}`));
   }
 }
 function cell(text, cls) { return el("td", cls ? { class: cls } : {}, text); }
@@ -532,7 +515,7 @@ function drawRuns() {
   const rows = r.runs.filter(x => state.after || !x.after_opening);
   table.replaceChildren();
   const head = el("tr");
-  for (const [h, cls] of [["When (Eastern)"], ["Run"], ["Purpose"], ["Model"], ["Calls", "num"], ["Tokens in", "num"], ["Tokens out", "num"], ["Cost", "num"]]) {
+  for (const [h, cls] of [["When (Eastern)"], ["Run"], ["Category"], ["Model"], ["Calls", "num"], ["Tokens in", "num"], ["Tokens out", "num"], ["Cost", "num"]]) {
     head.append(el("th", cls ? { class: cls } : {}, h));
   }
   const thead = el("thead"); thead.append(head); table.append(thead);
@@ -541,9 +524,11 @@ function drawRuns() {
   for (const x of rows) {
     const tr = el("tr", x.after_opening ? { class: "later" } : {});
     const label = cell(x.label || "(no label)");
+    if (x.category !== "manual" && x.label !== x.run_id)
+      label.append(el("div", { class: "note" }, x.run_id));
     if (x.after_opening) label.append(el("span", { class: "tag" }, "after the opening"));
     if (!isZero(x.unconfirmed_usd)) label.append(el("span", { class: "tag" }, "unconfirmed"));
-    tr.append(cell(when(x.first_at)), label, cell(x.purpose), cell(x.models.join(", ")),
+    tr.append(cell(when(x.first_at)), label, cell(x.category), cell(x.models.filter(Boolean).join(", ")),
               cell(x.calls === null ? "not noted" : count(x.calls), "num"),
               cell(x.tokens_in === null ? "–" : count(x.tokens_in), "num"),
               cell(x.tokens_out === null ? "–" : count(x.tokens_out), "num"), cell(usd(x.total_usd), "num"));
@@ -586,10 +571,10 @@ function header() {
   const r = weeksReport();
   const source = document.getElementById("source");
   source.hidden = !r.source.includes("not the ledger");
-  source.textContent = "Demo data, " + r.source + ": each run as the team wrote it down (docs/agent.md, docs/sample-directive.md, docs/benchmark.md, docs/guardrail-evidence.md). Times the notes don't give are placed late on the day they give.";
+  source.textContent = "Demo data from run notes.";
   document.getElementById("period").textContent = r.opening_at
-    ? `Development ended at the ledger's opening, ${dateLabel(r.opening_at, true)} ${r.opening_at.slice(11, 16)} Eastern: the competition's money starts there. As of ${when(r.as_of)}.`
-    : `No ledger opening yet, so every call so far is development spend, none of it from the $600. As of ${dateLabel(r.as_of, true)} ${r.as_of.slice(11, 16)} Eastern.`;
+    ? `Real opening ${dateLabel(r.opening_at, true)} at ${r.opening_at.slice(11, 16)} ET`
+    : `As of ${dateLabel(r.as_of, true)} at ${r.as_of.slice(11, 16)} ET`;
   const later = r.buckets.reduce((s, b) => s + b.after_opening_test_calls, 0);
   document.getElementById("after-note").textContent = later
     ? `(warning: ${later} call${later === 1 ? "" : "s"}, ${usd(sum(r.buckets.map(b => b.after_opening_test_usd)))}; testing should finish before the opening)`

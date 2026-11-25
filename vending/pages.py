@@ -459,10 +459,7 @@ def spend_data(conn: psycopg.Connection) -> tuple[dev_spend.Report, dev_spend.Re
     """Development spend by week and by day, from one snapshot. It ends at the ledger's opening
     (`dev_spend.summarise`), so no competition money is in it."""
     with snapshot(conn):
-        now = ledger.db_now(conn)
-        recorded, opened = dev_spend.calls(conn), dev_spend.opening_at(conn)
-    return (dev_spend.summarise(recorded, opened, "week", now),
-            dev_spend.summarise(recorded, opened, "day", now))
+        return dev_spend.chart_reports(conn, ledger.db_now(conn))
 
 
 def pnl_data(conn: psycopg.Connection, query: pnl_report.Query) -> pnl_report.Report | NotYet:

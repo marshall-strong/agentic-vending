@@ -224,7 +224,7 @@ def test_the_cli_prints_json_and_a_table_and_only_reads(conn, capsys):
     assert dev_spend.main(["--json"], conn=conn, now=BEFORE_OPEN_NOW) == 0
     data = json.loads(capsys.readouterr().out)
     assert data["unit"] == "week" and data["totals"]["total_usd"] == "0.8" and data["runs"][0]["label"] == "agent run 1"
-    assert data["buckets"][0]["start"] == "2026-11-07" and data["source"] == "model_calls and the ledger"
+    assert data["buckets"][0]["start"] == "2026-11-07" and data["source"] == "database"
     assert dev_spend.main(["--daily"], conn=conn, now=BEFORE_OPEN_NOW) == 0
     out = capsys.readouterr().out
     assert "Wed 11 Nov" in out and "$0.8000" in out and "No ledger opening yet" in out
@@ -349,3 +349,43 @@ def test_after_opening_unconfirmed_is_separate(conn):
     assert bucket["after_opening_test_usd"] == "0.25"
     assert bucket["after_opening_test_unconfirmed_usd"] == "0.25"
     assert bucket["unconfirmed_usd"] == "0"
+
+
+def test_test_opening_keeps_development_open(conn):
+    conn.execute("insert into ledger_entries (id, at, kind, amount_cents, detail, recorded_by)"
+                 " values (%s, %s, 'opening', 60000, %s, 'tester')",
+                 (ledger.TEST_OPENING_ID, et(11), ledger.TEST_OPENING_DETAIL))
+    add(conn, et(12))
+    r = dev_spend.weekly(conn, BEFORE_OPEN_NOW)
+    assert r.opening_at is None
+    assert r.totals.total_cents == 10
+
+
+def test_price_search_calls_are_counted_once(conn):
+    conn.execute("create table price_lookups (id bigint primary key, at timestamptz, sku text,"
+                 " store text, model text, cost_usd numeric)")
+    add(conn, et(12), label="pack price lookup tea Costco")
+    conn.execute("insert into price_lookups values"
+                 " (1, %s, 'tea', 'Costco', 'claude-opus-5-5', 0.10),"
+                 " (2, %s, 'tea', 'Amazon', 'claude-opus-5-5', 0.25)", (et(12), et(12)))
+    totals = dev_spend.weekly(conn, BEFORE_OPEN_NOW).totals
+    assert totals.total_cents == 35
+    assert totals.by_category == {"price search": 35}
+
+
+def test_record_import_is_idempotent_and_uses_actual_date(conn, tmp_path):
+    csv = tmp_path / "model_calls.csv"
+    csv.write_text("id,at,label,model,status,cost_usd\n"
+                   "1,2026-12-03T12:00:00-05:00,week run,opus,ok,0.25\n"
+                   "2,2026-12-03T12:01:00-05:00,week run,opus,error,0.50\n")
+    args = ["record", "--from", str(tmp_path), "--label", "rehearsal", "--by", "tester"]
+    for _ in range(2):
+        assert dev_spend.main(args, conn=conn, now=et(12)) == 0
+    args = ["record", "--usd", "1.00", "--label", "console", "--by", "tester", "--unconfirmed"]
+    for _ in range(2):
+        assert dev_spend.main(args, conn=conn, now=et(12)) == 0
+    opening(conn)
+    report = dev_spend.weekly(conn, NOW)
+    assert report.totals.total_cents == 175
+    assert report.totals.unconfirmed_cents == 150
+    assert report.totals.by_category == {"simulations/bench": 75, "manual": 100}
