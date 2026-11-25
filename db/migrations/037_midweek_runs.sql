@@ -13,6 +13,10 @@ alter table agent_schedule
     add column kind text not null default 'weekly' check (kind in ('weekly', 'midweek')),
     -- No foreign key, as `agent_run_lease.run_id`: a claim never waits on a lock on midweek_wakeups.
     add column wakeup_id bigint,
-    add constraint agent_schedule_midweek_has_wakeup check ((kind = 'midweek') = (wakeup_id is not null));
+    add constraint agent_schedule_midweek_has_wakeup check ((kind = 'midweek') = (wakeup_id is not null)),
+    -- Weekly times are on whole minutes (AGENT_SCHEDULE gives HH:MM); a midweek row never is
+    -- (`agent_schedule.midweek_due`), so the two never share a due_at, the key every path uses.
+    add constraint agent_schedule_midweek_off_the_minute
+        check (kind = 'weekly' or extract(epoch from due_at) % 60 <> 0);
 
 create unique index agent_schedule_one_run_per_wakeup on agent_schedule (wakeup_id);

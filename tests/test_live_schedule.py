@@ -817,8 +817,14 @@ def test_a_validated_201_left_open_is_settled_by_the_scheduler_and_the_run_goes_
     fake.lookups["pr-7"] = {"id": "pr-7", "status": "pending", "created_at": "2026-12-09T12:00:00Z",
                             "decision_note": None}
     agent = FakeAgent(schema_url)
-    tick(scheduler(schema_url, agent, LIVE9, clock=Clock(at(WED2, 13)), bridge=fake.client), at(WED2, 14))
+    s = scheduler(schema_url, agent, LIVE9, clock=Clock(at(WED2, 13)), bridge=fake.client)
+    tick(s, at(WED2, 14))
     assert conn.execute("select status from purchase_submissions").fetchone() == ("accepted",)
+    # Settled, its request is pending: the planner would refuse a new one (`request_pending`), so the run waits
+    # for it (#249 review, finding 2), and goes live once the request is fulfilled.
+    assert agent.calls == [] and "pr-7" in s.public()["waiting"]
+    conn.execute("update purchase_requests set status = 'fulfilled', fulfilled_at = %s", (at(WED2, 14, 3),))
+    tick(s, at(WED2, 14, 5))
     assert [live for _, live in agent.calls] == [True]
 
 

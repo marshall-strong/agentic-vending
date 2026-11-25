@@ -42,9 +42,9 @@ def test_the_opening_says_why_a_midweek_run_runs_and_what_it_may_send():
     assert "midweek wake check" not in agent.brief(at(MON, 9), "none", live=True)
 
 
-def _banner_snap(rows, *, opened, last_finished=None):
-    return {"opened_at": opened, "status": {"last_finished": last_finished},
-            "scheduled_runs": {"ok": True, "data": {"latest": rows[0], "incidents": rows}}}
+def _banner_snap(rows, *, opened, last_ran=None):
+    return {"opened_at": opened, "status": {},
+            "scheduled_runs": {"ok": True, "data": {"latest": rows[0], "incidents": rows, "last_ran": last_ran}}}
 
 
 def _row(due, outcome, kind="weekly", run_id=None, latest=None):
@@ -65,17 +65,17 @@ def test_a_missed_run_in_the_live_period_is_a_banner_line_in_plain_words():
     assert "Scheduled run missed" in dashboard._alerts_html([alert])
 
 
-def test_a_later_run_that_finished_clears_the_missed_line():
+def test_a_later_run_that_started_and_finished_clears_the_missed_line():
+    """`last_ran` is the panel's own read: the newest scheduled time whose run started and has ended."""
     missed = _row(at(WED2, 14), "missed")
-    later = _row(at(WED2 + timedelta(days=1), 12), "skipped", run_id=9)
-    assert dashboard.build_alerts(_banner_snap([later, missed], opened=at(MON, 0))) == []
-    # A later time that is still running doesn't clear it; nor does one that was missed too.
-    going = _row(at(WED2 + timedelta(days=1), 12), "running", run_id=9)
-    assert [a["kind"] for a in dashboard.build_alerts(_banner_snap([going, missed], opened=at(MON, 0)))] == [
+    thursday = at(WED2 + timedelta(days=1), 12)
+    assert dashboard.build_alerts(_banner_snap([missed], opened=at(MON, 0), last_ran=thursday)) == []
+    # A later row that ran nothing (no start) doesn't clear it, whatever its run id; an older run doesn't either.
+    tried = _row(thursday, "skipped", run_id=9)
+    assert [a["kind"] for a in dashboard.build_alerts(_banner_snap([tried, missed], opened=at(MON, 0)))] == [
         "missed_run"]
-    # A live run by hand that started after the missed time and finished clears it too.
-    done = {"id": 4, "started_at": at(WED2, 23), "finished_at": at(WED2, 23, 10), "status": "skipped"}
-    assert dashboard.build_alerts(_banner_snap([missed], opened=at(MON, 0), last_finished=done)) == []
+    assert [a["kind"] for a in dashboard.build_alerts(
+        _banner_snap([missed], opened=at(MON, 0), last_ran=at(WED2, 13)))] == ["missed_run"]
 
 
 def test_no_missed_line_before_the_opening():
@@ -148,7 +148,8 @@ def test_a_wake_up_starts_one_dry_run_with_its_reason(schema_url, conn):
     assert live is False and REASON in occasion
     [(due, kind, wakeup_id, mode, outcome, run_id, _)] = schedule_rows(conn)
     assert (kind, wakeup_id, mode, outcome) == ("midweek", wakeup, "dry-run", "skipped")
-    assert due == conn.execute("select requested_at from midweek_wakeups").fetchone()[0]
+    requested = conn.execute("select requested_at from midweek_wakeups").fetchone()[0]
+    assert due == agent_schedule.midweek_due(requested) and due - requested <= timedelta(microseconds=1)
     assert conn.execute("select mode from agent_runs where id = %s", (run_id,)).fetchone()[0] == "dry-run"
     # It runs once: later ticks start nothing, and Wednesday's time is next.
     s.poke()
@@ -281,7 +282,7 @@ def test_each_kind_sends_at_most_once_a_week_and_neither_blocks_the_other(conn):
     wakeup = conn.execute("insert into midweek_wakeups (week_start, reason, slots, saved_margin_cents)"
                           " values ('2026-12-05', 'r', '{11}', 1) returning id").fetchone()[0]
     assert agent_schedule._already_sent(conn, at(MON, 9), due=at(MON, 9), kind="midweek") is None
-    midweek = _submission_for(conn, at(MON, 9, 5), "midweek", wakeup)
+    midweek = _submission_for(conn, agent_schedule.midweek_due(at(MON, 9, 5)), "midweek", wakeup)
     # The Wednesday after a midweek visit may still send the Friday order.
     assert agent_schedule._already_sent(conn, at(WED2, 14), due=at(WED2, 14)) is None
     again = agent_schedule._already_sent(conn, at(MON, 12), due=at(MON + timedelta(days=1), 9), kind="midweek")
@@ -294,13 +295,17 @@ def test_each_kind_sends_at_most_once_a_week_and_neither_blocks_the_other(conn):
 def test_the_table_holds_one_run_per_wake_up(conn):
     wakeup = conn.execute("insert into midweek_wakeups (week_start, reason, slots, saved_margin_cents)"
                           " values ('2026-12-05', 'r', '{11}', 1) returning id").fetchone()[0]
-    assert agent_schedule.record(conn, at(MON, 9, 5), at(MON, 23), "dry-run", "missed", kind="midweek",
+    first, second = (agent_schedule.midweek_due(at(MON, 9, m)) for m in (5, 6))
+    assert agent_schedule.record(conn, first, at(MON, 23), "dry-run", "missed", kind="midweek",
                                  wakeup=wakeup) is not None
-    assert agent_schedule.record(conn, at(MON, 9, 6), at(MON, 23), "dry-run", "missed", kind="midweek",
+    assert agent_schedule.record(conn, second, at(MON, 23), "dry-run", "missed", kind="midweek",
                                  wakeup=wakeup) is None
-    with pytest.raises(psycopg.errors.CheckViolation):
+    with pytest.raises(psycopg.errors.CheckViolation):      # a midweek row with no wake-up
         conn.execute("insert into agent_schedule (due_at, latest_at, mode, kind) values (%s, %s, 'dry-run',"
-                     " 'midweek')", (at(MON, 10), at(MON, 23)))
+                     " 'midweek')", (second, at(MON, 23)))
+    with pytest.raises(psycopg.errors.CheckViolation):      # a midweek row on a whole minute, a weekly time's place
+        conn.execute("insert into agent_schedule (due_at, latest_at, mode, kind, wakeup_id) values (%s, %s,"
+                     " 'dry-run', 'midweek', %s)", (at(MON, 10), at(MON, 23), wakeup + 1))
 
 
 def test_needs_attention_and_runs_say_it_was_a_midweek_run(schema_url, conn):
@@ -332,9 +337,9 @@ def test_a_missed_scheduled_run_banners_until_a_later_run_finishes(conn, page_co
     assert "Scheduled run missed" in dashboard.render(snap)
     run = agent_runs.start(conn, mode="dry-run", model="fake")
     agent_runs.finish(conn, run, "skipped", detail="ok", cost_usd=Decimal(0))
-    conn.execute("insert into agent_schedule (due_at, latest_at, mode, outcome, finished_at, run_id)"
-                 " values (%s, %s, 'dry-run', 'skipped', now(), %s)",
-                 (MONDAY - timedelta(hours=1), MONDAY + timedelta(hours=7), run))
+    conn.execute("insert into agent_schedule (due_at, latest_at, mode, outcome, started_at, finished_at, run_id)"
+                 " values (%s, %s, 'dry-run', 'skipped', %s, now(), %s)",
+                 (MONDAY - timedelta(hours=1), MONDAY + timedelta(hours=7), MONDAY - timedelta(hours=1), run))
     assert dashboard.snapshot(page_conn, MONDAY)["alerts"] == []
 
 
@@ -355,14 +360,14 @@ from tests.test_submit import prepared  # noqa: E402
 from tests.test_submit_runs import BODY  # noqa: E402
 
 
-def midweek_live_run(schema_url, fake, conn, plan, calls):  # noqa: F811
+def midweek_live_run(schema_url, fake, conn, plan, calls, slots_at=None):  # noqa: F811
     """A live midweek run on Wed 9 Dec at 1 PM (the send clock reads 2:05 PM), before the weekly 2 PM time."""
     import anyio
 
     from vending import agent
 
     db_mode(conn, "live")
-    fresh_slots(conn, at(WED2, 13))
+    fresh_slots(conn, slots_at or at(WED2, 13))
     conn.execute("insert into midweek_wakeups (week_start, reason, slots, saved_margin_cents, requested_at)"
                  " values ('2026-12-05', %s, '{15}', 3000, %s)", (REASON, at(WED2, 13)))
     client = Script(tool_turn(use("preview_desired_state", {"desired": plan}, id="p1")),
@@ -395,3 +400,107 @@ def test_a_midweek_run_never_sends_the_friday_order(db, fake, schema_url, conn, 
     refused = [c for (c,) in conn.execute("select content from agent_steps where kind = 'tool_result'"
                                           " and tool = 'submit_desired_state'")]
     assert refused and "midweek_on_cycle" in refused[0]
+
+
+# --- Sol review of #249 ------------------------------------------------------------------------------------
+
+def test_a_midweek_send_after_its_wake_ups_day_sends_nothing(db, fake, schema_url, conn, send_clock,  # noqa: F811
+                                                             live_env):
+    """Finding 1: the lease taken late on the wake-up's day, the POST after midnight. The wake-up's forecast planned
+    the landing from that day, and an off-cycle plan has no store cutoff, so the send itself checks the deadline."""
+    prepared(db)
+    send_clock.now = at(WED2 + timedelta(days=1), 0, 1)        # 00:01 Thursday: the wake-up was Wednesday's
+    calls = []
+    midweek_live_run(schema_url, fake, conn, OFF_CYCLE, calls, slots_at=send_clock.now)
+    assert calls.count("submit_desired_state") == 1 and fake.posts == []
+    status, detail = conn.execute("select status, detail from purchase_submissions").fetchone()
+    assert status == "not_filed" and "wake-up" in detail and "Thu 10 Dec 12:00 AM ET" in detail
+
+
+def _pending_request(conn, when, request="pr-mid"):
+    conn.execute("insert into purchase_requests (request_id, submitted_at, off_cycle, request_body, status)"
+                 " values (%s, %s, true, '{}', 'pending')", (request, when))
+
+
+def test_a_pending_request_makes_the_live_weekly_run_wait_then_it_runs_once_it_clears(schema_url, conn):
+    """Finding 2: a filed midweek request awaiting fulfilment holds the weekly run back (the planner refuses
+    `request_pending`), so the run waits inside its window instead of spending it, and runs once it clears."""
+    db_mode(conn, "live")
+    fresh_slots(conn, at(WED2, 18, 10))
+    _pending_request(conn, at(MON, 9, 30))
+    agent = MidweekAgent(schema_url)
+    s = scheduler(schema_url, agent, LIVE9, clock=Clock(at(WED2, 13)))
+    tick(s, at(WED2, 14))
+    assert agent.calls == [] and schedule_rows(conn) == []
+    assert "pr-mid" in s.public()["waiting"] and "pending" in s.public()["waiting"]
+    conn.execute("update purchase_requests set status = 'fulfilled', fulfilled_at = %s", (at(WED2, 18, 6),))
+    tick(s, at(WED2, 18, 10))
+    assert [live for live, _ in agent.calls] == [True]
+
+
+def test_a_request_still_pending_at_the_latest_start_is_a_missed_live_run_in_needs_attention(schema_url, conn):
+    db_mode(conn, "live")
+    fresh_slots(conn, at(WED2, 22))
+    _pending_request(conn, at(MON, 9, 30))
+    agent = MidweekAgent(schema_url)
+    s = scheduler(schema_url, agent, LIVE9, clock=Clock(at(WED2, 13)))
+    tick(s, at(WED2, 14))
+    tick(s, at(WED2, 22, 1))
+    assert agent.calls == []
+    [(_, kind, _, mode, outcome, _, detail)] = schedule_rows(conn)
+    assert (kind, mode, outcome) == ("weekly", "live", "missed")
+    assert detail.startswith("LIVE RUN MISSED") and "pr-mid" in detail
+    lines = [(a["level"], a["text"]) for a in dashboard.snapshot(conn, now=at(WED2, 22, 5))["attention"]
+             if a["text"].startswith("The scheduled ")]
+    assert any(level == "bad" and "pr-mid" in text for level, text in lines)
+
+
+def _schedule_row(conn, due, outcome, *, started=False, run_id=None):
+    conn.execute("insert into agent_schedule (due_at, latest_at, mode, outcome, started_at, finished_at, run_id)"
+                 " values (%s, %s, 'dry-run', %s, %s, %s, %s)",
+                 (due, due + timedelta(hours=8), outcome, due if started else None,
+                  None if outcome == "running" else due + timedelta(minutes=5), run_id))
+
+
+def _dry_run(conn):
+    run = agent_runs.start(conn, mode="dry-run", model="fake")
+    agent_runs.finish(conn, run, "skipped", detail="ok", cost_usd=Decimal(0))
+    return run
+
+
+def test_a_later_attempt_that_never_started_leaves_the_missed_line(conn, page_conn, open_ledger):
+    """Finding 3: a dry run refused at the busy lease has a run id but no start: it ran nothing."""
+    _missed(conn, MONDAY - timedelta(hours=12))
+    _schedule_row(conn, MONDAY - timedelta(hours=2), "skipped", run_id=_dry_run(conn))
+    assert [a["kind"] for a in dashboard.snapshot(page_conn, MONDAY)["alerts"]] == ["missed_run"]
+
+
+def test_a_newer_running_time_doesnt_bring_a_cleared_missed_line_back(conn, page_conn, open_ledger):
+    _missed(conn, MONDAY - timedelta(hours=12))
+    _schedule_row(conn, MONDAY - timedelta(hours=6), "skipped", started=True, run_id=_dry_run(conn))
+    assert dashboard.snapshot(page_conn, MONDAY)["alerts"] == []
+    _schedule_row(conn, MONDAY - timedelta(hours=1), "running", started=True)
+    assert dashboard.snapshot(page_conn, MONDAY)["alerts"] == []
+
+
+def test_a_wake_up_at_the_same_instant_as_a_weekly_time_still_runs(schema_url, conn):
+    """Finding 4: a request at exactly a weekly time's instant has its own identity: both run, one after the
+    other, and neither is dropped."""
+    db_mode(conn, "dry-run")
+    monday = Schedule("dry-run", (Entry(0, time(9), time(17)),), MON.date())
+    wake(conn, at(MON, 9))
+    agent = MidweekAgent(schema_url)
+    s = scheduler(schema_url, agent, monday, clock=Clock(at(MON, 8)))
+    tick(s, at(MON, 9, 10))
+    tick(s, at(MON, 9, 11))
+    assert [occasion is not None for _, occasion in agent.calls] == [False, True]
+    assert sorted(r[1] for r in schedule_rows(conn)) == ["midweek", "weekly"]
+
+
+def test_a_wake_up_at_the_same_instant_as_a_weekly_time_is_still_recorded_missed(schema_url, conn):
+    db_mode(conn, "dry-run")
+    monday = Schedule("dry-run", (Entry(0, time(9), time(17)),), MON.date())
+    wake(conn, at(MON, 9))
+    tick(scheduler(schema_url, MidweekAgent(schema_url), monday, clock=Clock(at(MON, 8))),
+         at(MON + timedelta(days=1), 9))
+    assert sorted((r[1], r[4]) for r in schedule_rows(conn)) == [("midweek", "missed"), ("weekly", "missed")]

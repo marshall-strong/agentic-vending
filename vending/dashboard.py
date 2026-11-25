@@ -943,6 +943,10 @@ SCHEDULED_INCIDENTS_SQL = (f"select {SCHEDULED_COLUMNS}"
                            "  and later.outcome in ('submitted', 'skipped')))"
                            " order by s.due_at desc limit 50")
 SCHEDULED_SETTING_SQL = "select value from config where key = %s"
+# The newest scheduled time whose run started (`started_at`, written in the lease's transaction) and has ended: what
+# clears a missed time from the failure banner (`_missed_scheduled_run`).
+SCHEDULED_LAST_RAN_SQL = ("select due_at from agent_schedule where started_at is not null and outcome <> 'running'"
+                          " order by due_at desc limit 1")
 # Every catalog request, newest first: the Requests panel's list, and the Products page's (#55).
 CATALOG_REQUESTS_SQL = ("select id, requested_at, name, size, status, sku, decision_note"
                         " from product_requests order by requested_at desc, id desc")
@@ -1358,16 +1362,13 @@ def _run_alert(run: dict, status: dict) -> tuple[str, datetime, str]:
     return "run_halted", at, f"Run #{run['id']} ended halted. {switch}"
 
 
-# A scheduled row whose agent ran to an end: a later one of these clears an older missed time from the banner.
-RAN_OUTCOMES = ("submitted", "skipped", "halted", "failed")
-
-
 def _missed_scheduled_run(snap: dict) -> dict | None:
     """The banner line for the newest scheduled or midweek time that was due and never ran by its latest start
     (`agent_schedule.outcome = 'missed'`, from the scheduled runs' panel: the newest row and the last week's
     problems). Live period only, as the run lines: its time must be at or after the ledger's opening. It clears
-    once a later run has finished: a newer scheduled row whose agent run ended, or a live agent run (by hand too)
-    that started after the missed time and finished. Plain words only, never the row's detail."""
+    once a later scheduled run has started and ended (`last_ran`, the panel's own read, so a newer row still
+    running can't push it out of view). A run refused at a busy lease never started, so it clears nothing.
+    Plain words only, never the row's detail."""
     opened = snap.get("opened_at")
     panel = snap.get("scheduled_runs")
     data = panel.get("data") if isinstance(panel, dict) and panel.get("ok") else None
@@ -1379,11 +1380,8 @@ def _missed_scheduled_run(snap: dict) -> dict | None:
     if not missed:
         return None
     row = max(missed, key=lambda r: r["due_at"])
-    if any(r["due_at"] > row["due_at"] and r.get("outcome") in RAN_OUTCOMES and r.get("run_id") is not None
-           for r in rows):
-        return None
-    done = (snap.get("status") or {}).get("last_finished")
-    if isinstance(done, dict) and isinstance(done.get("started_at"), datetime) and done["started_at"] > row["due_at"]:
+    ran = data.get("last_ran")
+    if isinstance(ran, datetime) and ran > row["due_at"]:
         return None
     midweek = row.get("kind") == agent_schedule.MIDWEEK
     due = _eastern(row["due_at"])
@@ -1440,8 +1438,10 @@ def _scheduled(conn: psycopg.Connection, now: datetime) -> dict:
         return {"behind": behind, "latest": None, "incidents": [], "setting_ok": True, "setting_live": False}
     latest = _rows(conn, SCHEDULED_LATEST_SQL)
     setting = _rows(conn, SCHEDULED_SETTING_SQL, (agent_schedule.DB_MODE_KEY,))
+    ran = _rows(conn, SCHEDULED_LAST_RAN_SQL)
     return {"latest": latest[0] if latest else None,
             "incidents": _rows(conn, SCHEDULED_INCIDENTS_SQL, (now - agent_schedule.LOOKBACK,)),
+            "last_ran": ran[0]["due_at"] if ran else None,
             "setting_ok": not setting or agent_schedule.valid_database_mode(setting[0]["value"]),
             "setting_live": bool(setting) and setting[0]["value"] == "live"}
 

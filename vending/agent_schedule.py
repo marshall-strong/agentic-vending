@@ -11,7 +11,8 @@ retry rules), the `submission_unresolved` block and the planner's spendable floo
 run instead, with why at the start of its detail: the competition hasn't started (`vending.start.START`, by the
 database's clock), or a scheduled run already sent a submission for this week's visit, whatever became of it
 (`ALREADY_SENT`: one per visit; a person sends another by hand). A *passing* one doesn't spend the window
-(`WAITING`): a purchase submission is still open (`vending.submissions.open_rows`: ORDERS BLOCKED), our slot
+(`WAITING`): a purchase submission is still open (`vending.submissions.open_rows`: ORDERS BLOCKED), a purchase
+request is still pending (`REQUEST_PENDING`: the planner would refuse `request_pending`), our slot
 assignment can't be read (`vending.slots.our_slots`) or the worker's hourly `slots check` last confirmed it more
 than `SLOTS_FRESH` ago, or another agent run holds the run lease. The worker then claims nothing and tries again
 every `LIVE_RETRY` until the time's latest start; still blocked then, the time is `missed`, mode `live`, with the
@@ -164,6 +165,11 @@ BEFORE_START = ("the competition starts {start} (vending.start.START), and a sch
                 "it.")
 ORDERS_BLOCKED = ("ORDERS BLOCKED: purchase submission {rows} is unresolved, so the bridge may already have a "
                   "request. A person settles it with python -m vending.submissions resolve.")
+REQUEST_PENDING = ("purchase request {requests} is still pending (filed, not yet fulfilled or rejected), and only one "
+                   "request may be open at a time, so the planner would refuse a new one (request_pending).")
+# A midweek run's send after the wake-up's day: its forecast planned the landing from that day (#249 review).
+MIDWEEK_EXPIRED = ("this midweek run's wake-up planned a visit requested by {latest}, and that has passed, so its "
+                   "forecast no longer holds; the next wake check decides again.")
 SLOTS_UNREADY = "our slots can't be read ({error})."
 SLOTS_STALE = ("our slot assignment was last confirmed with the inventory server {age} ago, more than {limit}, so "
                "the worker's slots check has been failing. A person checks with python -m vending.slots check.")
@@ -402,13 +408,19 @@ def lasting_blocker(conn, now: datetime, *, due: datetime | None = None, kind: s
 
 
 def passing_blocker(conn, now: datetime, except_row: int | None = None) -> str | None:
-    """The checks before a send that may clear inside the window: an open submission, or our slots unreadable or
-    not confirmed within `SLOTS_FRESH`. A live time that fails one waits (`WAITING`)."""
+    """The checks before a send that may clear inside the window: an open submission, a purchase request still
+    pending (the planner refuses a plan then, `request_pending`: a midweek request awaiting fulfilment holds the
+    weekly run back), or our slots unreadable or not confirmed within `SLOTS_FRESH`. A live time that fails one
+    waits (`WAITING`)."""
     from vending import slots, submissions
 
     open_rows = submissions.open_rows(conn, except_row)
     if open_rows:
         return ORDERS_BLOCKED.format(rows=", ".join(str(row[0]) for row in open_rows))
+    pending = [r for (r,) in conn.execute(
+        "select request_id from purchase_requests where status = 'pending' order by submitted_at")]
+    if pending:
+        return REQUEST_PENDING.format(requests=", ".join(pending))
     try:
         slots.our_slots(conn, now)
     except slots.SlotsNotRecorded as error:
@@ -467,7 +479,17 @@ def midweek_times(conn, now: datetime) -> list[tuple[datetime, datetime, int, st
         " and w.requested_at > %s and w.requested_at <= %s"
         " and not exists (select from agent_schedule s where s.wakeup_id = w.id) order by w.requested_at",
         (now - LOOKBACK, now)).fetchall()
-    return [(due, midweek_latest(due), wakeup, reason) for wakeup, due, reason in found]
+    return [(midweek_due(due), midweek_latest(due), wakeup, reason) for wakeup, due, reason in found]
+
+
+def midweek_due(requested: datetime) -> datetime:
+    """A midweek row's `due_at`: the request's time, never on a whole minute. Every weekly time is on a whole minute
+    (`AGENT_SCHEDULE` gives `HH:MM`), so the two never share a `due_at`: not in `agent_schedule`, the run lease's
+    `schedule_due`, a submission's `schedule_due` or the server's `VENDING_SCHEDULE_DUE`. A request made on a whole
+    minute (rare: it is the database's clock, to the microsecond) is kept one microsecond later. Migration 037
+    holds it in the table (`agent_schedule_midweek_off_the_minute`)."""
+    whole = requested.replace(second=0, microsecond=0)
+    return requested + timedelta(microseconds=1) if requested == whole else requested
 
 
 def lease_busy(conn) -> str | None:
@@ -503,10 +525,14 @@ def send_blocker(conn, due: datetime, now: datetime, row: int) -> str | None:
     in_db = database_mode(conn, lock=True)
     if in_db != "live":
         return SEND_DB.format(mode=in_db)
-    state = conn.execute("select mode, outcome, kind from agent_schedule where due_at = %s for share",
+    state = conn.execute("select mode, outcome, kind, latest_at from agent_schedule where due_at = %s for share",
                          (due,)).fetchone()
     if state is None or tuple(state[:2]) != ("live", "running"):
         return SEND_ROW.format(state="nothing" if state is None else f"{state[0]} {state[1]}")
+    # A midweek run's wake-up holds only for the day it was requested (`midweek_latest`): an off-cycle plan has no
+    # store cutoff, so a lease taken at 23:59 must not carry the POST past midnight.
+    if state[2] == MIDWEEK and now >= state[3]:
+        return MIDWEEK_EXPIRED.format(latest=_eastern(state[3]))
     return live_blocker(conn, now, due=due, except_row=row, kind=state[2])
 
 
