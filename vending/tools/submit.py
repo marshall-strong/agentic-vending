@@ -48,7 +48,8 @@ for a scheduled run, the scheduled time (`VENDING_RUN_LEASE`, `VENDING_SCHEDULE_
 environment: `vending.agent.server_env`). The submit checks that exact lease, never whichever lease is current, so
 a lease that expired or was taken over after the agent handed the call on can't turn a scheduled submit into a
 manual one: it is refused (`lease_lost`). A scheduled time with no usable lease is refused too (`run_context`).
-A scheduled run never buys an off-cycle visit (`scheduled_off_cycle`): its job is the Friday order. A person's
+A weekly scheduled run never buys an off-cycle visit (`scheduled_off_cycle`): its job is the Friday order. A
+midweek run, started by a midweek wake-up (#219), buys only an off-cycle visit (`midweek_on_cycle`). A person's
 run by hand has no scheduled time and keeps the off-cycle choice.
 
 **Locks first, then the clock.** Between steps 1 and 2 the submit takes its locks on the gate's connection: the
@@ -215,11 +216,21 @@ def submit_desired_state(desired: DesiredState, bridge: Callable[[], Bridge],
                 f"this server can't tell which agent run it works for ({mine.problem}), so nothing is sent")))
         # A scheduled run (the agent passed its time): checked again at the send. Never the fill's.
         due = mine.due if mine is not None else None
-        if due is not None and plan.off_cycle:
+        # A weekly run orders for Friday and never buys an off-cycle visit; a midweek run (#219) buys only one.
+        kind = None
+        if due is not None:
+            from vending import agent_schedule
+
+            kind = agent_schedule.kind_of(conn, due)
+        if kind == "weekly" and plan.off_cycle:
             refusals.append(Refusal("scheduled_off_cycle", (
                 "a scheduled run orders for the Friday visit and never buys an off-cycle visit (its fee, and the "
                 "cutoffs it skips). Submit with off_cycle false; a person who means an off-cycle visit sends it by "
                 "hand: python -m vending.agent --live.")))
+        if kind == "midweek" and not plan.off_cycle:
+            refusals.append(Refusal("midweek_on_cycle", (
+                "a midweek run was started for a paid midweek visit and sends only that: submit with off_cycle true, "
+                "or submit nothing if no visit is worth its fee. The Friday order is the weekly run's.")))
         if refusals:
             raise Refused(refusals)
         body = plan.request()

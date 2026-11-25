@@ -384,10 +384,12 @@ def last_notes(conn: psycopg.Connection, *, live: bool) -> str:
     return f"(From {kind} on {started.astimezone(EASTERN):%A %d %B %H:%M} Eastern.)\n{notes}"
 
 
-def brief(now: datetime, notes: str, *, live: bool, startup: str = "") -> str:
+def brief(now: datetime, notes: str, *, live: bool, startup: str = "", occasion: str | None = None) -> str:
     mode = ("This is the live run: submit_desired_state sends a real purchase request." if live else
             "This is a dry run: the write tools are hidden. Preview the plan you would submit, then answer.")
     block = f"{startup}\n\n" if startup else ""
+    if occasion:        # a midweek run (`vending.agent_schedule.midweek_occasion`): why it runs, and what it may send
+        mode = f"{mode}\n{occasion}"
     return (f"Now: {now.astimezone(EASTERN):%A %d %B %Y %H:%M} Eastern.\n{mode}\n\n{block}"
             f"Your notes from the last run:\n{notes}")
 
@@ -701,7 +703,7 @@ async def run(*, live: bool, model: str = DEFAULT_MODEL, effort: str = DEFAULT_E
               max_turns: int = MAX_TURNS, rules_card: Path | None = None,
               deadline: float = RUN_DEADLINE,
               authorize: Callable[[psycopg.Connection], str | None] | None = None,
-              bridge: Callable[[], Any] | None = None) -> tuple[int | None, Outcome]:
+              bridge: Callable[[], Any] | None = None, occasion: str | None = None) -> tuple[int | None, Outcome]:
     """One weekly run, recorded in `agent_runs`. Returns (run id, outcome).
 
     Holds the run lease throughout (`vending.run_lease`). If another run holds it, this one is recorded
@@ -711,7 +713,8 @@ async def run(*, live: bool, model: str = DEFAULT_MODEL, effort: str = DEFAULT_E
     recorded has no run id either. Past `deadline` seconds the run stops and is recorded as `failed`.
 
     `bridge` builds the client a live run's submission check reads with (`vending.bridge.Bridge` by default).
-    The check runs inside the lease, before the model starts."""
+    The check runs inside the lease, before the model starts. `occasion`, a midweek run's reason for running
+    (`vending.agent_schedule.midweek_occasion`), goes in the opening after the mode."""
     connect = _bounded(connect, DB_TIMEOUT)
     with connect() as conn:
         taken = run_lease.take(conn, deadline=deadline, authorize=authorize)
@@ -734,7 +737,7 @@ async def run(*, live: bool, model: str = DEFAULT_MODEL, effort: str = DEFAULT_E
                 return await _run_owned(live=live, model=model, effort=effort, connect=connect, client=client,
                                         now=now, open_tools=open_tools, max_turns=max_turns, rules_card=rules_card,
                                         deadline=deadline, token=taken.token, harnesses=harnesses,
-                                        bridge=bridge, schedule_due=taken.schedule_due)
+                                        bridge=bridge, schedule_due=taken.schedule_due, occasion=occasion)
             finally:
                 beats.cancel_scope.cancel()
     finally:
@@ -761,7 +764,8 @@ async def _run_owned(*, live: bool, model: str, effort: str, connect: Callable[[
                      max_turns: int, rules_card: Path | None, deadline: float,
                      token: Any, harnesses: list,
                      bridge: Callable[[], Any] | None = None,
-                     schedule_due: datetime | None = None) -> tuple[int | None, Outcome]:
+                     schedule_due: datetime | None = None,
+                     occasion: str | None = None) -> tuple[int | None, Outcome]:
     import time
 
     stop_at = time.monotonic() + deadline     # the harness sends nothing past it
@@ -830,7 +834,8 @@ async def _run_owned(*, live: bool, model: str, effort: str, connect: Callable[[
                             local[price_search.TOOL_NAME] = lookups.lookup
                         await converse(harness, call_tool, offered, out, model=model,
                                        effort=effort, system=system,
-                                       opening=brief(now(), notes, live=live, startup=startup), live=live,
+                                       opening=brief(now(), notes, live=live, startup=startup,
+                                                     occasion=occasion), live=live,
                                        halted=halted,
                                        on_submit=lambda o: _record_submit(connect, run_id, o), max_turns=max_turns,
                                        label=f"agent run {run_id}", on_step=record_step, owned=owned,

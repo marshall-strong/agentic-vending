@@ -35,6 +35,8 @@ week, Eastern, held in the database — names the slots and the arithmetic in it
 for a midweek agent run. `MIDWEEK_WAKE` is off by default; `on` (any case) runs the job, any other
 value or unset leaves it out and the job opens no database connection. The dashboard's Needs
 attention and the briefing show the row, so the run and the visit fee have a why on the record.
+The scheduled agent runs start that midweek run, so it also needs `AGENT_SCHEDULE_MODE` and
+`agent_schedule_mode` (docs/agent.md, "Midweek runs").
 
 **Why 5 minutes past.** The course staff's poller reads the machine on the hour, and the bridge keeps
 every poll. A round at 5 past brings the new poll into our database about 5 minutes after it was
@@ -177,7 +179,7 @@ not started yet.
 sends a purchase request nobody looks at before it goes. Agree as a team, on GitHub, before anyone sets
 `live`. Do it before the team stops on Sun 29 Nov: from Thu 3 Dec nobody watches the runs. In this order:
 
-1. Migrations 029 and 030 on the team database: `python -m vending.db migrate`, then again: it must say nothing
+1. Migrations 029, 030 and 037 on the team database: `python -m vending.db migrate`, then again: it must say nothing
    is pending. The worker refuses to schedule on a database that is behind, and the dashboard says so. Apply
    030 while no submit runs, as 025 below: it waits at most 2 seconds for its lock.
 2. The container, with the mode, the times and the first day together, so nothing left from a test week stays

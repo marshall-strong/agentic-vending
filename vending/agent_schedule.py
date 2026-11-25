@@ -11,7 +11,8 @@ retry rules), the `submission_unresolved` block and the planner's spendable floo
 run instead, with why at the start of its detail: the competition hasn't started (`vending.start.START`, by the
 database's clock), or a scheduled run already sent a submission for this week's visit, whatever became of it
 (`ALREADY_SENT`: one per visit; a person sends another by hand). A *passing* one doesn't spend the window
-(`WAITING`): a purchase submission is still open (`vending.submissions.open_rows`: ORDERS BLOCKED), our slot
+(`WAITING`): a purchase submission is still open (`vending.submissions.open_rows`: ORDERS BLOCKED), a purchase
+request is still pending (`REQUEST_PENDING`: the planner would refuse `request_pending`), our slot
 assignment can't be read (`vending.slots.our_slots`) or the worker's hourly `slots check` last confirmed it more
 than `SLOTS_FRESH` ago, or another agent run holds the run lease. The worker then claims nothing and tries again
 every `LIVE_RETRY` until the time's latest start; still blocked then, the time is `missed`, mode `live`, with the
@@ -95,6 +96,16 @@ keyed by the time, so it runs at most once whatever restarts or replicas there a
   just after the lease expires (`SWEEP_MARGIN`) to try again. It is never run again.
 - Two entries with the same start are one time, with the later latest start.
 
+**Midweek runs (#219).** A wake-up the midweek check recorded and requested (`vending.midweek_wake`,
+`midweek_wakeups.requested_at`) is one more time to run, with kind `midweek`: due at the request, latest start
+the end of that Eastern day (`midweek_latest`). The scheduler claims it as it claims a weekly time, under the same
+lock, switches, checks before a send, run lease and caps, and records it in `agent_schedule` with `kind` midweek and
+its `wakeup_id` (migration 037). One row per wake-up, and the wake-ups' own index holds one a week. The agent's
+opening says why it was woken (`midweek_occasion`). A midweek run buys only an off-cycle visit
+(`midweek_on_cycle`), and a weekly run never does (`scheduled_off_cycle`). Each kind sends at most one submission a
+week (`ALREADY_SENT`, `MIDWEEK_ALREADY_SENT`). A weekly time due at the same moment goes first. The worker calls
+`Scheduler.poke` after each round, so a request recorded in that round is claimed in that same pause.
+
 `/health` shows what this worker runs at most (its `AGENT_SCHEDULE_MODE`), whether it has the model key,
 the next time and the last scheduled run's outcome (never its detail, which can hold an
 error). The dashboard reads the `agent_schedule` table itself, so turning the schedule off never hides a
@@ -118,6 +129,8 @@ EASTERN = ZoneInfo("America/New_York")
 MODE_SETTING, TIMES_SETTING, FROM_SETTING = "AGENT_SCHEDULE_MODE", "AGENT_SCHEDULE", "AGENT_SCHEDULE_FROM"
 # The `config` key that must also turn the runs on (`vending.config.KNOWN`).
 DB_MODE_KEY = "agent_schedule_mode"
+# What a row in `agent_schedule` is for: a time in AGENT_SCHEDULE, or a midweek wake-up's request (migration 037).
+WEEKLY, MIDWEEK = "weekly", "midweek"
 # Kevin, 23 Nov: Wednesday 2 PM Eastern, so a run's order beats Amazon's Wed 23:59 cutoff (#188), late until 10 PM;
 # and Thursday noon, late until 8 PM, for a week whose Wednesday didn't send. Thu 3 Dec 12:00 is the first live order.
 DEFAULT_TIMES = "wed 14:00-22:00,thu 12:00-20:00"
@@ -152,6 +165,11 @@ BEFORE_START = ("the competition starts {start} (vending.start.START), and a sch
                 "it.")
 ORDERS_BLOCKED = ("ORDERS BLOCKED: purchase submission {rows} is unresolved, so the bridge may already have a "
                   "request. A person settles it with python -m vending.submissions resolve.")
+REQUEST_PENDING = ("purchase request {requests} is still pending (filed, not yet fulfilled or rejected), and only one "
+                   "request may be open at a time, so the planner would refuse a new one (request_pending).")
+# A midweek run's send after the wake-up's day: its forecast planned the landing from that day (#249 review).
+MIDWEEK_EXPIRED = ("this midweek run's wake-up planned a visit requested by {latest}, and that has passed, so its "
+                   "forecast no longer holds; the next wake check decides again.")
 SLOTS_UNREADY = "our slots can't be read ({error})."
 SLOTS_STALE = ("our slot assignment was last confirmed with the inventory server {age} ago, more than {limit}, so "
                "the worker's slots check has been failing. A person checks with python -m vending.slots check.")
@@ -203,6 +221,15 @@ GARBLED_MODE = ("Scheduled agent runs are dry runs only: the container's AGENT_S
 ALREADY_SENT = ("a scheduled run already sent submission {row} (due {when}) for this week's visit, and scheduled "
                 "runs send at most one per visit, even if that request was rejected. A person who means to send "
                 "another does it by hand: python -m vending.agent --live.")
+# The midweek visit's own cap: one midweek submission a week, whatever became of it.
+MIDWEEK_ALREADY_SENT = ("a midweek run already sent submission {row} (requested {when}) this week, and the wake-ups "
+                        "ask for one midweek visit a week. A person who means to send another does it by hand: "
+                        "python -m vending.agent --live.")
+# What a midweek run's opening says, before the startup read.
+MIDWEEK_OCCASION = ("This run was started by the midweek wake check (docs/restock-policy.md, section 2), not by the "
+                    "weekly schedule: {reason} Decide whether a paid midweek visit is worth its fee. If it is, "
+                    "submit an off-cycle plan (off_cycle true); this run can't send the Friday order. If no visit "
+                    "is worth the fee, submit nothing and say why: that is a valid outcome.")
 # A live time held back by a passing blocker: tried again this often until its latest start.
 LIVE_RETRY = timedelta(minutes=5)
 WAITING = ("The scheduled live run due {due} is waiting: {why} The worker tries again every {every} until its "
@@ -360,32 +387,40 @@ def visit_week(moment: datetime) -> date:
     return _week_of(moment.astimezone(EASTERN), Config.__dataclass_fields__["week_starts"].default)
 
 
-def live_blocker(conn, now: datetime, *, due: datetime | None = None, except_row: int | None = None) -> str | None:
+def live_blocker(conn, now: datetime, *, due: datetime | None = None, except_row: int | None = None,
+                 kind: str = WEEKLY) -> str | None:
     """Why a run claimed as live must not send now, or None. What a person checks before pressing send that the
     agent's own run doesn't: the competition has started, no purchase submission is open, our slot
     assignment is readable and was confirmed by the worker's `slots check` within `SLOTS_FRESH`, and no other
     scheduled run sent a submission for the same week's visit as `due` (the scheduled time; `now` when None),
     whatever became of it. `now` is the database's clock. `except_row` leaves out the submission being sent (the
     submit tool's own check, `send_blocker`). The halt switch and the model key are checked by the agent and the
-    entry point."""
+    entry point. `kind` is the run's: a weekly run counts the weekly runs' submissions, a midweek run the midweek
+    runs'."""
     return (_before_start(now) or passing_blocker(conn, now, except_row)
-            or _already_sent(conn, now, due=due, except_row=except_row))
+            or _already_sent(conn, now, due=due, except_row=except_row, kind=kind))
 
 
-def lasting_blocker(conn, now: datetime, *, due: datetime | None = None) -> str | None:
+def lasting_blocker(conn, now: datetime, *, due: datetime | None = None, kind: str = WEEKLY) -> str | None:
     """The checks before a send that no wait inside the window can change: the competition hasn't started, or a
     scheduled run already sent this week's submission. A time that fails one runs as a dry run."""
-    return _before_start(now) or _already_sent(conn, now, due=due)
+    return _before_start(now) or _already_sent(conn, now, due=due, kind=kind)
 
 
 def passing_blocker(conn, now: datetime, except_row: int | None = None) -> str | None:
-    """The checks before a send that may clear inside the window: an open submission, or our slots unreadable or
-    not confirmed within `SLOTS_FRESH`. A live time that fails one waits (`WAITING`)."""
+    """The checks before a send that may clear inside the window: an open submission, a purchase request still
+    pending (the planner refuses a plan then, `request_pending`: a midweek request awaiting fulfilment holds the
+    weekly run back), or our slots unreadable or not confirmed within `SLOTS_FRESH`. A live time that fails one
+    waits (`WAITING`)."""
     from vending import slots, submissions
 
     open_rows = submissions.open_rows(conn, except_row)
     if open_rows:
         return ORDERS_BLOCKED.format(rows=", ".join(str(row[0]) for row in open_rows))
+    pending = [r for (r,) in conn.execute(
+        "select request_id from purchase_requests where status = 'pending' order by submitted_at")]
+    if pending:
+        return REQUEST_PENDING.format(requests=", ".join(pending))
     try:
         slots.our_slots(conn, now)
     except slots.SlotsNotRecorded as error:
@@ -402,15 +437,59 @@ def _before_start(now: datetime) -> str | None:
     return BEFORE_START.format(start=_eastern(START)) if now < START else None
 
 
-def _already_sent(conn, now: datetime, *, due: datetime | None = None, except_row: int | None = None) -> str | None:
+def _already_sent(conn, now: datetime, *, due: datetime | None = None, except_row: int | None = None,
+                  kind: str = WEEKLY) -> str | None:
+    """A submission a scheduled run of the same `kind` sent for the same week. A submission whose time has no row
+    counts as weekly."""
     week = visit_week(due or now)
     for row, sent_for in conn.execute(
-            "select id, schedule_due from purchase_submissions where schedule_due is not null"
-            " and status <> 'not_filed' and id is distinct from %s and schedule_due > %s and schedule_due < %s"
-            " order by id", (except_row, (due or now) - timedelta(days=8), (due or now) + timedelta(days=8))):
+            "select p.id, p.schedule_due from purchase_submissions p left join agent_schedule s"
+            " on s.due_at = p.schedule_due where p.schedule_due is not null and p.status <> 'not_filed'"
+            " and p.id is distinct from %s and p.schedule_due > %s and p.schedule_due < %s"
+            " and coalesce(s.kind, %s) = %s order by p.id",
+            (except_row, (due or now) - timedelta(days=8), (due or now) + timedelta(days=8), WEEKLY, kind)):
         if visit_week(sent_for) == week:
-            return ALREADY_SENT.format(row=row, when=_eastern(sent_for))
+            return (MIDWEEK_ALREADY_SENT if kind == MIDWEEK else ALREADY_SENT).format(row=row, when=_eastern(sent_for))
     return None
+
+
+def kind_of(conn, due: datetime) -> str:
+    """The kind of the scheduled time `due` (`WEEKLY` or `MIDWEEK`); weekly when it has no row."""
+    row = conn.execute("select kind from agent_schedule where due_at = %s", (due,)).fetchone()
+    return row[0] if row is not None else WEEKLY
+
+
+def midweek_latest(due: datetime) -> datetime:
+    """The latest start of a midweek run requested at `due`: midnight at the end of that Eastern day. The wake-up's
+    sums plan the visit's landing from the day it was requested, so a run on a later day would plan on less."""
+    day = due.astimezone(EASTERN).date() + timedelta(days=1)
+    return datetime.combine(day, time.min, EASTERN).astimezone(timezone.utc)
+
+
+def midweek_occasion(reason: str | None) -> str:
+    """The paragraph a midweek run's opening carries: why it was woken, and what it may send."""
+    return MIDWEEK_OCCASION.format(reason=(reason or "").strip() or "(no reason was recorded).")
+
+
+def midweek_times(conn, now: datetime) -> list[tuple[datetime, datetime, int, str]]:
+    """(due, latest start, wake-up id, reason) of each midweek run requested in the last `LOOKBACK`, up to `now`,
+    with no row in `agent_schedule` yet, oldest first."""
+    found = conn.execute(
+        "select w.id, w.requested_at, w.reason from midweek_wakeups w where w.requested_at is not null"
+        " and w.requested_at > %s and w.requested_at <= %s"
+        " and not exists (select from agent_schedule s where s.wakeup_id = w.id) order by w.requested_at",
+        (now - LOOKBACK, now)).fetchall()
+    return [(midweek_due(due), midweek_latest(due), wakeup, reason) for wakeup, due, reason in found]
+
+
+def midweek_due(requested: datetime) -> datetime:
+    """A midweek row's `due_at`: the request's time, never on a whole minute. Every weekly time is on a whole minute
+    (`AGENT_SCHEDULE` gives `HH:MM`), so the two never share a `due_at`: not in `agent_schedule`, the run lease's
+    `schedule_due`, a submission's `schedule_due` or the server's `VENDING_SCHEDULE_DUE`. A request made on a whole
+    minute (rare: it is the database's clock, to the microsecond) is kept one microsecond later. Migration 037
+    holds it in the table (`agent_schedule_midweek_off_the_minute`)."""
+    whole = requested.replace(second=0, microsecond=0)
+    return requested + timedelta(microseconds=1) if requested == whole else requested
 
 
 def lease_busy(conn) -> str | None:
@@ -446,14 +525,21 @@ def send_blocker(conn, due: datetime, now: datetime, row: int) -> str | None:
     in_db = database_mode(conn, lock=True)
     if in_db != "live":
         return SEND_DB.format(mode=in_db)
-    state = conn.execute("select mode, outcome from agent_schedule where due_at = %s for share", (due,)).fetchone()
-    if state is None or tuple(state) != ("live", "running"):
+    state = conn.execute("select mode, outcome, kind, latest_at from agent_schedule where due_at = %s for share",
+                         (due,)).fetchone()
+    if state is None or tuple(state[:2]) != ("live", "running"):
         return SEND_ROW.format(state="nothing" if state is None else f"{state[0]} {state[1]}")
-    return live_blocker(conn, now, due=due, except_row=row)
+    # A midweek run's wake-up holds only for the day it was requested (`midweek_latest`): an off-cycle plan has no
+    # store cutoff, so a lease taken at 23:59 must not carry the POST past midnight.
+    if state[2] == MIDWEEK and now >= state[3]:
+        return MIDWEEK_EXPIRED.format(latest=_eastern(state[3]))
+    return live_blocker(conn, now, due=due, except_row=row, kind=state[2])
 
 
-def default_run_agent(live: bool, authorize: Callable[[Any], str | None] | None = None) -> tuple[int | None, Any]:
-    """The agent's own entry point, as `python -m vending.agent [--live]` runs it: (run id, outcome).
+def default_run_agent(live: bool, authorize: Callable[[Any], str | None] | None = None,
+                      occasion: str | None = None) -> tuple[int | None, Any]:
+    """The agent's own entry point, as `python -m vending.agent [--live]` runs it: (run id, outcome). `occasion`
+    is what a midweek run's opening says about why it runs (`midweek_occasion`).
     `authorize` runs in the transaction that takes the run lease, before anything is paid for
     (`vending.agent.run`). Without the model key it returns a `failed` outcome and never starts the agent:
     nothing is recorded in `agent_runs` and no request is made."""
@@ -467,7 +553,8 @@ def default_run_agent(live: bool, authorize: Callable[[Any], str | None] | None 
         return None, agent.Outcome("failed", f"{MODEL_KEY_MISSING}{DEFAULT_KEY_ENV} isn't set on this worker, so the "
                                              "run didn't start and no model request was made. Deploy with "
                                              "-SetSecrets (docs/deploy.md).")
-    return anyio.run(lambda: agent.run(live=live, authorize=authorize))
+    extra = {} if occasion is None else {"occasion": occasion}     # a weekly run's call is as before
+    return anyio.run(lambda: agent.run(live=live, authorize=authorize, **extra))
 
 
 def _eastern(moment: datetime) -> str:
@@ -480,7 +567,7 @@ def _span(delta: timedelta) -> str:
     return f"{minutes // 60} h {minutes % 60} min" if minutes >= 60 else f"{minutes} min"
 
 
-LAST_COLUMNS = "due_at, latest_at, mode, claimed_at, finished_at, outcome, run_id"
+LAST_COLUMNS = "due_at, latest_at, mode, claimed_at, finished_at, outcome, run_id, kind"
 
 
 def last_run(conn) -> dict | None:
@@ -501,35 +588,38 @@ with chosen as (
     select (array['off', 'dry-run', 'live'])[1 + least(%(rank)s, %(ceiling)s, coalesce(
         (select case when value = '"live"'::jsonb then 2 when value = '"off"'::jsonb then 0 else 1 end
          from config where key = %(key)s), 0))] as mode)
-insert into agent_schedule (due_at, latest_at, mode, outcome, detail, finished_at)
+insert into agent_schedule (due_at, latest_at, mode, outcome, detail, finished_at, kind, wakeup_id)
 select %(due)s, %(latest)s, case when %(past)s then %(cap)s else mode end,
        case when %(past)s then 'missed' when mode = 'off' then 'skipped' else 'running' end,
        case when %(past)s then %(missed)s when mode = 'off' then %(off)s end,
-       case when %(past)s or mode = 'off' then now() end
+       case when %(past)s or mode = 'off' then now() end,
+       %(kind)s, %(wakeup)s
 from chosen
-on conflict (due_at) do nothing
+on conflict do nothing
 returning mode, outcome"""
 
 
 def record(conn, due: datetime, latest: datetime, mode: str, outcome: str, detail: str | None = None, *,
-           clock: Callable[[], datetime] | None = None) -> tuple[str, str] | None:
+           clock: Callable[[], datetime] | None = None, kind: str = WEEKLY,
+           wakeup: int | None = None) -> tuple[str, str] | None:
     """Insert a row for the time `due`: the (mode, outcome) stored, or None when it already has one.
 
     `running` is a claim, and `mode` is then this worker's own mode, the most it may run. The row gets
     the lower of that, `CEILING` and the database's `agent_schedule_mode`, read by the insert itself;
     `skipped` with mode `off` when that is off, and `missed` when `clock()` (the scheduler passes the
     database's clock), read just before, is past `latest`. A row that isn't a claim is stored with
-    `mode` capped at `CEILING`."""
+    `mode` capped at `CEILING`. A midweek row (`kind` MIDWEEK) names its wake-up (`wakeup`); no second row is
+    inserted for the same time or the same wake-up."""
     if outcome != "running":
         row = conn.execute(
-            "insert into agent_schedule (due_at, latest_at, mode, outcome, detail, finished_at)"
-            " values (%s, %s, %s, %s, %s, now()) on conflict (due_at) do nothing returning mode, outcome",
-            (due, latest, lower(mode, CEILING), outcome, detail)).fetchone()
+            "insert into agent_schedule (due_at, latest_at, mode, outcome, detail, finished_at, kind, wakeup_id)"
+            " values (%s, %s, %s, %s, %s, now(), %s, %s) on conflict do nothing returning mode, outcome",
+            (due, latest, lower(mode, CEILING), outcome, detail, kind, wakeup)).fetchone()
         return None if row is None else tuple(row)
     now = (clock or (lambda: datetime.now(timezone.utc)))()
     row = conn.execute(CLAIM_SQL, {"rank": RANK[mode], "ceiling": RANK[CEILING], "key": DB_MODE_KEY, "due": due,
                                    "latest": latest, "past": now >= latest, "cap": lower(mode, CEILING),
-                                   "off": OFF_IN_DB,
+                                   "off": OFF_IN_DB, "kind": kind, "wakeup": wakeup,
                                    "missed": MISSED.format(latest=_eastern(latest))}).fetchone()
     return None if row is None else tuple(row)
 
@@ -547,6 +637,17 @@ class Claim:
     latest: datetime
     mode: str           # what runs: `live` or `dry-run` (a live claim a check turned into a dry run is `dry-run`)
     note: str           # goes before the agent's detail: "Started 6 h 0 min late. ", or why it isn't live
+    kind: str = WEEKLY  # WEEKLY, or MIDWEEK for a wake-up's run
+    reason: str | None = None   # a midweek run's: the wake-up's reason, for its opening
+
+    @property
+    def name(self) -> str:
+        return _name(self.kind)
+
+
+def _name(kind: str) -> str:
+    """How the log names a time: "run due Wed 09 Dec ..." or "midweek run requested Mon 07 Dec ..."."""
+    return "midweek run requested" if kind == MIDWEEK else "run due"
 
 
 class Running:
@@ -635,6 +736,13 @@ class Scheduler:
         # A live time held back by a passing blocker, and why (the newest words): it has no row yet, and is tried
         # again every `LIVE_RETRY` until its latest start (`WAITING`).
         self.waiting: dict[datetime, tuple[datetime, str]] = {}
+        # Set by `poke` after a worker round: a midweek wake-up may have asked for a run, so look now.
+        self.check_now = False
+
+    def poke(self) -> None:
+        """Look for a midweek run to start at the next tick, not at the next weekly time. The worker calls it after
+        each round, since that round's wake check may have requested one (`vending.midweek_wake`)."""
+        self.check_now = True
 
     @property
     def mode(self) -> str:
@@ -659,7 +767,7 @@ class Scheduler:
             return max(now, self.running.started + STUCK_AFTER + timedelta(seconds=1))
         if self.waiting:        # a live time waiting on a passing blocker: try again now (`not_before` spaces it)
             return now
-        if self.unfinished is not None or not self.loaded \
+        if self.unfinished is not None or not self.loaded or self.check_now \
                 or any(d not in self.known for d, _ in due_times(self.sched, now)):
             return now
         upcoming = next_time(self.sched, now)
@@ -712,7 +820,7 @@ class Scheduler:
             return False
         running.let_go()
         self.thread, self.running = None, None
-        self.log(f"agent schedule: the run due {_eastern(running.claim.due)} hasn't ended after "
+        self.log(f"agent schedule: the {running.claim.name} {_eastern(running.claim.due)} hasn't ended after "
                  f"{_span(STUCK_AFTER)}; recorded as failed and let go")
         ending = Ending(running.claim.due, "failed", ABANDONED, None)
         try:
@@ -757,7 +865,7 @@ class Scheduler:
             from vending.worker import _describe
 
             ending = Ending(claim.due, "failed", LAUNCH_FAILED.format(error=_describe(error)), None)
-            self.log(f"agent schedule: the run due {_eastern(claim.due)} couldn't start: {_describe(error)}")
+            self.log(f"agent schedule: the {claim.name} {_eastern(claim.due)} couldn't start: {_describe(error)}")
             try:
                 finish(conn, ending.due, ending.outcome, ending.detail, None)
                 self.last = last_run(conn)
@@ -804,14 +912,26 @@ class Scheduler:
                 continue
             self._miss(conn, d, latest, now)
         claim = self._claim(conn, *newest) if newest is not None else None
-        # Only the newest runnable time can still be waiting; every other one has its row now.
-        self.waiting = {d: w for d, w in self.waiting.items() if newest is not None and d == newest[0]}
+        # A midweek wake-up's run (#219): after the weekly time, which goes first when both are due.
+        midweek = midweek_times(conn, now)
+        soonest = [m for m in midweek if now < m[1]]
+        wake = soonest[-1] if soonest else None
+        for due_at, latest, wakeup, _ in midweek:
+            if wake is None or wakeup != wake[2]:
+                self._miss(conn, due_at, latest, now, kind=MIDWEEK, wakeup=wakeup)
+        if claim is None and wake is not None:
+            claim = self._claim(conn, wake[0], wake[1], kind=MIDWEEK, wakeup=wake[2], reason=wake[3])
+        # Only the newest runnable time of each kind can still be waiting; every other one has its row now.
+        keep = {t[0] for t in (newest, wake) if t is not None}
+        self.waiting = {d: w for d, w in self.waiting.items() if d in keep}
         self.known = {d for d, _ in due}
         self.loaded = True
+        self.check_now = False
         self.last = last_run(conn)
         return claim
 
-    def _miss(self, conn, due: datetime, latest: datetime, now: datetime) -> None:
+    def _miss(self, conn, due: datetime, latest: datetime, now: datetime, *, kind: str = WEEKLY,
+              wakeup: int | None = None) -> None:
         if latest <= due:       # only the clocks' spring change makes a window with no valid start
             detail = CLOCKS_SKIP.format(day=f"{due.astimezone(EASTERN):%a %d %b}")
         else:
@@ -820,50 +940,54 @@ class Scheduler:
             why = self.waiting.pop(due)[1]
             detail = (LIVE_MISSED.format(latest=_eastern(latest), why=why) if now >= latest
                       else f"{SUPERSEDED} It had been waiting: {why}")
-        if record(conn, due, latest, self.mode, "missed", detail):
-            self.log(f"agent schedule: the run due {_eastern(due)} was missed")
+        if record(conn, due, latest, self.mode, "missed", detail, kind=kind, wakeup=wakeup):
+            self.log(f"agent schedule: the {_name(kind)} {_eastern(due)} was missed")
 
-    def _claim(self, conn, due: datetime, latest: datetime) -> Claim | None:
+    def _claim(self, conn, due: datetime, latest: datetime, *, kind: str = WEEKLY, wakeup: int | None = None,
+               reason: str | None = None) -> Claim | None:
         """Take the time `due` for this worker, or None when it doesn't run now. The insert itself reads the
-        database's mode and checks the latest start (`record`)."""
+        database's mode and checks the latest start (`record`). A midweek run (`kind` MIDWEEK) names its wake-up
+        and carries its reason."""
+        name = _name(kind)
         if latest <= due:
-            self._miss(conn, due, latest, self.db_clock(conn))
+            self._miss(conn, due, latest, self.db_clock(conn), kind=kind, wakeup=wakeup)
             return None
         if lower(self.mode, database_mode(conn)) == "live" \
-                and (why := self._live_wait(conn, due, self.db_clock(conn))) is not None:
+                and (why := self._live_wait(conn, due, self.db_clock(conn), kind)) is not None:
             if self.waiting.get(due, (None, None))[1] != why:
-                self.log(f"agent schedule: the live run due {_eastern(due)} waits: {why}")
+                self.log(f"agent schedule: the live {name} {_eastern(due)} waits: {why}")
             self.waiting[due] = (latest, why)
             self.not_before = self.clock() + LIVE_RETRY
             return None
         self.waiting.pop(due, None)
-        stored = record(conn, due, latest, self.mode, "running", clock=lambda: self.db_clock(conn))
+        stored = record(conn, due, latest, self.mode, "running", clock=lambda: self.db_clock(conn), kind=kind,
+                        wakeup=wakeup)
         if stored is None:
             return None         # another worker has it
         mode, outcome = stored
         if outcome == "missed":
-            self.log(f"agent schedule: the run due {_eastern(due)} was missed")
+            self.log(f"agent schedule: the {name} {_eastern(due)} was missed")
             return None
         if outcome == "skipped":
-            self.log(f"agent schedule: the run due {_eastern(due)} skipped; {DB_MODE_KEY} is off in the database")
+            self.log(f"agent schedule: the {name} {_eastern(due)} skipped; {DB_MODE_KEY} is off in the database")
             return None
         now = self.db_clock(conn)
         late = now - due
         note = f"Started {_span(late)} late. " if late >= LATE_AFTER else ""
-        if mode == "live" and (why := live_blocker(conn, now, due=due)) is not None:
+        if mode == "live" and (why := live_blocker(conn, now, due=due, kind=kind)) is not None:
             # Under the schedule's lock, before the run's thread exists: the row says what will run.
             conn.execute("update agent_schedule set mode = 'dry-run' where due_at = %s", (due,))
             mode, note = "dry-run", DOWNGRADED.format(why=why) + note
-            self.log(f"agent schedule: the run due {_eastern(due)} runs as a dry run, not live: {why}")
-        self.log(f"agent schedule: starting the {mode} run due {_eastern(due)}"
+            self.log(f"agent schedule: the {name} {_eastern(due)} runs as a dry run, not live: {why}")
+        self.log(f"agent schedule: starting the {mode} {name} {_eastern(due)}"
                  + (f", {_span(late)} late" if late >= LATE_AFTER else ""))
-        return Claim(due, latest, mode, note)
+        return Claim(due, latest, mode, note, kind, reason)
 
-    def _live_wait(self, conn, due: datetime, now: datetime) -> str | None:
+    def _live_wait(self, conn, due: datetime, now: datetime, kind: str = WEEKLY) -> str | None:
         """Why a time that would run live must wait, or None to claim it now. A lasting blocker doesn't wait: the
         claim runs it as a dry run and says why. Before an open submission counts as a passing blocker, what the
         bridge can settle by itself is settled (`reconcile`)."""
-        if lasting_blocker(conn, now, due=due) is not None:
+        if lasting_blocker(conn, now, due=due, kind=kind) is not None:
             return None
         self.reconcile(conn)
         return passing_blocker(conn, now) or lease_busy(conn)
@@ -902,7 +1026,7 @@ class Scheduler:
             return False
         self.waiting[claim.due] = (claim.latest, LEASE_BUSY.format(run="") + f" ({detail.rstrip('.')})")
         self.not_before = self.clock() + LIVE_RETRY
-        self.log(f"agent schedule: the live run due {_eastern(claim.due)} found the run lease taken; it waits")
+        self.log(f"agent schedule: the live {claim.name} {_eastern(claim.due)} found the run lease taken; it waits")
         return True
 
     def _authorize(self, claim: Claim, refused: dict):
@@ -929,7 +1053,7 @@ class Scheduler:
                 refused["ending"] = ("missed", LATE_AT_START.format(latest=_eastern(claim.latest)))
             elif mode == "off" or (claim.mode == "live" and mode != "live"):
                 refused["ending"] = ("skipped", CHANGED.format(mode=mode))
-            elif claim.mode == "live" and (why := live_blocker(conn, now, due=claim.due)) is not None:
+            elif claim.mode == "live" and (why := live_blocker(conn, now, due=claim.due, kind=claim.kind)) is not None:
                 refused["ending"] = ("skipped", NOT_LIVE.format(why=why))
             else:
                 conn.execute("update agent_schedule set started_at = %s where due_at = %s", (now, claim.due))
@@ -955,14 +1079,18 @@ class Scheduler:
             refused: dict = {}
             try:
                 live = claim.mode == "live"
-                run_id, out = self.run_agent(live, self._authorize(claim, refused))
+                if claim.kind == MIDWEEK:     # its opening says why it was woken
+                    run_id, out = self.run_agent(live, self._authorize(claim, refused),
+                                                 occasion=midweek_occasion(claim.reason))
+                else:
+                    run_id, out = self.run_agent(live, self._authorize(claim, refused))
                 outcome, detail = getattr(out, "status", None), getattr(out, "detail", None)
             except BaseException as error:      # noqa: BLE001 - a thread's error would otherwise be lost
                 run_id, outcome, detail = None, "failed", f"The agent's entry point raised {_describe(error)}"
             if not running.end(abandon=False):
                 return      # the worker let it go and recorded it already
             if refused.get("keep"):
-                self.log(f"agent schedule: the run due {_eastern(claim.due)} wasn't started: {NOT_CLAIMED}")
+                self.log(f"agent schedule: the {claim.name} {_eastern(claim.due)} wasn't started: {NOT_CLAIMED}")
                 return      # another worker recorded the row: leave what it wrote
             if claim.mode == "live" and "ending" not in refused and outcome == "skipped" \
                     and isinstance(detail, str) and detail.startswith(_busy()) and self._put_back(claim, detail):
@@ -979,7 +1107,8 @@ class Scheduler:
             except Exception as error:      # noqa: BLE001 - kept, and written at the next tick, a minute away
                 self.unfinished = ending
                 self.not_before = self.clock() + RETRY
-                self.log(f"agent schedule: could not record the run due {_eastern(claim.due)}: {_describe(error)}; "
+                self.log(f"agent schedule: could not record the {claim.name} {_eastern(claim.due)}: "
+                         f"{_describe(error)}; "
                          "trying again in a minute")
         finally:
             running.let_go()
@@ -1053,7 +1182,7 @@ def main(argv: list[str] | None = None) -> int:
                   else f"A run due now would be a dry run, not live: {why}")
         if sched is not None and not model_key_present():
             print("The model key isn't set here, so a run started here would fail before any request.")
-        rows = conn.execute("select s.due_at, s.mode, s.outcome, s.run_id, s.detail,"
+        rows = conn.execute("select s.due_at, s.mode, s.outcome, s.run_id, s.detail, s.kind,"
                             " coalesce(r.request_id, (select p.request_id from purchase_submissions p"
                             "  where p.schedule_due = s.due_at and p.status = 'accepted' order by p.id desc limit 1)),"
                             " array(select p.id::text || ' ' || p.status from purchase_submissions p"
@@ -1062,7 +1191,7 @@ def main(argv: list[str] | None = None) -> int:
                             " order by s.due_at desc limit %s", (args.rows,)).fetchall()
     if not rows:
         print("No scheduled run has been recorded yet.")
-    for due, mode, outcome, run_id, detail, request_id, unsettled in rows:
+    for due, mode, outcome, run_id, detail, kind, request_id, unsettled in rows:
         run = f", agent run {run_id}" if run_id is not None else ""
         if request_id:
             sent = f", sent request {request_id}"
@@ -1071,6 +1200,7 @@ def main(argv: list[str] | None = None) -> int:
                     "python -m vending.submissions resolve")
         else:
             sent = "" if outcome == "running" else ", nothing sent"
+        mode = f"{mode} midweek" if kind == MIDWEEK else mode
         print(f"{_eastern(due)}  {mode}  {outcome}{run}{sent}" + (f"\n    {detail}" if detail else ""))
     return 0
 

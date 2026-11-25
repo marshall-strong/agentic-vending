@@ -755,6 +755,13 @@ def _stop(signum, frame):
     raise Stopped
 
 
+def _midweek_on() -> bool:
+    """Whether the midweek wake check is on (`MIDWEEK_WAKE`): only then can a round ask for a midweek run."""
+    from vending import midweek_wake
+
+    return midweek_wake.enabled()
+
+
 def wait_or_wake(event: threading.Event, seconds: float) -> bool:
     """Sleep `seconds`, or less: True as soon as `event` is set (a scheduled agent run's thread ended). In steps of
     a second at most, so Ctrl+C still stops the worker promptly where a lock's wait can't be interrupted (Windows)."""
@@ -839,6 +846,9 @@ def main(argv: list[str] | None = None, jobs: list[Job] | None = None,
             state.rounds += 1
             state.last_round_at = datetime.now(timezone.utc).isoformat()
             record_failed_round(state, unrecorded, log)
+            # The round's midweek wake check may have asked for a run (#219): the scheduler looks at its next tick.
+            if ticks is not None and hasattr(ticks, "poke") and _midweek_on():
+                ticks.poke()
             if args.once:
                 return max((r.exit_code if r.exit_code is not None else 1) for r in state.results)
             now = clock()
