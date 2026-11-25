@@ -385,6 +385,8 @@
   "data": {
    "id": 1,
    "picked": true,
+   "round": "6",
+   "picked_at": null,
    "slots": [
     {
      "slot": "11",
