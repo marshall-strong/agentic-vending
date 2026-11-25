@@ -865,3 +865,47 @@ def test_plan_mode_names_what_the_fill_would_still_refuse(connect, capsys):
     assert command(connect, client, "--plan", "picked", "--first-usable", "--by", "Kevin", "--no-fallback", when=BEFORE) == 1
     out = capsys.readouterr().out
     assert "The fill would still refuse:" in out and "PICKLE: Amazon, 24 a pack (primary checked 2026-11-15" in out
+
+
+# A key with no credit left (25 Nov): the API refuses even the free token count with a 400.
+
+def no_credit_error():
+    import anthropic
+    import httpx2
+
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages/count_tokens")
+    body = {"type": "error", "error": {"type": "invalid_request_error",
+                                       "message": "Your credit balance is too low to access the Anthropic API. "
+                                                  "Please go to Plans & Billing to upgrade or purchase credits."}}
+    return anthropic.BadRequestError(f"Error code: 400 - {body}", response=httpx2.Response(400, request=request),
+                                     body=body)
+
+
+class NoCreditClient(Client):
+    def count_tokens(self, **_):
+        raise no_credit_error()
+
+
+def test_a_key_with_no_credit_stops_the_compare_at_once_and_leaves_the_rest_untried(connect, capsys):
+    """25 Nov: every count failed with "credit balance is too low", each failure was counted as two searches and
+    logged as not_searched, and 19 drinks were marked tried before the 160-search limit stopped the run. The first
+    such refusal stops the run: no store after it, no drink after it, nothing logged as tried."""
+    with connect() as conn:
+        picked_plan(conn)
+    client = NoCreditClient()
+    assert command(connect, client, "--plan", "picked", "--by", "Kevin", when=BEFORE) == 2
+    out = capsys.readouterr().out
+    assert client.sent == [] and "add credit" in out
+    assert "no_credit" in out and "Stopped: no more lookups this run." in out
+    assert "Walmart" not in out                     # the first store's refusal ended the drink and the run
+    assert "  COKE20 (" in out and "  PICKLE (" not in out    # the second drink was never started
+    with connect() as conn:
+        assert conn.execute("select count(*) from price_lookups").fetchone()[0] == 0
+
+
+def test_a_key_with_no_credit_is_refused_to_the_agent_with_a_fixed_reason(connect):
+    s = searcher(connect, NoCreditClient())
+    reply, failed = lookup(s)
+    assert failed and reply["refused"] == "no_credit" and s.searches == 0
+    assert reply["message"] == price_search.REASONS["no_credit"]
+    assert "credit" in price_search.REASONS["no_credit"] and "no_credit" in price_search.STOP_RUN

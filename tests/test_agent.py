@@ -1450,3 +1450,36 @@ def test_live_agent_spend_database_fallback(conn, schema_url, monkeypatch, team_
     finally:
         api.server.shutdown()
         api.server.server_close()
+
+
+def test_a_lookup_refused_for_no_credit_ends_the_run_before_another_tool_or_turn():
+    """Sol, #261: two find_pack_price calls in one turn and the first says no_credit. The second isn't tried and no
+    next turn is asked for: every model call would fail the same way."""
+    from vending import price_search
+
+    tried = []
+
+    def lookup(arguments):
+        tried.append(arguments["sku"])
+        return json.dumps({"refused": "no_credit", "message": price_search.REASONS["no_credit"]}), True
+
+    class OneTurn:
+        spent = Decimal(0)
+
+        def __init__(self):
+            self.turns = 0
+
+        def call(self, request, label=""):
+            self.turns += 1
+            return SimpleNamespace(content=[use(price_search.TOOL_NAME, {"sku": "A"}, id="a"),
+                                            use(price_search.TOOL_NAME, {"sku": "B"}, id="b")],
+                                   stop_reason="tool_use")
+
+    async def no_server(name, arguments):
+        raise AssertionError("no server tool is called")
+
+    h, out = OneTurn(), agent.Outcome(status="failed", detail="")
+    anyio.run(lambda: agent.converse(h, no_server, [price_search.TOOL], out, model="m", effort="low", system="s",
+                                     opening="o", live=True, local_tools={price_search.TOOL_NAME: lookup}))
+    assert tried == ["A"] and h.turns == 1
+    assert out.status == "failed" and "no credit" in out.detail

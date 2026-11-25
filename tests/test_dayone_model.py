@@ -478,3 +478,25 @@ def test_a_snapshot_alias_is_not_plannable_beside_its_product():
     first, alias = build.build(snap)
     assert first["plannable"] and not alias["plannable"]
     assert "same product as ARIZONA-TEA_A-16CAN" in alias["not_plannable"]
+
+
+# --- Lines first listed 25 Nov (round 7d) -------------------------------------------------------------------------
+
+@pytest.mark.parametrize("sku, size, cat", [
+    ("MONSTER_ULTRA-SUNRISE-16CAN", "16 oz can", "energy"),
+    ("REDBULL_EDITION-PINK-8_4CAN", "8.4 oz can", "energy"),
+    ("CELSIUS_ESSENTIALS-DRAGONBERRY-16CAN", "16 oz can", "energy"),
+    ("GATORADE_ZERO-GLACIER-20BOT", "20 oz bottle", "sports"),
+    ("LIQUID_MOUNTAIN-STILL-12CAN", "12 oz can", "water"),
+    ("CORE_ELITE-CHOCOLATE-14BOT", "14 oz bottle", "protein"),
+    ("MUSCLE-CHOCOLATE-11CAR", "11 oz carton", "protein"),
+    ("FAIRLIFE-NUTRI_PLAN_CHOCOLATE-11_5BOT", "11.5 oz bottle", "protein"),
+    ("STARBUCK_FRAP-VANILLA-13_7BOT", "13.7 oz bottle", "coffee"),
+    ("TROPICANA-ORANGE_JUICE-10BOT", "10 oz bottle", "juice"),
+])
+def test_the_lines_the_catalog_added_on_25_nov_have_their_category(sku, size, cat):
+    """The 25 Nov sync added these lines (and renamed some SKUs into them). Without them in CAT or ENERGY, the "CAN"
+    and "20BOT" fallbacks called Monster Ultra, Red Bull Edition and Liquid Death sodas, and Gatorade Zero a 20 oz
+    soda, so a round scored them at the wrong rate and reference price."""
+    build = module("dayone_build_catalog7", DAYONE / "round7" / "build_catalog7.py")
+    assert build.category(sku, size) == cat

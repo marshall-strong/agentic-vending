@@ -35,9 +35,13 @@ SNAPSHOT = P.LOCAL / "team_catalog_2026-11-20.json"
 
 CAT = {"ARIZONA": "tea", "PURELEAF": "tea", "BUBLY": "sparkling", "SPINDRIFT_SPARK": "sparkling", "HINT": "water",
        "VITAMINWATER": "water", "ESSENTIA": "water", "SNAPPLE": "juice", "PREMIER": "protein", "CORE": "protein",
-       "GATORADE": "sports", "POWERADE": "sports", "BODYARMOR_LYTE": "sports", "STARBUCKS_FRAP": "coffee"}
+       "GATORADE": "sports", "POWERADE": "sports", "BODYARMOR_LYTE": "sports", "STARBUCKS_FRAP": "coffee",
+       # Lines the catalog first listed on 25 Nov (round 7d). The catalog spells the Frappuccino line STARBUCK_FRAP.
+       "GATORADE_ZERO": "sports", "LIQUID_MOUNTAIN": "water", "CORE_ELITE": "protein", "MUSCLE": "protein",
+       "FAIRLIFE": "protein", "STARBUCK_FRAP": "coffee", "TROPICANA": "juice"}
 ENERGY = {"CELSIUS", "GORGIE", "REDBULL", "STARBUCKS", "STARBUCKS_DOUBLE", "MONSTER", "GHOST", "GHOST_ZERO_SUGAR",
-          "ALANI", "C4_PERF", "ROCKSTAR", "REIGN"}
+          "ALANI", "C4_PERF", "ROCKSTAR", "REIGN",
+          "MONSTER_ULTRA", "REDBULL_EDITION", "CELSIUS_ESSENTIALS"}     # first listed 25 Nov (round 7d)
 TEA_BY_NAME = {"SNAPPLE-PEACH-16BOT"}   # Snapple Peach Tea is a tea; round 4 called it juice (its own check flagged this)
 
 # 11 Nov list figures round 4 used for approved requests whose note carries no price: (pack, expected $)

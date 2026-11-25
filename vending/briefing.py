@@ -450,6 +450,7 @@ REFUSAL_WORDS = {
     "not_a_drink": "not a drink",
     "alcohol_or_thc": "alcohol or THC",
     "search_cap": "price lookup cap used up",
+    "no_credit": "the model API key has no credit",
     "fresh_price": "a fresh price exists already",
     "not_found": "no matching listing",
 }

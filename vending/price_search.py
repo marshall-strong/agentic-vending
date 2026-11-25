@@ -147,8 +147,8 @@ import psycopg
 from pydantic import BaseModel
 
 from vending import config, key_dates, ledger, planner, planning, sourcing, start
-from vending.harness import (SEARCH_TOOL_TYPE, Abandoned, Budget, CapReached, Harness, HarnessError, NotHeld,
-                             PastDeadline)
+from vending.harness import (SEARCH_TOOL_TYPE, Abandoned, Budget, CapReached, Harness, HarnessError, NoCredit,
+                             NotHeld, PastDeadline)
 from vending.pricing import Refusal, pack_floor_cents
 from vending.receipt_prices import listing
 from vending.write_gate import Refused, log, run_write
@@ -225,6 +225,8 @@ REASONS = {
     "fresh_price": "That drink already has a fresh price at that store for that pack; use it. Nothing was searched.",
     "search_cap": "The price lookups' cap for this run or today is used up. Plan with the prices you have and name "
                   "the drink left unpriced in the update. Nothing was searched.",
+    "no_credit": "The model API key has no credit left, so no lookup can run until a person adds credit. Plan with "
+                 "the prices you have and name the drinks left unpriced in the update. Nothing was searched.",
     "not_searched": "The search didn't run or didn't answer. Nothing was stored.",
     "no_report": "The search ended without a report. Nothing was stored.",
     "not_found": "No matching listing at that store. Try another store, or plan without the drink. "
@@ -571,7 +573,7 @@ class Outcome:
         return self.code is None
 
 
-STOP_RUN = frozenset({"halted", "search_cap"})     # a comparison that meets one of these stops the whole run
+STOP_RUN = frozenset({"halted", "search_cap", "no_credit"})   # a comparison that meets one of these stops the run
 
 
 @dataclass(frozen=True)
@@ -890,6 +892,8 @@ class PriceSearch:
             call = self.harness.call_detailed(request, label=f"{self.label} {sku} {store}", daily_budget=budget)
         except CapReached as error:
             raise _Stop("search_cap", str(error)) from None
+        except NoCredit as error:       # not a search: counted as none, logged as none, and the run stops
+            raise _Stop("no_credit", str(error)) from None
         except (NotHeld, PastDeadline) as error:
             raise _Stop("not_searched", str(error)) from None
         except (Abandoned, HarnessError) as error:      # it may have run: count its searches
@@ -1420,6 +1424,7 @@ class CheckResult:
     changed: int = 0
     failures: int = 0
     cost_usd: Decimal = Decimal(0)
+    no_credit: bool = False     # stopped because the model API key has no credit (exit code 2)
 
 
 def check_prices(*, by: str, max_age_hours: float, connect: Callable[[], psycopg.Connection] | None = None,
@@ -1449,15 +1454,16 @@ def check_prices(*, by: str, max_age_hours: float, connect: Callable[[], psycopg
     after = prices()
     changed = {key[0] for key in before.keys() | after.keys() if before.get(key) != after.get(key)}
     return CheckResult(code, report.get("drinks", 0), len(changed), report.get("failures", 0),
-                       report.get("spent", Decimal(0)))
+                       report.get("spent", Decimal(0)), report.get("no_credit", False))
 
 
 def main(argv: list[str] | None = None, *, client: Any = None,
          connect: Callable[[], psycopg.Connection] | None = None, now: Callable[[], datetime] | None = None,
          report: dict | None = None, label: str | None = None) -> int:
     """`python -m vending.price_search`. Exit 0 when every lookup stored a price (or none was needed), 1 when
-    one didn't, 2 when the command was refused before any lookup. `report`, if given, gets `drinks` (looked up),
-    `failures` (drinks with no usable price) and `spent`; `label` names the lookups' `model_calls`
+    one didn't, 2 when the command was refused before any lookup or the key had no credit (`no_credit`, which stops
+    the run). `report`, if given, gets `drinks` (looked up), `failures` (drinks with no usable price), `spent` and
+    `no_credit`; `label` names the lookups' `model_calls`
     (`check_prices`)."""
     report = {} if report is None else report
     import argparse
@@ -1651,6 +1657,8 @@ def main(argv: list[str] | None = None, *, client: Any = None,
                            bench=args.no_store, full=args.full, label=label)
     missed = bool(skipped)
     failures = 0
+    looked = 0              # drinks a lookup ran for: not one the run stopped on for no credit
+    no_credit = False
     if compare:
         results: list[Comparison] = []
         try:
@@ -1661,6 +1669,8 @@ def main(argv: list[str] | None = None, *, client: Any = None,
                         out = searcher.find({"sku": d.sku, "store": primary.store,
                                              "units_per_pack": primary.units_per_pack})
                         print(_line(d.sku, primary.units_per_pack, out))
+                        no_credit = out.code == "no_credit"
+                        looked += not no_credit
                         if not out.ok and out.code != "fresh_price":
                             missed, failures = True, failures + 1
                         if out.code in STOP_RUN:
@@ -1675,9 +1685,11 @@ def main(argv: list[str] | None = None, *, client: Any = None,
                                               code="db_error"))
                     print(f"  {d.sku}: the database failed ({type(error).__name__}: {error}); nothing more for "
                           "this drink, going on to the next.")
-                    missed, failures = True, failures + 1
+                    missed, failures, looked = True, failures + 1, looked + 1
                     continue
                 results.append(c)
+                no_credit = c.code == "no_credit"
+                looked += not no_credit
                 for line in _compared(c, stored=not args.no_store):
                     print(line)
                 missed = missed or c.code is not None
@@ -1703,17 +1715,19 @@ def main(argv: list[str] | None = None, *, client: Any = None,
             except psycopg.Error as error:
                 print(f"  {n.sku}: the database failed ({type(error).__name__}: {error}); nothing more for this "
                       "drink, going on to the next.")
-                missed, failures = True, failures + 1
+                missed, failures, looked = True, failures + 1, looked + 1
                 continue
             for out in tried:
                 print(_line(n.sku, n.units_per_pack, out))
             last = tried[-1]
+            no_credit = last.code == "no_credit"
+            looked += not no_credit
             if not last.ok and not (last.code == "fresh_price" and len(tried) == 1):
                 missed, failures = True, failures + 1
-            if last.code in ("halted", "search_cap"):
+            if last.code in STOP_RUN:
                 print("Stopped: no more lookups this run.")
                 break
-    report.update(drinks=len(todo) if compare else len(needs), failures=failures, spent=harness.spent)
+    report.update(drinks=looked, failures=failures, spent=harness.spent, no_credit=no_credit)
     if pick is not None and not args.no_store and args.plan == "picked":
         # A price can land in the alternate while a stale primary stays: say what the fill would still refuse.
         with connect() as conn:
@@ -1726,6 +1740,9 @@ def main(argv: list[str] | None = None, *, client: Any = None,
     print(f"Model spend this run: ${harness.spent:.4f} of the ${cap:.2f} cap ("
           + ("live spend, in the ledger as tokens" if live else
              "test spend: in model_calls, not in the ledger") + ").")
+    if no_credit:
+        print("The model API key has no credit left: add credit, then run this again.")
+        return 2
     return 1 if missed else 0
 
 
