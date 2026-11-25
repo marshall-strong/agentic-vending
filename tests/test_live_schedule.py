@@ -455,6 +455,21 @@ def test_a_rejected_wednesday_request_still_keeps_thursday_from_sending(schema_u
     assert thursday[1] == "dry-run" and "already" in thursday[4] and "python -m vending.agent --live" in thursday[4]
 
 
+def test_thursdays_dry_run_says_wednesday_already_sent_even_while_that_request_is_pending(schema_url, conn, ready):
+    """Found by the live-schedule rehearsal: Wednesday's request is still pending on Thursday (Friday's visit fills
+    it). Thursday runs as a dry run because of the lasting reason, one per visit, and its detail must say that, not
+    the passing one (a pending request), which would read as a wait that clears."""
+    fresh_slots(conn, at(THU2, 12))
+    conn.execute("insert into agent_schedule (due_at, latest_at, mode, outcome, finished_at)"
+                 " values (%s, %s, 'live', 'submitted', now())", (at(WED2, 14), at(WED2, 22)))
+    _scheduled_submission(conn, at(WED2, 14), request_status="pending")
+    agent = FakeAgent(schema_url)
+    tick(scheduler(schema_url, agent, _wed_thu(WED2.date()), clock=Clock(at(THU2, 11))), at(THU2, 12))
+    assert [live for _, live in agent.calls] == [False]
+    thursday = [r for r in rows(conn) if r[0] == at(THU2, 12)][0]
+    assert thursday[1] == "dry-run" and "already sent" in thursday[4] and "still pending" not in thursday[4]
+
+
 def test_a_wednesday_submission_made_after_thursdays_claim_still_stops_its_post(db, fake, schema_url, conn,
                                                                               send_clock, live_env):  # noqa: F811
     """Finding 2, at the send: the other submission landed after the claim and the lease; the POST still waits."""

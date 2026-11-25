@@ -974,7 +974,10 @@ class Scheduler:
         now = self.db_clock(conn)
         late = now - due
         note = f"Started {_span(late)} late. " if late >= LATE_AFTER else ""
-        if mode == "live" and (why := live_blocker(conn, now, due=due, kind=kind)) is not None:
+        # The lasting reason first: a run held back for the whole window (one per visit) says so, not a passing
+        # reason that happens to hold too (Wednesday's request still pending on Thursday), which reads as a wait.
+        if mode == "live" and (why := lasting_blocker(conn, now, due=due, kind=kind)
+                               or live_blocker(conn, now, due=due, kind=kind)) is not None:
             # Under the schedule's lock, before the run's thread exists: the row says what will run.
             conn.execute("update agent_schedule set mode = 'dry-run' where due_at = %s", (due,))
             mode, note = "dry-run", DOWNGRADED.format(why=why) + note
