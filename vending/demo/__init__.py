@@ -97,9 +97,19 @@ def load(path: Path = SNAPSHOT) -> dict:
     return snap
 
 
+# The demo's run pages (`vending.run_page`), followed by a run id.
+DEMO_RUN = "/dashboard/demo/run/"
+
+
 def page() -> str:
     """The demo page: the live page's `render`, in demo mode."""
-    return dashboard.render(load(), json_href=DEMO_STATE, nav=NAV, demo=True, charts={"products": DEMO_PRODUCTS})
+    return dashboard.render(load(), json_href=DEMO_STATE, nav=NAV, demo=True,
+                            charts={"products": DEMO_PRODUCTS, "run": DEMO_RUN})
+
+
+def run_data(run_id: int) -> dict | None:
+    """A run page's data from the snapshot (`run_pages`, by run id), or None when the demo has none for it."""
+    return load().get("run_pages", {}).get(str(run_id))
 
 
 def state_json() -> str:

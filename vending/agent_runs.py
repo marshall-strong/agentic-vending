@@ -42,6 +42,17 @@ SUBMITTED = "Submitted purchase request "
 AFTERWARDS = "; afterwards: "
 # Characters of one step kept. A tool reply can be tens of kilobytes; the start says what it was.
 MAX_STEP_TEXT = 4000
+# A plan's own calls are kept longer: a `preview_desired_state` or `submit_desired_state` call is the whole draft
+# plan (every slot, and the sourcing with its links), which the live run page reads slot by slot
+# (`vending.run_page`). The page itself shows only the start of it. Every other step stops at MAX_STEP_TEXT.
+MAX_CALL_TEXT = 16000
+PLAN_TOOLS = ("preview_desired_state", "submit_desired_state")
+
+
+def harness_key(run_id: int) -> str:
+    """The `model_calls.run_id` an agent run's harness writes (`vending.agent`), so the live run page reads the
+    run's spend through the `model_calls_run` index instead of scanning labels."""
+    return f"agent-run-{int(run_id)}"
 
 
 def start(conn: psycopg.Connection, *, mode: str, model: str | None = None) -> int:
@@ -75,14 +86,23 @@ def finish(conn: psycopg.Connection, run_id: int, status: str, *, plan: dict | N
 
 
 def step(conn: psycopg.Connection, run_id: int, turn: int, kind: str, content: str, *,
-         tool: str | None = None, is_error: bool = False) -> None:
-    """Record one step of a run. A tool call or result names its tool; reasoning and text don't."""
+         tool: str | None = None, is_error: bool = False, tool_use_id: str | None = None) -> None:
+    """Record one step of a run. A tool call or result names its tool; reasoning and text don't.
+
+    `tool_use_id` is the model's id for the tool use, on both its call and its result, so the two can be
+    paired when one turn makes several calls (migration 035). Written only when given."""
     if kind not in STEP_KINDS:
         raise ValueError(f"kind must be one of {', '.join(STEP_KINDS)}, not {kind!r}")
     if (tool is None) != (kind in ("thinking", "text")):
         raise ValueError(f"a {kind} step {'names no' if kind in ('thinking', 'text') else 'needs a'} tool")
-    if len(content) > MAX_STEP_TEXT:
-        content = content[:MAX_STEP_TEXT] + f"\n... cut: {len(content):,} characters in all"
+    limit = MAX_CALL_TEXT if kind == "tool_call" and tool in PLAN_TOOLS else MAX_STEP_TEXT
+    if len(content) > limit:
+        content = content[:limit] + f"\n... cut: {len(content):,} characters in all"
     with conn.transaction():
-        conn.execute("insert into agent_steps (run_id, turn, kind, tool, content, is_error)"
-                     " values (%s, %s, %s, %s, %s, %s)", (run_id, turn, kind, tool, content, is_error))
+        if tool_use_id is None:
+            conn.execute("insert into agent_steps (run_id, turn, kind, tool, content, is_error)"
+                         " values (%s, %s, %s, %s, %s, %s)", (run_id, turn, kind, tool, content, is_error))
+        else:
+            conn.execute("insert into agent_steps (run_id, turn, kind, tool, content, is_error, tool_use_id)"
+                         " values (%s, %s, %s, %s, %s, %s, %s)",
+                         (run_id, turn, kind, tool, content, is_error, tool_use_id))

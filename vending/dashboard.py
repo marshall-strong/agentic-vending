@@ -45,7 +45,10 @@ The page, top to bottom:
    opens to the agent's reason, what it was, and what the slot holds and sold.
    Then the agent's weekly update and its notes to itself.
  - Runs: each run, how it ended, what it cost, and which slots its plan changed, with the steps
-   it took (`agent_steps`): its reasoning, each tool call and what came back.
+   it took (`agent_steps`): its reasoning, each tool call and what came back. Each live run links to
+   its own page (`vending.run_page`), which follows it as it happens.
+ - Forecast vs actual (`vending.forecast_panel`), under the report card: per week and slot, what the
+   agent expected to sell (the rate its plan recorded) against what sold.
  - Tool calls: the last calls from `action_log`, filterable to writes or problems.
  - Requests and back stock: purchase requests, every catalog request with counts by status and
    the places left under the bridge's cap on open requests, and what is in the closet.
@@ -78,6 +81,7 @@ from psycopg.types.json import set_json_loads
 from vending import (capacity, db, leaderboards, machine_art, midweek_wake, money_panel, plan_rounds, report_card,
                      settings, slot_counts, tracking, visits)
 from vending import agent_runs, agent_schedule, key_dates, price_schedule, pricing_panel, tracking_daily
+from vending import forecast_panel  # forecast vs actual, beside the report card
 from vending import stock as stock_mod
 from vending import planner
 from vending.planner import IN_STORE_CUTOFF
@@ -799,6 +803,40 @@ def _scope_numbered(value: Any, ours: set[str]) -> Any:
     return value
 
 
+def scope_run(run: dict, ours: set[str], assignment_at: datetime | None) -> None:
+    """Scope one run and its steps to the current assignment, in place: the Runs panel's rule, and the live
+    run page's (`vending.run_page`). A run from before the assignment loses its text and steps; text naming
+    a selection outside `ours` is replaced; a saved poll reply keeps only our rows' figures."""
+    if _older_assignment(run["started_at"], assignment_at):
+        if any(run.get(k) for k in ("detail", "team_update", "notes", "steps")):
+            run["detail"] = HIDDEN if run["status"] == "failed" else OLD_ASSIGNMENT
+        run["team_update"] = run["notes"] = None
+        run["steps"] = []
+    run.update(_scope_text({key: value for key, value in run.items() if key != "steps"}, ours))
+    for step in run["steps"]:
+        if step["kind"] not in ("tool_call", "tool_result") or step["is_error"]:
+            step["content"] = _scope_text(step["content"], ours)
+            continue
+        poll_reply = step["kind"] == "tool_result" and step["tool"] in _POLL_REPLY_TOOLS
+        try:
+            value = json.loads(step["content"], parse_float=Decimal)
+        except ValueError:
+            if poll_reply:
+                step["content"] = POLL_REPLY_OMITTED
+            elif step["content"].lstrip().startswith(("{", "[")):
+                step["content"] = "Incomplete tool payload omitted."
+            else:
+                step["content"] = _scope_text(step["content"], ours)
+            continue
+        scoped = _scope_poll_reply(value, ours) if poll_reply else _scope_payload(value, ours)
+        if scoped is _DROP:
+            step["content"] = POLL_REPLY_OMITTED if poll_reply else OUTSIDE_ASSIGNMENT
+        else:
+            scoped = _scope_text(scoped, ours)
+            if scoped != value:
+                step["content"] = to_json(scoped)
+
+
 def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
     """Scope the live dashboard to the current assignment before either response is built."""
     ours = set(our_selections(snap))
@@ -814,34 +852,7 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
         sales["data"]["slots"] = {s: v for s, v in slots.items() if s in ours}
     if (runs := snap.get("runs")) and runs["ok"]:
         for run in runs["data"]:
-            if _older_assignment(run["started_at"], assignment_at):
-                if any(run[k] for k in ("detail", "team_update", "notes", "steps")):
-                    run["detail"] = HIDDEN if run["status"] == "failed" else OLD_ASSIGNMENT
-                run["team_update"] = run["notes"] = None
-                run["steps"] = []
-            run.update(_scope_text({key: value for key, value in run.items() if key != "steps"}, ours))
-            for step in run["steps"]:
-                if step["kind"] not in ("tool_call", "tool_result") or step["is_error"]:
-                    step["content"] = _scope_text(step["content"], ours)
-                    continue
-                poll_reply = step["kind"] == "tool_result" and step["tool"] in _POLL_REPLY_TOOLS
-                try:
-                    value = json.loads(step["content"], parse_float=Decimal)
-                except ValueError:
-                    if poll_reply:
-                        step["content"] = POLL_REPLY_OMITTED
-                    elif step["content"].lstrip().startswith(("{", "[")):
-                        step["content"] = "Incomplete tool payload omitted."
-                    else:
-                        step["content"] = _scope_text(step["content"], ours)
-                    continue
-                scoped = _scope_poll_reply(value, ours) if poll_reply else _scope_payload(value, ours)
-                if scoped is _DROP:
-                    step["content"] = POLL_REPLY_OMITTED if poll_reply else OUTSIDE_ASSIGNMENT
-                else:
-                    scoped = _scope_text(scoped, ours)
-                    if scoped != value:
-                        step["content"] = to_json(scoped)
+            scope_run(run, ours, assignment_at)
     if (activity := snap.get("activity")) and activity["ok"]:
         for row in activity["data"]:
             if _older_assignment(row["at"], assignment_at):
@@ -870,13 +881,16 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
         # Key dates' texts are fixed messages, dates and counts that name no selection; scoping them would
         # hide the slot check's instructions exactly when no assignment can be read. The tracking check's
         # are our fixed words and the four verdicts (`tracking_daily.latest`), which name no selection either.
-        if name not in ("runs", "pricing", "report_cards", "key_dates", "tracking") or not panel["ok"]:
+        if name not in ("runs", "pricing", "report_cards", "key_dates", "tracking", "forecast") or not panel["ok"]:
             snap[name] = _scope_text(panel, ours)
     if (cards := snap.get("report_cards")) and cards["ok"]:
         # Its text is the scorer's and ours, about a plan already cut to our assignment
         # (`report_card._as_replay_plan`), and says "every slot" freely: only a numbered selection
         # that isn't ours is redacted.
         snap["report_cards"] = _scope_numbered(cards, ours)
+    if (forecast := snap.get("forecast")) and forecast["ok"]:
+        # Its rows are our slots only (`forecast_panel.read`); its text is ours and each stored rate's basis.
+        snap["forecast"] = _scope_numbered(forecast, ours)
     if (pricing := snap.get("pricing")) and pricing["ok"]:
         for row in pricing["data"]["rows"]:
             for price in (row, row["next"]):
@@ -1017,6 +1031,8 @@ def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False,
         "leaderboards": _panel(lambda: _isolated(conn, lambda: leaderboards.read(conn, now))),
         "report_cards": cards,
         "incidents": _panel(lambda: _isolated(conn, lambda: report_card.incidents(
+            conn, now, cards["data"] if cards["ok"] else None))),
+        "forecast": _panel(lambda: _isolated(conn, lambda: forecast_panel.read(
             conn, now, cards["data"] if cards["ok"] else None))),
         "tracking": _panel(lambda: _isolated(conn, lambda: tracking_daily.panel(conn, now))),
         "tracking_alert": _panel(lambda: _isolated(conn, lambda: _tracking_alert(conn))),
@@ -2246,8 +2262,10 @@ def _status_bar(snap: dict, items: list[dict] | None = None, charts: dict[str, s
     else:
         ran = (f'<span class="{"bad-text" if run["status"] == "failed" else ""}">run #{run["id"]} '
                f'{_e(run["status"])}</span> {_time(run["started_at"], "ago", now)}')
+    follow = (f'<a href="{_e(charts["run"])}{int(run["id"])}">Follow run #{int(run["id"])} live</a>'
+              if "run" in charts and run is not None and run["status"] == "running" and not run.get("stale") else "")
     cells.append(_cell("Agent", value, f"{switch}<br>{ran}", "#attention",
-                       {"problem": "bad", "check": "warn"}.get(state, "")))
+                       {"problem": "bad", "check": "warn"}.get(state, ""), follow))
 
     # How fresh the machine's data is: when the last poll was taken and when the next sync reads it.
     # The sales window is said in words, never as a lone date that could read as the last update.
@@ -2416,7 +2434,9 @@ def _words_html(plan: dict) -> str:
     return f'<div class="pair">{boxes}</div>'
 
 
-def _runs_html(panel: dict, now: datetime) -> str:
+def _runs_html(panel: dict, now: datetime, run_href: str | None = None) -> str:
+    """The Runs panel. `run_href` is where the server serves the live run page (`vending.run_page`), to be
+    followed by a run's id: each live run links to it."""
     hidden = panel.get("hidden_tests")
     notice = (f'<p class="dim">{hidden["runs"]} test runs and {hidden["purchases"]} test purchases '
               'from before the opening are not shown here.</p>' if hidden else "")
@@ -2453,6 +2473,10 @@ def _runs_html(panel: dict, now: datetime) -> str:
             body += f'<div class="note"><b>Notes:</b> {_e(r["notes"])}</div>'
         if r.get("steps"):
             body += _steps_html(r["id"], r["steps"])
+        if run_href and r["mode"] == "live":
+            body += (f'<p class="follow"><a href="{_e(run_href)}{int(r["id"])}">'
+                     + ("Follow this run live" if r["status"] == "running" and not r["stale"] else "Open this run")
+                     + '</a></p>')
         items.append(f'<li class="run{" replay" if r["mode"] == "replay" else ""}">'
                      f'<div class="head"><b>#{r["id"]}</b> {_time(r["started_at"])} {_run_pill(r)}</div>'
                      f'<div class="meta">{" &middot; ".join(meta)}</div>{body}</li>')
@@ -2471,10 +2495,9 @@ def _cut(text: str) -> str:
     return f'<details><summary><code>{_e(text[:STEP_SHOWN])}...</code></summary><pre>{_e(text)}</pre></details>'
 
 
-def _steps_html(run_id: int, steps: list[dict]) -> str:
-    """A run's steps, in order, folded away under one line: what it thought, called and was told."""
-    calls = sum(1 for s in steps if s["kind"] == "tool_call")
-    turns = max(s["turn"] for s in steps)
+def step_items(steps: list[dict]) -> list[str]:
+    """Each step as one list item: what it thought, called and was told. Shared with the run page
+    (`vending.run_page`), which appends new ones as they arrive."""
     items = []
     for s in steps:
         kind = s["kind"]
@@ -2487,8 +2510,15 @@ def _steps_html(run_id: int, steps: list[dict]) -> str:
             body = _cut(s["content"])
         items.append(f'<li class="{kind}{" error" if s["is_error"] else ""}">'
                      f'<span class="t">{int(s["turn"])}</span><div><span class="what">{what}</span>{body}</div></li>')
+    return items
+
+
+def _steps_html(run_id: int, steps: list[dict]) -> str:
+    """A run's steps, in order, folded away under one line: what it thought, called and was told."""
+    calls = sum(1 for s in steps if s["kind"] == "tool_call")
+    turns = max(s["turn"] for s in steps)
     return (f'<details class="steps" data-key="steps-{int(run_id)}"><summary>How it decided: '
-            f'{_plural(turns, "turn")}, {_plural(calls, "tool call")}</summary><ol>{"".join(items)}</ol></details>')
+            f'{_plural(turns, "turn")}, {_plural(calls, "tool call")}</summary><ol>{"".join(step_items(steps))}</ol></details>')
 
 
 def _activity_html(panel: dict, recent: dict) -> str:
@@ -2862,6 +2892,7 @@ STYLE += money_panel.STYLE   # the money panel's own rules (#48)
 STYLE += pricing_panel.STYLE   # the pricing panel's own rules
 STYLE += leaderboards.STYLE
 STYLE += report_card.STYLE
+STYLE += forecast_panel.STYLE
 STYLE += tracking_daily.STYLE
 
 # Keeps times current in the viewer's zone, and refreshes the page in place every REFRESH_SECONDS
@@ -3180,6 +3211,9 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
     report = (f'<section id="report-card"><h2>Weekly report card <span class="hint">computed in code &middot; '
               f'Saturday to Friday, Eastern</span></h2>{report_card.cards_html(snap["report_cards"])}</section>'
               if "report_cards" in snap else "")
+    forecast = (f'<section id="forecast"><h2>Forecast vs actual <span class="hint">per slot &middot; Saturday to '
+                f'Friday, Eastern</span></h2>'
+                f'{forecast_panel.html(snap["forecast"])}</section>' if "forecast" in snap else "")
     incidents = (f'<section id="incidents"><h2>Incident log <span class="hint">since the opening</span></h2>'
                  f'{report_card.incidents_html(snap["incidents"])}</section>' if "incidents" in snap else "")
     tracking = (f'<section id="tracking"><h2>Tracking check <span class="hint">our books, checked by the bridge'
@@ -3188,10 +3222,10 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
     body = (head + _status_bar(snap, items, charts) + key_dates.html(snap.get("key_dates"))
             + _cabinet_html(snap, items) + pricing + money + tracking
             + _plan_section(snap)
-            + report + incidents
+            + report + forecast + incidents
             + '<div class="grid2">'
             + f'<section id="runs"><h2>Runs <span class="hint">newest first &middot; chips are what each plan '
-              f'changed</span></h2>{_runs_html(snap["runs"], now)}</section>'
+              f'changed</span></h2>{_runs_html(snap["runs"], now, charts.get("run"))}</section>'
             + f'<section id="calls"><h2>Tool calls <span class="hint">last {ACTIVITY_ROWS}</span></h2>'
               f'{_activity_html(snap["activity"], snap["recent_calls"])}</section>'
             + "</div>"
@@ -3238,8 +3272,9 @@ def _error_page(message: str) -> str:
 
 # --- Server -------------------------------------------------------------------------------------
 
-# The Products page (#55) beside the page this server draws.
+# The Products page (#55) beside the page this server draws, and a run's page (`vending.run_page`) by its id.
 PRODUCTS_PATH = "/products"
+RUN_PATH = "/run/"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -3250,27 +3285,39 @@ class Handler(BaseHTTPRequestHandler):
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
         if host not in LOCAL_HOSTS:
             return self._send(403, "text/plain; charset=utf-8", "open this page as 127.0.0.1 or localhost")
-        if path not in ("/", "/state.json", PRODUCTS_PATH):
+        from vending import run_page
+        followed = run_page.parse(path, RUN_PATH)
+        if path not in ("/", "/state.json", PRODUCTS_PATH) and followed is None:
             return self._send(404, "text/plain; charset=utf-8", "not found")
         try:
             with connect() as conn:
-                if path == PRODUCTS_PATH:
+                if followed is not None:
+                    data = run_page.read(conn, followed[0], public=False,
+                                         after=run_page.after_of(urlsplit(self.path).query))
+                elif path == PRODUCTS_PATH:
                     from vending import products_page
                     data = products_page.read(conn)
                 else:
                     snap = snapshot(conn)
-        except (psycopg.Error, settings.SettingsError) as error:
+        except (psycopg.Error, settings.SettingsError, Missing) as error:
             message = str(error).strip().splitlines()[0] if str(error).strip() else type(error).__name__
             if path == "/state.json":
                 return self._send(503, "application/json", to_json({"error": message}))
             return self._send(503, "text/html; charset=utf-8", _error_page(message))
+        if followed is not None:
+            status = 200 if data["found"] and data.get("shown") else 404
+            if followed[1]:
+                return self._send(status, "application/json", to_json(data))
+            return self._send(status, "text/html; charset=utf-8", run_page.html(
+                data, nav=(("Agent dashboard", "/"),), json_href=f"{RUN_PATH}{followed[0]}.json"))
         if path == PRODUCTS_PATH:
             return self._send(200, "text/html; charset=utf-8", products_page.html(data, nav=(("Agent dashboard", "/"),)))
         if path == "/state.json":
             return self._send(200, "application/json", to_json(snap))
         picked = parse_qs(urlsplit(self.path).query).get("sel", [None])[0]
         self._send(200, "text/html; charset=utf-8",
-                   render(snap, picked=picked, nav=(("Products", PRODUCTS_PATH),), charts={"products": PRODUCTS_PATH}))
+                   render(snap, picked=picked, nav=(("Products", PRODUCTS_PATH),),
+                          charts={"products": PRODUCTS_PATH, "run": RUN_PATH}))
 
     def _send(self, code: int, content_type: str, body: str) -> None:
         data = body.encode("utf-8")
