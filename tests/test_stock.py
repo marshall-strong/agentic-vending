@@ -377,14 +377,18 @@ def test_run_history_reads_each_count_by_its_product_and_exactness():
     # An exact count sets the sure stock: what it saw of the run's SKU, 0 when it saw another product. Any count
     # that found the slot empty is 0. A photo's units are an estimate, so a photo of the product sets nothing, nor
     # does a door count that couldn't count the units. A count from before the run, or after `until`, isn't in it.
+    # "Another product" means another SKU we know: a name that matches none says nothing (Kevin, 25 Nov).
     counted = book([line(units_loaded=10, total_paid="5.00", at=1)])
     [slot] = counted.slots
     seen = [(hours(0), "COKE20", 4, True), (hours(2), "PEPSI20", 3, True), (hours(3), "COKE20", 1, False),
             (hours(4), "PEPSI20", 2, False), (hours(5), "COKE20", None, True), (hours(6), None, None, False),
-            (hours(7), "COKE20", 0, False), (hours(8), "COKE20", 7, True), (hours(9), "COKE20", 2, True)]
-    assert [(a.at, a.kind, a.units) for a in run_history(slot, seen, until=hours(8))] == [
+            (hours(7), "COKE20", 0, False), (hours(7.5), "Pepsi 20 oz", 3, True), (hours(8), "COKE20", 7, True),
+            (hours(9), "COKE20", 2, True)]
+    assert [(a.at, a.kind, a.units) for a in run_history(slot, seen, until=hours(8), skus={"COKE20", "pepsi20"})] == [
         (hours(1), "load", 10), (hours(2), "count", 0), (hours(6), "count", 0), (hours(7), "count", 0),
         (hours(8), "count", 7)]
+    assert [(a.at, a.units) for a in run_history(slot, seen, until=hours(8)) if a.kind == "count"] == [
+        (hours(6), 0), (hours(7), 0), (hours(8), 7)]
 
 
 def test_run_history_leaves_out_what_was_booked_after_the_moment_asked_about():

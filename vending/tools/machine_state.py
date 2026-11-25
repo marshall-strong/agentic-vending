@@ -317,7 +317,7 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
     seen = _seen(conn, now)
     latest_counters = _counters(conn, latest[0], slots)
     demands = _demands(counts, latest_counters, now, _seen_counts(conn, slots, now),
-                       _counter_readings(conn, slots, now), owned)
+                       _counter_readings(conn, slots, now), owned, _known_skus(conn, receipts))
     states = build(as_of, latest_counters, start, window_sold,
                    counts, last_loaded, sold_since_load, now, seen, slots=slots, demands=demands)
     wildcard = config.get_value(conn, "wildcard_slot")
@@ -483,13 +483,13 @@ def _loads(receipts: list[dict], now: datetime) -> dict[str, list[tuple[datetime
 def _demands(counts: dict[str, stock.SlotCount], latest: Counters, now: datetime,
              seen: dict[str, list[tuple[datetime, str | None, int | None, bool]]] | None = None,
              readings: dict[str, list[tuple[datetime, int | None, int | None]]] | None = None,
-             owned: datetime | None = None) -> dict[str, demand.Demand]:
+             owned: datetime | None = None, skus: frozenset[str] = frozenset()) -> dict[str, demand.Demand]:
     """Each receipted slot's in-stock rate (or prior) for its current product, since it went in,
     and its slow-seller clock. Pure.
 
     Both read one stock history: the product's run as the stock replay applied it, as known at `now`
     (`stock.run_history`: nothing booked after `now`), with the person's counts in `seen`
-    (`_seen_counts`). Nothing here rebuilds the stock from receipts, so a loss or pull counts once,
+    (`_seen_counts`), each read against the SKUs we know (`skus`, `_known_skus`). Nothing here rebuilds the stock from receipts, so a loss or pull counts once,
     when and as the replay applied it. The in-stock spans are a lower bound (`demand.in_stock_spans`):
     a count that found the slot empty or holding another product ends one, and an exact count of its
     product can start one.
@@ -509,7 +509,7 @@ def _demands(counts: dict[str, stock.SlotCount], latest: Counters, now: datetime
     """
     demands = {}
     for slot, count in counts.items():
-        history = stock.run_history(count, (seen or {}).get(slot, ()), now)
+        history = stock.run_history(count, (seen or {}).get(slot, ()), now, skus)
         spans = demand.in_stock_spans(history, now)
         if owned is not None:
             spans = [(max(start, owned), end) for start, end in spans if end > owned]
@@ -579,11 +579,13 @@ def _zero_stretch(readings: list[tuple[datetime, int]]) -> tuple[datetime, datet
 
     Built from `counters.windows(..., zeros=True)`, so a misread poll between two that agree doesn't
     break it, and a lone drop still waiting for the next poll isn't in it. A window with a rise ends it,
-    and so does a restart: the windows on either side of one don't meet. None when no window shows zero.
+    and so does a restart: the windows on either side of one don't meet. So does a window longer than
+    `wildcard_trial.MAX_POLL_GAP` (6 hours): flat counters either side of a gap don't prove nothing sold
+    in it (Kevin, 25 Nov, #172). None when no window shows zero.
     """
     stretch = None
     for start, at, rise in counters.windows(readings, zeros=True):
-        if rise:
+        if rise or at - start > wildcard_trial.MAX_POLL_GAP:
             stretch = None
         elif stretch is not None and start == stretch[1]:
             stretch = (stretch[0], at)
@@ -702,6 +704,18 @@ def _counter_readings(conn: psycopg.Connection, slots: tuple[str, ...],
             " and p.started_at <= %s order by p.started_at", (DEVICE_ID, list(slots), until)):
         out.setdefault(selection, []).append((at, units, cents))
     return out
+
+
+def _known_skus(conn: psycopg.Connection, receipts: list[dict]) -> frozenset[str]:
+    """Every SKU we know: the approved catalog's and every receipt line's. A count's product is matched against
+    these (`stock.run_history`). A savepoint keeps the caller's transaction usable without `catalog_products`."""
+    skus = {line["sku"] for line in receipts if line.get("sku")}
+    try:
+        with conn.transaction():
+            skus |= {row[0] for row in conn.execute("select sku from catalog_products")}
+    except psycopg.errors.UndefinedTable:
+        pass
+    return frozenset(skus)
 
 
 def _seen_counts(conn: psycopg.Connection, slots: tuple[str, ...],

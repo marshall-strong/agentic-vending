@@ -1073,7 +1073,7 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
 
 
 def run_history(count: SlotCount, seen: Iterable[tuple[datetime, str | None, int | None, bool]] = (),
-                until: datetime | None = None) -> tuple[Applied, ...]:
+                until: datetime | None = None, skus: Iterable[str] = ()) -> tuple[Applied, ...]:
     """A slot's current product run as the replay applied it (`SlotCount.history`), with a person's counts of the
     slot since the run began, as known at `until`. Pure.
 
@@ -1081,21 +1081,25 @@ def run_history(count: SlotCount, seen: Iterable[tuple[datetime, str | None, int
     applied it earlier (the old product's share of a window split at a later poll). `seen` is `(counted_at,
     product, units, exact)` per count (`slot_counts`: product None when seen empty; exact for a door count). A
     count becomes a `count` that sets the run's sure stock to its `units`:
-    - 0 when it found the slot empty (no product, or 0 units), and when an exact count names another product
-      than the run's: the run's product wasn't surely there;
+    - 0 when it found the slot empty (no product, or 0 units), and when an exact count names another SKU in
+      `skus` (the SKUs we know) than the run's: the run's product wasn't surely there;
     - its units when an exact count names the run's product (its SKU);
-    - nothing otherwise: a photo's units are an estimate, not a cap, and its product is free text.
+    - nothing otherwise: a photo's units are an estimate, not a cap, and a name that matches no SKU we know
+      ("Recess sparkling water, can") says nothing about which product is there (Kevin, 25 Nov, #172).
     A count goes after every movement at its moment: one at a load's own moment can't be told from it, so it is
     read as after it, and an empty one leaves that load proving nothing.
     """
+    known = {sku.strip().casefold() for sku in skus}
+
     def sure(product: str | None, units: int | None, exact: bool) -> int | None:
         if product is None or units == 0:
             return 0
         if not exact:
             return None
-        if product.strip().casefold() != count.product.casefold():
-            return 0
-        return units
+        name = product.strip().casefold()
+        if name == count.product.casefold():
+            return units
+        return 0 if name in known else None
 
     counts = []
     for at, product, units, exact in sorted(seen, key=lambda s: s[0]):

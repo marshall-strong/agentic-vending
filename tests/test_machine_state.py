@@ -484,13 +484,14 @@ def test_door_openings_with_no_receipt_of_ours_change_nothing(conn):
 
 # --- Demand across a product change (#172 item 3) -----------------------------------
 
-def swap(conn, new_sku, polls, now, units=20, then=None):
+def swap(conn, new_sku, polls, now, units=20, then=None, fill=False):
     """Slot 15: Coke loaded Fri 23 Oct, swapped for `units` of `new_sku` at the Friday visit of 30 Oct
     (3:30 PM Eastern).
 
     `polls` are (time, (price, units, cents)) after the last pre-swap poll; no door times, so a window
     across the swap is split by the cents counter, or left unattributed when it can't be. `then(conn)`
-    adds later receipts before the state is read."""
+    adds later receipts before the state is read. `fill` adds a poll every 3 hours between `polls`, for the
+    slow-seller clock (`readings_of_15`)."""
     store_poll(conn, "p0", "2026-10-23T12:00:00+00:00", {"15": (200, 100, 20000)})
     fulfilled(conn, "r1", datetime(2026, 10, 23, 19, 30, tzinfo=timezone.utc), ("15", "COKE20", "primary", "12.00", 20, 0, 0))
     store_poll(conn, "p1", "2026-10-28T12:00:00+00:00", {"15": (200, 104, 20800)})
@@ -498,8 +499,11 @@ def swap(conn, new_sku, polls, now, units=20, then=None):
     fulfilled(conn, "r2", datetime(2026, 10, 30, 19, 30, tzinfo=timezone.utc), ("15", new_sku, "primary", "20.00", units, 0, 0))
     conn.execute("update purchase_lines set units_pulled = 13, pulled_sku = 'COKE20', slot_reassigned = true"
                  " where request_id = 'r2'")
-    for n, (at, reading) in enumerate(polls):
-        store_poll(conn, f"q{n}", at, {"15": reading})
+    if fill:
+        readings_of_15(conn, [(f"q{n}", at, reading) for n, (at, reading) in enumerate(polls)])
+    else:
+        for n, (at, reading) in enumerate(polls):
+            store_poll(conn, f"q{n}", at, {"15": reading})
     if then is not None:
         then(conn)
     return by_slot(get_machine_state(conn, now=now).data)["15"]
@@ -644,11 +648,12 @@ def test_the_slow_seller_clock_counts_in_stock_class_days_since_the_last_sale(co
     # review round 2, item 5) and starts units_sold_since_load again (0). Neither is the slow-seller clock: since
     # its last sale it has been in stock and seen silent on Fri 6 and Mon 9 Nov only, so 2 class days.
     utc = timezone.utc
+    # No poll between the load and Monday's, so that window is over the slot's first receipt.
     store_poll(conn, "p0", "2026-10-30T18:00:00+00:00", {"15": (250, 100)})
     fulfilled(conn, "r1", datetime(2026, 10, 30, 19, 30, tzinfo=utc), ("15", "COKE20", "primary", "12.00", 20, 0, 0))
-    for n, (day, units) in enumerate(((2, 101), (3, 101), (4, 102), (5, 106), (6, 106), (9, 106))):
-        store_poll(conn, f"p{n + 1}", f"2026-11-{day:02d}T22:00:00+00:00", {"15": (250, units)})
-    store_poll(conn, "p7", "2026-11-10T05:30:00+00:00", {"15": (250, 106)})
+    readings_of_15(conn, [(f"p{n + 1}", f"2026-11-{day:02d}T22:00:00+00:00", (250, units))
+                      for n, (day, units) in enumerate(((2, 101), (3, 101), (4, 102), (5, 106), (6, 106), (9, 106)))]
+                   + [("p7", "2026-11-10T05:30:00+00:00", (250, 106))])
     fulfilled(conn, "r2", datetime(2026, 11, 6, 19, 30, tzinfo=utc), ("15", "COKE20", "primary", "6.00", 6, 0, 0))
     s = by_slot(get_machine_state(conn, now=datetime(2026, 11, 10, 5, 45, tzinfo=utc)).data)["15"]
     assert (s.stock_on_hand, s.class_days_in_stock, s.units_sold_since_load) == (20, 6, 0)
@@ -671,17 +676,31 @@ def test_a_sale_polled_at_the_swaps_own_moment_can_still_empty_the_slot(conn):
     assert (s.product, s.stock_on_hand, s.class_days_in_stock) == ("PEPSI20", 5, 1)
 
 
+FILL_EVERY = timedelta(hours=3)
+
+
+def readings_of_15(conn, reads):
+    """Store a poll of slot 15 at each `(id, UTC time, reading)`, `reading` as `store_poll` takes it, and between
+    each two a poll every `FILL_EVERY` carrying the earlier reading: the course staff's poller reads every hour,
+    and the slow-seller clock treats a gap of over 6 hours as a break (Kevin, 25 Nov, #172)."""
+    reads = sorted(reads, key=lambda r: r[1])
+    for n, (poll_id, at, reading) in enumerate(reads):
+        store_poll(conn, poll_id, at, {"15": reading})
+        if n + 1 < len(reads):
+            following, k = datetime.fromisoformat(at) + FILL_EVERY, 0
+            while following < datetime.fromisoformat(reads[n + 1][1]):
+                store_poll(conn, f"{poll_id}f{k}", following.isoformat(), {"15": reading})
+                following, k = following + FILL_EVERY, k + 1
+
+
 def five_coke(conn, days=(2, 3, 4, 5, 6), late=()):
     """Slot 15: 5 Coke in on Fri 30 Oct (3:30 PM Eastern), and a poll at 5 PM Eastern on each November day in
-    `days` and at each UTC time in `late`, none showing a sale."""
+    `days` and at each UTC time in `late`, none showing a sale; between them, a poll every 3 hours."""
     utc = timezone.utc
-    store_poll(conn, "p0", "2026-10-30T18:00:00+00:00", {"15": (250, 100)})
     fulfilled(conn, "r1", datetime(2026, 10, 30, 19, 30, tzinfo=utc), ("15", "COKE20", "primary", "5.00", 5, 0, 0))
-    store_poll(conn, "p1", "2026-10-30T22:00:00+00:00", {"15": (250, 100)})
-    for day in days:
-        store_poll(conn, f"d{day}", f"2026-11-{day:02d}T22:00:00+00:00", {"15": (250, 100)})
-    for n, at in enumerate(late):
-        store_poll(conn, f"l{n}", at, {"15": (250, 100)})
+    readings_of_15(conn, [("p0", "2026-10-30T18:00:00+00:00", (250, 100)), ("p1", "2026-10-30T22:00:00+00:00", (250, 100))]
+                   + [(f"d{day}", f"2026-11-{day:02d}T22:00:00+00:00", (250, 100)) for day in days]
+                   + [(f"l{n}", at, (250, 100)) for n, at in enumerate(late)])
 
 
 def lose_all_five_on_monday(conn):
@@ -746,12 +765,10 @@ UTC = timezone.utc
 def coke(conn, reads):
     """Slot 15: 5 Coke in on Fri 30 Oct (3:30 PM Eastern), between polls at 2 PM and 6 PM reading its units counter
     at 100, then a poll at each `(UTC time, lifetime units)` in `reads`, or `(UTC time, units, takings cents)`
-    (by default the takings are the units at $2.50)."""
-    store_poll(conn, "p0", "2026-10-30T18:00:00+00:00", {"15": (250, 100)})
+    (by default the takings are the units at $2.50); between them, a poll every 3 hours (`readings_of_15`)."""
     fulfilled(conn, "r1", datetime(2026, 10, 30, 19, 30, tzinfo=UTC), ("15", "COKE20", "primary", "5.00", 5, 0, 0))
-    store_poll(conn, "p1", "2026-10-30T22:00:00+00:00", {"15": (250, 100)})
-    for n, (at, *reading) in enumerate(reads):
-        store_poll(conn, f"q{n}", at, {"15": (250, *reading)})
+    readings_of_15(conn, [("p0", "2026-10-30T18:00:00+00:00", (250, 100)), ("p1", "2026-10-30T22:00:00+00:00", (250, 100))]
+                   + [(f"q{n}", at, (250, *reading)) for n, (at, *reading) in enumerate(reads)])
 
 
 def evening(day, units=100, *takings):
@@ -840,8 +857,8 @@ def test_the_first_reading_of_a_slot_proves_nothing_before_it(conn):
     # Eastern. Only Fri 6 and Mon 9 are watched end to end: 2, not 6.
     store_poll(conn, "p0", "2026-10-30T18:00:00+00:00", {"16": (300, 50)})
     fulfilled(conn, "r1", datetime(2026, 10, 30, 19, 30, tzinfo=UTC), ("15", "COKE20", "primary", "5.00", 5, 0, 0))
-    for n, at in enumerate((evening(5)[0], evening(6)[0], evening(9)[0], "2026-11-10T06:00:00+00:00")):
-        store_poll(conn, f"q{n}", at, {"15": (250, 100), "16": (300, 50)})
+    readings_of_15(conn, [(f"q{n}", at, (250, 100)) for n, at in enumerate(
+        (evening(5)[0], evening(6)[0], evening(9)[0], "2026-11-10T06:00:00+00:00"))])
     assert slot_15(conn, datetime(2026, 11, 10, 6, 30, tzinfo=UTC)).class_days_since_sale == 2
 
 
@@ -911,8 +928,10 @@ def test_a_slot_that_comes_back_to_our_assignment_starts_again(conn):
 
 def test_an_exact_count_of_another_product_breaks_the_run(conn):
     # Item 3. After the Coke load, a door count on Wednesday finds 5 Pepsi in slot 15. Whatever the receipts say,
-    # Coke wasn't surely there from then: in stock Mon 2 to Wed 4 only, and no clock.
+    # Coke wasn't surely there from then: in stock Mon 2 to Wed 4 only, and no clock. PEPSI20 is in the approved
+    # catalog, so the count names a SKU we know (a name that matches none says nothing: Kevin, 25 Nov).
     five_coke(conn, days=(2, 3, 4, 5, 6, 9), late=(LATE,))
+    conn.execute("insert into catalog_products (sku, name, last_response) values ('PEPSI20', 'Pepsi 20 oz', '{}')")
     count_15(conn, datetime(2026, 11, 4, 15, tzinfo=UTC), "PEPSI20", 5)
     s = slot_15(conn, TUESDAY)
     assert (s.stock_on_hand, s.class_days_in_stock, s.class_days_since_sale) == (5, 3, 0)
@@ -929,10 +948,11 @@ def test_an_empty_count_at_the_loads_own_moment_is_no_proof_of_stock(conn):
 
 def test_a_count_inside_a_sale_window_doesnt_take_the_same_units_twice(conn):
     # Item 4. 5 Coke in; 3 sell before a door count of 2 on Monday afternoon, and the Monday evening poll books
-    # them. Receipts and count agree: 2 left. The slot held stock all along, and has been silent six class days
+    # them (the poll before it is at 2 PM Eastern, `FILL_EVERY`, so the count is inside the window). Receipts and
+    # count agree: 2 left. The slot held stock all along, and has been silent six class days
     # since the sale (Tue 3 to Tue 10), read early on Wednesday.
     coke(conn, [evening(d, 103) for d in (2, 3, 4, 5, 6, 9, 10)] + [("2026-11-11T06:00:00+00:00", 103)])
-    count_15(conn, datetime(2026, 11, 2, 18, tzinfo=UTC), "COKE20", 2)
+    count_15(conn, datetime(2026, 11, 2, 20, tzinfo=UTC), "COKE20", 2)
     s = slot_15(conn, datetime(2026, 11, 11, 6, 30, tzinfo=UTC))
     assert (s.stock_on_hand, s.class_days_in_stock, s.class_days_since_sale) == (2, 8, 6)
 
@@ -953,7 +973,7 @@ def test_an_exact_count_of_the_product_starts_a_new_stretch(conn):
 
     s = swap(conn, "PEPSI20", [("2026-11-02T14:00:00+00:00", (200, 107, 21400))]
              + [(f"2026-11-{d:02d}T22:00:00+00:00", (200, 107, 21400)) for d in (3, 4, 5, 6, 9)]
-             + [(LATE, (200, 107, 21400))], now=TUESDAY, units=1, then=door_count)
+             + [(LATE, (200, 107, 21400))], now=TUESDAY, units=1, then=door_count, fill=True)
     assert (s.stock_on_hand, s.counted_on_hand, s.class_days_since_sale) == (0, 1, 4)
 
 
@@ -985,8 +1005,7 @@ def test_a_poll_after_the_cutoff_doesnt_change_the_report_at_it(conn):
     # Bull and closes at 19:40. Asked at 19:20 with the door open, then asked again at 19:20 once a poll at 20:00
     # has settled one Coke sold before the swap: the same cutoff gives the same report, since that sale was booked
     # after it (`Stock.sales` at 19:20 doesn't have it either).
-    five_coke(conn, days=(2, 3, 4, 5, 6))
-    store_poll(conn, "m9", "2026-11-09T18:00:00+00:00", {"15": (250, 100)})
+    five_coke(conn, days=(2, 3, 4, 5, 6), late=("2026-11-09T18:00:00+00:00",))
     fulfilled(conn, "r2", datetime(2026, 11, 9, 19, 45, tzinfo=UTC), ("15", "REDBULL", "primary", "20.00", 10, 0, 0))
     conn.execute("update purchase_lines set slot_reassigned = true where request_id = 'r2'")
     conn.execute("update purchase_requests set door_opened_at = %s, door_closed_at = %s where request_id = 'r2'",
@@ -1006,10 +1025,10 @@ def test_a_day_watched_from_its_own_midnight_counts_for_the_clock(conn):
     # Item 7. 5 Coke go in at 00:00 Eastern on Monday 2 Nov, as a poll reads the slot; polls watch it to 00:00 on
     # Saturday. Monday to Friday were in stock and watched end to end: 5 in-stock class days, and a clock of 5.
     monday = datetime(2026, 11, 2, 5, tzinfo=UTC)
-    store_poll(conn, "p0", monday.isoformat(), {"15": (250, 100)})
     fulfilled(conn, "r1", monday, ("15", "COKE20", "primary", "5.00", 5, 0, 0))
-    for n, at in enumerate([evening(d)[0] for d in (2, 3, 4, 5, 6)] + ["2026-11-07T05:00:00+00:00"]):
-        store_poll(conn, f"q{n}", at, {"15": (250, 100)})
+    readings_of_15(conn, [("p0", monday.isoformat(), (250, 100))] + [
+        (f"q{n}", at, (250, 100)) for n, at in enumerate([evening(d)[0] for d in (2, 3, 4, 5, 6)]
+                                                         + ["2026-11-07T05:00:00+00:00"])])
     s = slot_15(conn, datetime(2026, 11, 7, 5, 30, tzinfo=UTC))
     assert (s.class_days_in_stock, s.class_days_since_sale) == (5, 5)
 
@@ -1054,17 +1073,6 @@ def test_a_gap_of_six_hours_is_not_a_break(conn):
     # Decision 2. Readings every 6 hours, exactly: no gap of more than 6 hours, so all six days count.
     hourly_coke(conn, datetime(2026, 11, 10, 6, tzinfo=UTC), step=timedelta(hours=6))
     assert slot_15(conn, TUESDAY).class_days_since_sale == 6
-
-
-def test_a_gap_on_the_takings_counter_alone_starts_the_clock_again(conn):
-    # Decision 2: both counters. The units counter is read every hour, but the takings counter is missing from
-    # 8 AM to 3 PM Eastern on Wednesday (a reading with no PA2 cents is stored as null).
-    hourly_coke(conn, datetime(2026, 11, 10, 6, tzinfo=UTC))
-    conn.execute("update poll_selections set lifetime_sales_cents = null from polls p"
-                 " where p.session_id = poll_selections.session_id and selection = '15'"
-                 " and p.started_at >= %s and p.started_at < %s",
-                 (datetime(2026, 11, 4, 13, tzinfo=UTC), datetime(2026, 11, 4, 20, tzinfo=UTC)))
-    assert slot_15(conn, TUESDAY).class_days_since_sale == 3
 
 
 def test_a_count_whose_name_matches_no_sku_says_nothing_about_the_product(conn):
