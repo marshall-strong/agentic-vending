@@ -2,12 +2,12 @@
 
 `python -m vending.simulate --schedule live --from-export FILE` runs a season the way the competition will run:
 
-- **Sun 29 Nov 20:00 ET (`FILL_AT`)**: the team's steps, through the real commands: `ledger reset-test-opening`
+- **Sat 28 Nov 18:00 ET (`FILL_AT`)**: the team's steps, through the real commands: `ledger reset-test-opening`
   (a dry run: a scratch database has no test opening), `ledger open --amount 600.00`, the exported plan stored and
   picked (`plan_store.pick`), then `vending.fill` previewed and sent with `--submit --hash`, against the simulated
-  bridge. The fill's own guards (the $400 fill cap, checked prices, the deadline) run as they will on Sunday.
+  bridge. The fill's own guards (the $400 fill cap, checked prices, the deadline) run as they will on Saturday.
 - **The agent's runs** come from `vending.agent_schedule.Scheduler`, the worker's own class, with the settings the
-  team sets on Sunday (`ENV`: `AGENT_SCHEDULE_MODE=live`, the default times and first day) and `agent_schedule_mode`
+  team sets on Saturday (`ENV`: `AGENT_SCHEDULE_MODE=live`, the default times and first day) and `agent_schedule_mode`
   live in the database. Its claims, windows, checks before a send, run lease, midweek wake-ups and records are the
   real ones, on the season's clock (`dbclock`). Each run is `vending.agent.run`, under `model_run_cap_cents`.
 - **The worker's round** after every hourly poll: the slots check and the syncs (as before), then the midweek wake
@@ -35,9 +35,10 @@ from vending.simulate import world
 from vending.simulate.world import EASTERN
 
 BY = "simulation"
-# The team sends the day-one fill on Sunday evening (memory: team-done-by-1-dec; the deadline is 23:59 ET).
-FILL_AT = datetime(2026, 11, 29, 20, 0, tzinfo=EASTERN)
-# The worker's settings on the container from Sunday (docs/agent.md, "Live scheduled runs"; docs/deploy.md).
+# The team sends the day-one fill on Saturday evening (Kevin, 25 Nov: before Amazon's Sat 23:59 cutoff for the Mon 30 Nov
+# stocking, found by this rehearsal).
+FILL_AT = datetime(2026, 11, 28, 18, 0, tzinfo=EASTERN)
+# The worker's settings on the container from Saturday 28 Nov (docs/agent.md, "Live scheduled runs"; docs/deploy.md).
 ENV = {"AGENT_SCHEDULE_MODE": "live", "AGENT_SCHEDULE": agent_schedule.DEFAULT_TIMES,
        "AGENT_SCHEDULE_FROM": agent_schedule.DEFAULT_FROM, "MIDWEEK_WAKE": "on", "TRACKING_DAILY": "on",
        "PRICE_CHECK_MODE": "dry-run"}
@@ -58,8 +59,9 @@ NOT_SIMULATED = (
     "Model spend is test spend (purpose test) under a $4 daily cap, not the ledger's live spend.",
     "The tracking check's money figures are compared with our own ledger's (the simulated bridge has no tax "
     "calculation of its own); only its counts are checked against the simulated machine.",
-    "The day-one fill is loaded in one visit (Wed 2 Dec 15:00 when its goods are in), not Mon 30 Nov with late "
-    "Amazon lines at the Fri 4 Dec visit.",
+    "Deliveries: one visit per request (Mon 30 Nov 15:00 for the fill, Friday for a weekly one); an Amazon line "
+    "past its cutoff is paid, goes to back stock and is loaded by a later request's visit. Amazon always takes "
+    "exactly two days; no store-side delays.",
     "The worker runs in-process: no container, no /health, no restarts, no replicas, no network failures.",
     "Visit-day live polls (vending.visit_polls) aren't simulated: the season polls hourly.",
     "Catalog requests aren't decided: the round doesn't run sync_product_requests, so a request the agent files "
@@ -100,7 +102,7 @@ def environment() -> Iterator[None]:
 
 
 def configure(conn: psycopg.Connection) -> None:
-    """The database's settings the team sets on Sunday, and live's daily cap for the season's (test) spend."""
+    """The database's settings the team sets on Saturday, and live's daily cap for the season's (test) spend."""
     for key, value in DB_SETTINGS.items():
         config.set_value(conn, key, value, BY)
     config.set_value(conn, "model_test_daily_cap_cents", DAILY_CAP_CENTS, BY)
@@ -115,7 +117,7 @@ def _quiet(call, *args, **kwargs) -> tuple[object, str]:
 
 
 def day_one(conn: psycopg.Connection, st, data: dict, say=print) -> dict:
-    """Sunday's steps on the scratch database, at `FILL_AT`, through the real commands. Returns what happened;
+    """Saturday's go-live steps on the scratch database, at `FILL_AT`, through the real commands. Returns what happened;
     raises SystemExit when the fill is refused, since a season without its day one isn't a rehearsal."""
     from vending import fill, ledger
     from vending.simulate import export, season
@@ -146,7 +148,7 @@ def day_one(conn: psycopg.Connection, st, data: dict, say=print) -> dict:
     steps["submit"] = {"argv": argv[:1] + ["--hash", "(the preview's)"] + argv[3:], "exit": rc, "said": text.strip()[:600]}
     refused = [line[2:].split(":", 1)[0] for line in text.splitlines() if line.startswith("- ")]
     if rc != 0 and refused and set(refused) == {fill.DEVIATION} and preview.deviations:
-        # What a person does on Sunday when the only refusal is a pack or cost that differs from the pick: the
+        # What a person does on Saturday when the only refusal is a pack or cost that differs from the pick: the
         # preview listed it, and the documented flag sends it anyway (the log records the flag and the list).
         argv.append("--accept-deviations")
         steps["refused_first"] = {"codes": refused, "said": text.strip()[:600]}

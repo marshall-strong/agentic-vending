@@ -359,6 +359,41 @@ def _visit_time(cal: Calendar, st: State, submitted: datetime, body: dict, reque
     return datetime.combine(day, world.VISIT_AT, EASTERN) + timedelta(minutes=r.randrange(0, 120))
 
 
+def deliveries(cal: Calendar, st: State, submitted: datetime, body: dict, request_id: str
+               ) -> tuple[datetime, set[int]]:
+    """The live schedule's delivery model: (the visit that stocks the request, its lines whose Amazon goods miss it).
+
+    The visit is the one the request is for: the day-one stocking (Mon 30 Nov, `key_dates.STOCKING`) for a request
+    sent before it, the Friday visit for a weekly one (a closed Friday moves to the next open weekday), one or two
+    open weekdays later for an off-cycle one. An Amazon line ordered past its cutoff for that visit
+    (`price_search.past_cutoff`: Sat 23:59 for the stocking, Wed 23:59 for a Friday) is late: its goods arrive after
+    the visit and wait for a later one (David, 17 Nov; `Worker.fulfil`'s `late`)."""
+    from vending import key_dates
+
+    r = world.rng(st.seed, "visit", request_id)
+    local = submitted.astimezone(EASTERN)
+    if body.get("off_cycle"):
+        day = local.date()
+        for _ in range(1 if r.random() < 0.6 else 2):
+            day = cal.next_open_weekday(day + timedelta(days=1))
+        when = datetime.combine(day, time(13), EASTERN) + timedelta(minutes=r.randrange(0, 240))
+    elif local.date() < key_dates.STOCKING.day or (local.date() == key_dates.STOCKING.day
+                                                   and local.time() < world.VISIT_AT):
+        when = datetime.combine(key_dates.STOCKING.day, world.VISIT_AT, EASTERN)
+    else:
+        day = local.date() + timedelta(days=(4 - local.weekday()) % 7)
+        if day == local.date() and local.time() >= world.VISIT_AT:
+            day += timedelta(days=7)
+        when = datetime.combine(cal.next_open_weekday(day), world.VISIT_AT, EASTERN) + timedelta(
+            minutes=r.randrange(0, 120))
+    visit = when.astimezone(EASTERN).date()
+    late = {i for i, line in enumerate(body.get("lines") or [])
+            if line.get("source") == "purchase"
+            and any((line.get(k) or {}).get("store") == "Amazon" for k in ("primary", "alternate"))
+            and price_search.past_cutoff("Amazon", visit, submitted)}
+    return when, late
+
+
 def _spent(conn: psycopg.Connection) -> Decimal:
     return Decimal(conn.execute("select coalesce(sum(cost_usd), 0) from model_calls").fetchone()[0])
 
@@ -460,10 +495,14 @@ def schedule_visits(st: State, before: set[str], at: datetime) -> None:
     """A visit for each request the bridge filed since `before` (its request ids then)."""
     for request_id in sorted(set(st.bridge.requests) - before):
         filed = st.bridge.requests[request_id]
-        when = _visit_time(Calendar(), st, filed.submitted_at, filed.body, request_id)
-        st.events.append(Event(when, "visit", {"request_id": request_id}))
+        if getattr(st, "schedule", "run-day") == "live":
+            when, late = deliveries(Calendar(), st, filed.submitted_at, filed.body, request_id)
+        else:
+            when, late = _visit_time(Calendar(), st, filed.submitted_at, filed.body, request_id), set()
+        st.events.append(Event(when, "visit", {"request_id": request_id, "late": sorted(late)}))
         st.log.append({"at": at.isoformat(), "kind": "request_filed", "request_id": request_id,
-                       "off_cycle": bool(filed.body.get("off_cycle")), "visit_at": when.isoformat()})
+                       "off_cycle": bool(filed.body.get("off_cycle")), "visit_at": when.isoformat(),
+                       "late_amazon_lines": len(late)})
 
 
 def settle_refused(conn: psycopg.Connection, refused: list[dict]) -> list[int]:
@@ -520,7 +559,8 @@ def handle(conn: psycopg.Connection, st: State, ev: Event, opts: dict) -> None:
         request_id = ev.data["request_id"]
         directive = conn.execute("select directive from purchase_submissions where request_id = %s",
                                  (request_id,)).fetchone()
-        events = Worker(st.seed).fulfil(st.bridge, request_id, now, directive[0] if directive else None)
+        events = Worker(st.seed).fulfil(st.bridge, request_id, now, directive[0] if directive else None,
+                                        late=set(ev.data.get("late") or ()))
         st.log.append({"at": now.isoformat(), "kind": "visit", "request_id": request_id, "lines": events,
                        "closet_after": dict(st.machine.closet)})
     else:

@@ -80,7 +80,7 @@ have. They show that agent, not main's.
 
 | Live | In the rehearsal |
 |---|---|
-| Sun 29 Nov: `ledger reset-test-opening`, `ledger open --amount 600.00`, `python -m vending.fill --submit` of the picked plan | The same commands at 20:00 ET Sun 29 Nov, against the simulated bridge |
+| Sat 28 Nov (before Amazon's 23:59 cutoff): `ledger reset-test-opening`, `ledger open --amount 600.00`, `python -m vending.fill --submit` of the picked plan | The same commands at 18:00 ET Sat 28 Nov, against the simulated bridge. Stocked Mon 30 Nov; an Amazon line past its cutoff (Sat 23:59 for the stocking, Wed 23:59 for a Friday) goes to back stock and a later visit loads it |
 | The worker's scheduler: `AGENT_SCHEDULE` `wed 14:00-22:00,thu 12:00-20:00` from 2 Dec, both switches `live` | `vending.agent_schedule.Scheduler` itself, with those settings, on the season's clock |
 | Midweek wake-ups (`MIDWEEK_WAKE=on`), the run lease, `model_run_cap_cents` | The same code |
 | The daily tracking check (`TRACKING_DAILY=on`) | `tracking_daily.run` against the simulated bridge's books |

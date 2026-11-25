@@ -16,7 +16,9 @@ psycopg = pytest.importorskip("psycopg")
 
 from vending.replay.cases import CASE_SLOTS as EXAMPLE  # noqa: E402
 from vending.simulate import world  # noqa: E402
-from vending.simulate.world import EASTERN  # noqa: E402
+from vending.simulate.world import EASTERN, Calendar, Machine  # noqa: E402
+from vending.simulate.bridge import SimBridge, Worker  # noqa: E402
+from datetime import date  # noqa: E402
 
 CHECKED = datetime(2026, 11, 27, 15, 0, tzinfo=timezone.utc)
 SEED = 12      # a seed whose day-one visit finds every drink in stock
@@ -197,7 +199,9 @@ def test_the_first_week_runs_from_the_picked_plan_and_the_workers_scheduler(sche
             assert conn.execute("select token from agent_run_lease").fetchone() == (None,)
             # The round's jobs: a tracking check each day once the fill is loaded, and the price check as a dry run.
             days = conn.execute("select eastern_day, status from tracking_checks order by id").fetchall()
-            assert [(str(d), s) for d, s in days] == [("2026-12-02", 200), ("2026-12-03", 200), ("2026-12-04", 200)], days
+            # Stocked Mon 30 Nov (the fill went out Saturday, before Amazon's cutoff): a check each day from then.
+            assert [(str(d), s) for d, s in days] == [(f"2026-{d}", 200) for d in ("11-30", "12-01", "12-02", "12-03",
+                                                                                     "12-04")], days
             assert conn.execute("select due_at, mode from price_check_runs").fetchall() == [
                 (datetime(2026, 12, 1, 12, tzinfo=EASTERN), "dry-run")]
             # The dashboard, as /dashboard and /dashboard/run/<id> read it, on the season's clock.
@@ -375,3 +379,65 @@ def test_a_round_whose_receipt_sync_failed_sends_no_tracking_check(monkeypatch):
     assert driver.st.live["rounds"]["skipped"][0]["job"] == "tracking_daily"
     driver.round(live.FILL_AT, {"slots_check": True, "sync_history": True, "sync_requests": True})
     assert sent == [1]
+
+
+def _amazon_line(slot: str, sku: str = "REDBULL-ORIGINAL-8_4CAN", store: str = "Amazon", alternate=None) -> dict:
+    line = {"slot": slot, "source": "purchase",
+            "primary": {"sku": sku, "store": store, "packs": 1, "units_per_pack": 24, "max_price_per_pack": "60.00",
+                        "sale_price": "4.00"}}
+    if alternate:
+        line["alternate"] = alternate
+    return line
+
+
+def test_amazon_lines_past_their_cutoff_wait_for_the_next_scheduled_visit():
+    """Parent, 25 Nov: in the live rehearsal an Amazon line ordered past its cutoff (Sat 23:59 for the Mon 30 Nov
+    stocking, Wed 23:59 for a Friday visit) isn't loaded at the visit it was ordered for: David (17 Nov), Amazon items
+    that haven't arrived when the store-bought drinks are stocked are stocked at the next scheduled visit."""
+    from vending.simulate import live, season
+
+    st = season.new_state(1, "scripted", "m", "medium", False, 3, EXAMPLE, schedule="live")
+    cal = Calendar()
+    body = {"lines": [_amazon_line("15"), _amazon_line("16", "COCA-ORIGINAL-20BOT", "Walmart")]}
+    local = lambda t: t.astimezone(EASTERN)  # noqa: E731
+    # The day-one fill sent Saturday 18:00: everything is stocked Mon 30 Nov, nothing late.
+    sat = datetime(2026, 11, 28, 18, tzinfo=EASTERN)
+    when, late = season.deliveries(cal, st, sat, body, "a")
+    assert local(when).date() == date(2026, 11, 30) and late == set()
+    # Sent Sunday 20:00: the Walmart line is stocked Monday; the Amazon line is past Saturday's cutoff.
+    when, late = season.deliveries(cal, st, datetime(2026, 11, 29, 20, tzinfo=EASTERN), body, "b")
+    assert local(when).date() == date(2026, 11, 30) and late == {0}
+    # A Wednesday 14:00 order: everything on Friday. A Thursday noon order: Friday, with the Amazon line late.
+    when, late = season.deliveries(cal, st, datetime(2026, 12, 9, 14, tzinfo=EASTERN), body, "c")
+    assert local(when).date() == date(2026, 12, 11) and late == set()
+    when, late = season.deliveries(cal, st, datetime(2026, 12, 10, 12, tzinfo=EASTERN), body, "d")
+    assert local(when).date() == date(2026, 12, 11) and late == {0}
+    assert live.FILL_AT == datetime(2026, 11, 28, 18, tzinfo=EASTERN)
+
+
+def test_a_late_amazon_line_goes_to_back_stock_and_its_slot_waits():
+    """The worker buys a late Amazon line (the order went in when the worker saw the request) but its goods aren't
+    there to load: they go to back stock, and a back-stock line that loads from it waits too. An in-store alternate
+    is bought instead when the line has one."""
+    m = Machine.empty(EXAMPLE)
+    bridge = SimBridge(m, lambda: datetime(2026, 12, 11, 20, tzinfo=timezone.utc))
+    walmart = {"sku": "REDBULL-ORIGINAL-8_4CAN", "store": "Walmart", "packs": 1, "units_per_pack": 24,
+               "max_price_per_pack": "60.00", "sale_price": "4.00"}
+    body = {"off_cycle": False, "lines": [
+        _amazon_line("15"),
+        {"slot": "16", "source": "back_stock", "load": {"sku": "REDBULL-ORIGINAL-8_4CAN", "units": 8,
+                                                         "sale_price": "4.00"}},
+        _amazon_line("17", "COCA-ORIGINAL-20BOT"),
+        _amazon_line("18", "CELSIUS-SPARKLING_ORANGE-12CAN", alternate={**walmart, "sku": "CELSIUS-SPARKLING_ORANGE-12CAN",
+                                                                         "units_per_pack": 12})]}
+    from vending.simulate.bridge import Filed
+    bridge.requests["r1"] = Filed("r1", body, datetime(2026, 12, 10, 17, tzinfo=timezone.utc))
+    events = Worker(3).fulfil(bridge, "r1", datetime(2026, 12, 11, 20, tzinfo=timezone.utc), None, late={0, 2, 3})
+    by_slot = {e["slot"]: e for e in events}
+    assert by_slot["15"]["units_loaded"] == 0 and by_slot["15"]["outcome"] == "primary" and "late" in by_slot["15"]
+    assert m.slots["15"].units == 0 and m.closet["REDBULL-ORIGINAL-8_4CAN"] >= 23
+    assert by_slot["16"]["outcome"] == "unavailable" and m.slots["16"].units == 0
+    assert by_slot["17"]["units_loaded"] == 0
+    assert by_slot["18"]["outcome"] == "alternate" and by_slot["18"]["store"] == "Walmart" and m.slots["18"].units > 0
+    receipt = bridge.requests["r1"].lines[0]["receipt"]
+    assert receipt["units_loaded"] == 0 and receipt["units_to_back_stock"] == receipt["units_bought"] - receipt["units_lost"]
