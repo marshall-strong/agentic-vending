@@ -198,7 +198,8 @@ def gather(conn: psycopg.Connection, catalog: list[dict], now: datetime | None =
     # One lot per layer, oldest first: the planner draws them in that order, as the stock replay does.
     closet = tuple(planner.ClosetStock(c.product, units, cost)
                    for c in counted.closet for units, cost in c.layers or ((c.units, c.unit_cost),))
-    products = tuple(planner.CatalogProduct(p["sku"], bool(p.get("active", p.get("is_active", True))), p.get("size"))
+    products = tuple(planner.CatalogProduct(p["sku"], bool(p.get("active", p.get("is_active", True))), p.get("size"),
+                                            p.get("name") if isinstance(p.get("name"), str) else None)
                      for p in catalog if p.get("sku"))
     # The team's sourcing table, used for any product the agent gives no sourcing for. Read once,
     # so the stale-price warnings describe the same rows the planner used.

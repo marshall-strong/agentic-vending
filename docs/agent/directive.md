@@ -19,6 +19,6 @@ The restock and pricing directive must let a person who has never seen our code 
 - No internal names, IDs or code terms.
 - Prices in 5-cent steps.
 
-**How this works for us.** `preview_desired_state` writes the worker's directive from the desired state. Read it before submitting and check it against the list above. If any line would leave the worker with a question, fix the desired state rather than adding an explanation.
+**How this works for us.** `preview_desired_state` writes the worker's directive from the desired state. It names each product by its catalog name with the SKU beside it, or the SKU alone when the catalog has no name. When a slot changes product and no receipt says what it holds, its Pull says to remove whatever is in it to the closet. Read it before submitting and check it against the list above. If any line would leave the worker with a question, fix the desired state rather than adding an explanation.
 
 A sample directive is also a graded deliverable (section 5).

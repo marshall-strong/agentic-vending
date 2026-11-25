@@ -153,10 +153,12 @@ class CatalogProduct:
     """One single-item product from /products. Inactive products are refused.
 
     `size` is the catalog's ("20 oz bottle"); it sets how many fit in a column.
+    `name` is the catalog's name ("Mountain Dew 20oz"), for the worker's directive only.
     """
     product: str
     active: bool = True
     size: str | None = None
+    name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -752,7 +754,7 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
             refusals.append(Refusal("nothing_to_load", (
                 "no slot loads anything, so there is no request to send; "
                 "skip this week's request")))
-    plan = Plan(lines, _directive(desired.off_cycle, slots), cost, tuple(floors),
+    plan = Plan(lines, _directive(desired.off_cycle, slots, _names(current.catalog)), cost, tuple(floors),
                 tuple(warnings), tuple(refusals), None, desired.off_cycle, note)
     if refusals:
         return plan
@@ -1428,8 +1430,46 @@ def _line(s: _Slot) -> Line:
         fed_by=s.fed_by)
 
 
-def _directive(off_cycle: bool, slots: list[_Slot]) -> str:
-    """The plan as the worker reads it: one row per slot, then what to buy where."""
+# A catalog name longer than this is cut in the directive, so one long name can't widen every row.
+MAX_NAME = 40
+# What to pull when a slot changes product and no receipt says what it holds now (#88).
+PULL_UNKNOWN = "remove whatever is in it to the closet"
+
+
+def _names(catalog: tuple[CatalogProduct, ...]) -> dict[str, str]:
+    """Each SKU's catalog name as one short line, for the directive. A name that is blank after
+    cleaning is left out, so the SKU stands alone. Runs of spaces become one: the simulator reads
+    the table's columns by two or more spaces (`vending.simulate.bridge.directive_loads`)."""
+    names = {}
+    for p in catalog:
+        name = " ".join("".join(c if c.isprintable() else " " for c in p.name or "").split())
+        if name:
+            names[p.product] = name if len(name) <= MAX_NAME else name[:MAX_NAME - 3].rstrip() + "..."
+    return names
+
+
+def _label(sku: str | None, names: Mapping[str, str]) -> str:
+    """A product as the worker reads it: the catalog's name with the SKU beside it, else the SKU alone."""
+    if sku is None:
+        return "-"
+    name = names.get(sku)
+    return f"{name} ({sku})" if name and name != sku else sku
+
+
+def _pull(s: _Slot, names: Mapping[str, str]) -> str:
+    """The directive's Pull cell: what to take out before loading. A product change into a slot whose
+    contents no receipt names tells the worker to empty it, rather than say nothing."""
+    if not s.changes_product:
+        return "-"
+    if s.state.unsure:
+        return PULL_UNKNOWN
+    return f"{s.on_hand} {_label(s.state.product, names)} to closet" if s.on_hand else "-"
+
+
+def _directive(off_cycle: bool, slots: list[_Slot], names: Mapping[str, str] | None = None) -> str:
+    """The plan as the worker reads it: one row per slot, then what to buy where. `names` is each
+    SKU's catalog name (`_names`); a SKU without one prints alone."""
+    names = names or {}
     rows = [("Slot", "Action", "Product", "Price", "Load", "From", "Pull")]
     for s in slots:
         source = "-"
@@ -1439,11 +1479,10 @@ def _directive(off_cycle: bool, slots: list[_Slot]) -> str:
             source = f"slot {s.fed_by}'s purchase"
         elif s.from_back_stock:
             source = "back stock"
-        pull = f"{s.on_hand} {s.state.product} to closet" if s.changes_product and s.on_hand else "-"
         rows.append((
-            s.slot, s.action.replace("_", " "), s.product or "-",
+            s.slot, s.action.replace("_", " "), _label(s.product, names),
             _dollars(s.price_cents) if s.price_cents is not None else "-",
-            str(s.need) if s.need else "-", source, pull))
+            str(s.need) if s.need else "-", source, _pull(s, names)))
     widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
     out = [f"Visit: {'midweek (off cycle)' if off_cycle else 'scheduled'}", ""]
     out += ["  ".join(c.ljust(w) for c, w in zip(r, widths)).rstrip() for r in rows]
@@ -1453,9 +1492,9 @@ def _directive(off_cycle: bool, slots: list[_Slot]) -> str:
         if s.purchase is None:
             continue
         p = s.purchase
-        shopping[p.primary.store].append(_shopping_row(s, p.primary, None))
+        shopping[p.primary.store].append(_shopping_row(s, p.primary, None, names))
         if p.alternate is not None:
-            shopping[p.alternate.store].append(_shopping_row(s, p.alternate, p.primary.store))
+            shopping[p.alternate.store].append(_shopping_row(s, p.alternate, p.primary.store, names))
     if shopping:
         out += ["", "Shopping list"]
         for store in sorted(shopping):
@@ -1464,9 +1503,10 @@ def _directive(off_cycle: bool, slots: list[_Slot]) -> str:
     return "\n".join(out)
 
 
-def _shopping_row(s: _Slot, o: PlannedPurchase, alternate_for: str | None) -> str:
+def _shopping_row(s: _Slot, o: PlannedPurchase, alternate_for: str | None,
+                  names: Mapping[str, str] | None = None) -> str:
     fed = [f for f, _ in s.purchase.feeds] if s.purchase else []
-    row = (f"  {s.product}: {o.packs} x {o.units_per_pack}-pack, max "
+    row = (f"  {_label(s.product, names or {})}: {o.packs} x {o.units_per_pack}-pack, max "
            f"{_dollars(o.max_price_per_pack_cents)} a pack, for slot{'s' if fed else ''} "
            f"{', '.join([s.slot, *fed])}")
     if o.units_to_closet:
