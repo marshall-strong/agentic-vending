@@ -132,3 +132,57 @@ def test_once_the_fill_is_counted_the_machine_shows_the_agents_plan(conn, picked
     assert when.startswith("Next restock &middot; ") and when.endswith(f"&middot; run #{run}")
     # The status bar and the first-fill list still describe the first fill until the lock.
     assert snap["plan"]["data"]["id"] == plan_id
+
+
+def test_a_sent_line_never_carries_a_nested_record_into_the_page(conn, picked, before_lock):
+    plan_id, _ = picked
+    send_fill(conn, plan_id)
+    odd = {"slot": "ZZ", "sku": "ZZ-NESTED", "price": "8.76"}
+    conn.execute("update purchase_requests set request_body = jsonb_set(jsonb_set(request_body,"
+                 " '{lines,0,primary,sku}', %s), '{lines,1,load,sale_price}', %s)", (Jsonb(odd), Jsonb(odd)))
+    snap = dashboard.snapshot(conn, NOW)
+    for text in (dashboard.render(snap), dashboard.to_json(snap)):
+        assert "ZZ-NESTED" not in text and "8.76" not in text
+
+
+def test_a_sent_load_adds_to_what_stays_unless_the_product_changes(conn, picked, before_lock):
+    plan_id, _ = picked
+    send_fill(conn, plan_id)
+    conn.execute("update purchase_requests set request_body = jsonb_set(request_body,"
+                 " '{lines,1,load,change_product}', 'false')")
+    snap = dashboard.snapshot(conn, NOW)
+    snap["stock"] = {"ok": True, "data": {"slots": {s: {"product": "SIM-RB", "on_hand": 4} for s in (PURCHASED, FED)},
+                                          "warnings": []}}
+    view = dashboard.machine_view(snap)
+    assert view[PURCHASED]["next"]["units"] == 9            # a swap: the old units are pulled
+    assert view[FED]["next"]["units"] == 14                 # a top-up: 4 stay, 10 more go in
+
+
+def test_an_empty_stored_body_falls_back_to_the_submission_and_odd_lines_do_not_crash(conn, picked, before_lock):
+    plan_id, _ = picked
+    send_fill(conn, plan_id)
+    conn.execute("update purchase_requests set request_body = '{}'")
+    assert dashboard.machine_view(dashboard.snapshot(conn, NOW))[PURCHASED]["next"]["units"] == 9
+    conn.execute("update purchase_requests set request_body = '{\"lines\": 7}'")
+    conn.execute("update purchase_submissions set body = '{\"lines\": 7}'")
+    snap = dashboard.snapshot(conn, NOW)
+    assert dashboard.machine_view(snap)[PURCHASED]["next"]["in_plan"] is False
+    dashboard.render(snap)
+
+
+def test_an_unpicked_plan_is_not_drawn_as_the_next_restock(conn, picked, before_lock):
+    conn.execute("update first_fill_plans set picked = false")
+    snap = dashboard.snapshot(conn, NOW)
+    assert all(v["next"] is None for v in dashboard.machine_view(snap).values())
+
+
+def test_the_side_card_follows_the_plan_the_machine_draws(conn, picked, before_lock):
+    plan_id, run = picked
+    side = lambda: dashboard._changes_html(snap := dashboard.snapshot(conn, NOW), dashboard.machine_view(snap))
+    assert "<h3>First fill" in side()
+    send_fill(conn, plan_id)
+    sent = side()
+    assert "<h3>First fill sent" in sent and "SIM-RB · $3.75 · 9 units · Walmart, backup BJs" in sent
+    conn.execute("update purchase_requests set status = 'fulfilled'")
+    after = side()
+    assert "Plan changes" in after and f"run #{run}" in after
