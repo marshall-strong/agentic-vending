@@ -146,6 +146,10 @@ submit, call preview_desired_state with the exact plan and fix every refusal it 
 most once, with the same plan you previewed and its plan_hash as expected_plan_hash. A null in a \
 tool's reply means unknown: never treat it as zero.
 
+The briefing's record shows your last closed weeks against the baseline and the incidents since \
+the last run. Don't repeat a change from a week that fell behind the baseline or failed a check, or \
+a call that was refused, unless your reason says what is different now.
+
 Every restock fills every slot to its column (get_project_rules restocking). The plan has one entry \
 per assigned slot: leave fill_to out for a full fill. If the preview refuses insufficient_balance or \
 below_spendable_floor, go by most margin per class day first: give an explicit fill_to for a partial \

@@ -95,8 +95,14 @@ GRADES = {
 
 # --- Report card -------------------------------------------------------------------------------
 
-def report_cards(conn: psycopg.Connection, now: datetime) -> dict:
-    """The report card panel's data: newest week first, at most `WEEKS_SHOWN`."""
+def report_cards(conn: psycopg.Connection, now: datetime, limit: int = WEEKS_SHOWN, *,
+                 plans_since: datetime | None = None, stop_on_cancel: bool = False) -> dict:
+    """The report card panel's data: newest week first, at most `limit` (the current one counts).
+
+    The agent's briefing (`vending.briefing._record`) reads fewer weeks than the page, matches only plans
+    from runs that started at `plans_since` or later (the real opening: a practice run's plan isn't one a
+    week loaded), and passes `stop_on_cancel`, so a statement timeout ends the read instead of blanking
+    that week and replaying the next. The page keeps both defaults: one slow week, the others shown."""
     opened = ledger.opening(conn)
     if opened is None or now < opened.at:
         return {"opened": False}
@@ -106,19 +112,26 @@ def report_cards(conn: psycopg.Connection, now: datetime) -> dict:
         return {"opened": True, "assignment_missing": True, "weeks": []}
     first = ledger.week_of(opened.at.astimezone(EASTERN))
     current = ledger.week_of(now.astimezone(EASTERN))
-    starts = [current - WEEK * n for n in range(WEEKS_SHOWN) if current - WEEK * n >= first]
-    reader = _Reader(conn, ours, now, opened.at, since=_start(starts[-1]) - PLAN_LOOKBACK)
-    weeks = [_isolated_card(reader, week, opening_week=week == first, final=week < current) for week in starts]
+    starts = [current - WEEK * n for n in range(limit) if current - WEEK * n >= first]
+    since = _start(starts[-1]) - PLAN_LOOKBACK
+    reader = _Reader(conn, ours, now, opened.at, since=since if plans_since is None else max(since, plans_since))
+    weeks = [_isolated_card(reader, week, opening_week=week == first, final=week < current,
+                            stop_on_cancel=stop_on_cancel) for week in starts]
     return {"opened": True, "weeks": weeks}
 
 
-def _isolated_card(reader: _Reader, week: date, *, opening_week: bool, final: bool) -> dict:
+def _isolated_card(reader: _Reader, week: date, *, opening_week: bool, final: bool,
+                   stop_on_cancel: bool = False) -> dict:
     """One week's card in its own savepoint: a failure scoring it leaves the other weeks standing.
-    The error's text is never shown, only that the week couldn't be scored."""
+    The error's text is never shown, only that the week couldn't be scored. With `stop_on_cancel`, a
+    cancelled statement (the caller's timeout) is raised instead, after the savepoint rolls back."""
+    import psycopg
     try:
         with reader.conn.transaction():
             return _card(reader, week, opening_week=opening_week, final=final)
-    except Exception:   # noqa: BLE001 - one week never takes the panel down
+    except Exception as error:   # noqa: BLE001 - one week never takes the panel down
+        if stop_on_cancel and isinstance(error, psycopg.errors.QueryCanceled):
+            raise
         card = _blank(week, final)
         card["notes"].append("This week couldn't be scored: the scoring failed. The other weeks are unaffected.")
         return _graded(card)
@@ -796,6 +809,11 @@ _KIND = {"refused": ("Refused", "warn"), "failed": ("Failed", "bad"), "halt_on":
          "sync_failed": ("Sync failed", "bad"),
          "books_outside": ("Books outside", "bad"), "check_unanswered": ("Check unanswered", "warn"),
          "check_unresolved": ("Check unresolved", "warn")}
+
+
+def kind_label(kind: str) -> str:
+    """An incident kind's fixed label, as the log shows it (the agent's briefing reads it too)."""
+    return _KIND.get(kind, (kind, "muted"))[0]
 
 
 def _pill(text: str, tone: str) -> str:

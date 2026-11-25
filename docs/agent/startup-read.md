@@ -14,6 +14,8 @@ Worker turnaround is the hours from our request to the worker's load, measured o
 
 The tracking check line gives the newest check the bridge answered: the poll it was as of, when it was checked, and each of the four figures `within` or `OUTSIDE` the bridge's tolerance ($1 for money, 2 units for counts). The bridge never says by how much or which slot. Each figure read outside raises `books_outside_<figure>` with the tool to look at next. The line also says how many later sends got no verdicts.
 
+Your record: up to three closed weeks against the baseline, and incidents since the last run. Failure text is never shown.
+
 The snapshot cannot replace a fresh balance check every run. Check purchase requests before another order. Preview the exact desired state before submitting. These checks remain required even when the briefing has no alerts.
 
 The Markdown lists up to four closet rows and six pending request IDs, with explicit omission counts and exact tool hints. It never omits assigned slots. Long product labels are shortened for display. Full evidence remains in the typed reply and the pull tools. No receipts, free-form request notes, forecasts or price recommendations enter the opening.
