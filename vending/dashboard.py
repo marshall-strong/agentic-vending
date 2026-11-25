@@ -2495,11 +2495,9 @@ def _cut(text: str) -> str:
     return f'<details><summary><code>{_e(text[:STEP_SHOWN])}...</code></summary><pre>{_e(text)}</pre></details>'
 
 
-def _steps_html(run_id: int, steps: list[dict], open_: bool = False) -> str:
-    """A run's steps, in order, folded away under one line: what it thought, called and was told. `open_`
-    shows them unfolded (the live run page, `vending.run_page`)."""
-    calls = sum(1 for s in steps if s["kind"] == "tool_call")
-    turns = max(s["turn"] for s in steps)
+def step_items(steps: list[dict]) -> list[str]:
+    """Each step as one list item: what it thought, called and was told. Shared with the run page
+    (`vending.run_page`), which appends new ones as they arrive."""
     items = []
     for s in steps:
         kind = s["kind"]
@@ -2512,8 +2510,15 @@ def _steps_html(run_id: int, steps: list[dict], open_: bool = False) -> str:
             body = _cut(s["content"])
         items.append(f'<li class="{kind}{" error" if s["is_error"] else ""}">'
                      f'<span class="t">{int(s["turn"])}</span><div><span class="what">{what}</span>{body}</div></li>')
-    return (f'<details class="steps"{" open" if open_ else ""} data-key="steps-{int(run_id)}"><summary>How it decided: '
-            f'{_plural(turns, "turn")}, {_plural(calls, "tool call")}</summary><ol>{"".join(items)}</ol></details>')
+    return items
+
+
+def _steps_html(run_id: int, steps: list[dict]) -> str:
+    """A run's steps, in order, folded away under one line: what it thought, called and was told."""
+    calls = sum(1 for s in steps if s["kind"] == "tool_call")
+    turns = max(s["turn"] for s in steps)
+    return (f'<details class="steps" data-key="steps-{int(run_id)}"><summary>How it decided: '
+            f'{_plural(turns, "turn")}, {_plural(calls, "tool call")}</summary><ol>{"".join(step_items(steps))}</ol></details>')
 
 
 def _activity_html(panel: dict, recent: dict) -> str:
@@ -3287,13 +3292,14 @@ class Handler(BaseHTTPRequestHandler):
         try:
             with connect() as conn:
                 if followed is not None:
-                    data = run_page.read(conn, followed[0], public=False)
+                    data = run_page.read(conn, followed[0], public=False,
+                                         after=run_page.after_of(urlsplit(self.path).query))
                 elif path == PRODUCTS_PATH:
                     from vending import products_page
                     data = products_page.read(conn)
                 else:
                     snap = snapshot(conn)
-        except (psycopg.Error, settings.SettingsError) as error:
+        except (psycopg.Error, settings.SettingsError, Missing) as error:
             message = str(error).strip().splitlines()[0] if str(error).strip() else type(error).__name__
             if path == "/state.json":
                 return self._send(503, "application/json", to_json({"error": message}))

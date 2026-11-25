@@ -621,7 +621,7 @@ def respond(target: str, syncs: dict | None = None) -> Reply | None:
     if (found := run_page.parse(path, run_page.DEMO_ROUTE)) is not None:
         return _run_demo(*found)
     if (found := run_page.parse(path, run_page.ROUTE)) is not None:
-        return _run(*found)
+        return _run(*found, after=run_page.after_of(parts.query))
     if path not in TITLES:
         return None
     request = query = None
@@ -706,15 +706,15 @@ def _run_problem(as_json: bool, status: int, text: str) -> Reply:
     return Reply(status, HTML, _notice("Agent run", text))
 
 
-def _run(run_id: int, as_json: bool) -> Reply:
-    """One live run's page (`vending.run_page`) or its JSON, on the pages' read-only login. Never raises, and
-    never puts an error's own text in a reply."""
+def _run(run_id: int, as_json: bool, after: int = 0) -> Reply:
+    """One live run's page (`vending.run_page`) or its JSON, with the steps after step id `after`, on the pages'
+    read-only login. Never raises, and never puts an error's own text in a reply."""
     where = f"{run_page.ROUTE}{run_id}"
     if not configured():
         return _run_problem(as_json, 503, NOT_SET_UP)
     try:
         with _connection() as conn:
-            data = run_page.read(conn, run_id, public=True)
+            data = run_page.read(conn, run_id, public=True, after=after)
         status = 200 if data["found"] and data.get("shown") else 404
         if as_json:
             return Reply(status, JSON, dashboard.to_json(data))
@@ -725,7 +725,8 @@ def _run(run_id: int, as_json: bool) -> Reply:
         _log("can write", f"not serving {where}: the {READER} login can write ({error}). "
                           "Give it a login with select only; run python -m vending.pages check")
         return _run_problem(as_json, 503, NOT_READ_ONLY)
-    except (psycopg.Error, settings.SettingsError) as error:
+    except (psycopg.Error, settings.SettingsError, dashboard.Missing) as error:
+        # A database not yet migrated (`dashboard.Missing`) is a read failure like any other.
         first = str(error).strip().splitlines()[0] if str(error).strip() else ""
         _log(type(error).__name__, f"{where}: {type(error).__name__}: {first}")
         return _run_problem(as_json, 503, CANT_READ)

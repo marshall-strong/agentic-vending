@@ -54,8 +54,9 @@ One run:
    stops it later), `skipped` when it decided not to (or it was a dry run), `failed` when it hit a cap,
    ran out of turns or broke. The stored plan is the desired state it previewed or sent, plus what
    the dashboard shows beside it: the visit kind, the run's reason and each changed slot's reason, and
-   the demand estimate it was made with (`forecast`: each slot's units per class day from
-   `get_machine_state`, read as the run ends), which the dashboard's forecast panel compares with what sold.
+   the demand estimate it was made with (`forecast`: each slot's rate as the model last received it, from a
+   `get_machine_state` reply, else the startup briefing), which the dashboard's forecast panel compares with
+   what sold. It is taken from those replies as they arrive; nothing is read again for it.
 5. Each step is recorded in `agent_steps` as it happens: the model's reasoning (a readable summary,
    asked for with `thinking: {display: "summarized"}`; the API never returns the raw chain of
    thought), any text, each tool call and each tool result. A step that can't be stored is reported
@@ -200,6 +201,7 @@ class Outcome:
     turn: int = 0                       # the model response being worked through
     plan_turn: int | None = None        # the response whose preview set `plan`: a submit must come later
     tool_calls: list[str] = field(default_factory=list)
+    forecast: dict | None = None        # the demand rates the model last received (`capture_forecast`)
     recorded: bool = True               # False when its ending couldn't be written to agent_runs, even on retry
 
 
@@ -294,7 +296,7 @@ def recorded_plan(plan: dict | None, answer: dict | None, forecast: dict | None 
     The dashboard reads the replayer's plan shape: a `visit`, a `reason` for the whole plan and a
     `reason` on each slot. The desired state carries none of those, so they are added here from
     the model's final answer. A run that never answered still stores its plan, without reasons.
-    `forecast` is the demand estimate the plan was made with (`demand_forecast`), stored as the plan's
+    `forecast` is the demand estimate the plan was made with (`capture_forecast`), stored as the plan's
     `forecast` when there is one; the dashboard's forecast panel compares it with what sold.
     """
     if plan is None:
@@ -315,34 +317,36 @@ def recorded_plan(plan: dict | None, answer: dict | None, forecast: dict | None 
     return recorded
 
 
-def demand_forecast(conn: psycopg.Connection, now: datetime | None = None) -> dict | None:
-    """The demand estimate the agent plans with, for the plan's record: each of our slots' units per class
-    day from `get_machine_state` (`vending.demand`: its own in-stock rate, or the fall prior for its price),
-    with where the rate came from. The briefing the run starts from carries the same figures. None when
-    the polls can't give it (no poll yet, no slot assignment). Reads only; no model call.
-
-    It is read when the run records its ending, a few minutes after the briefing, so a poll that came in
-    meanwhile can move a rate a little. Our slots only: `get_machine_state` reads the stored assignment."""
-    from vending.tools import machine_state
-
-    reply = machine_state.get_machine_state(conn, now)
-    if not reply.success or not reply.data:
-        return None
-    return {"source": "get_machine_state", "as_of": reply.as_of.isoformat() if reply.as_of else None,
-            "slots": [{"slot": s.slot, "units_per_class_day": s.units_per_class_day, "basis": s.rate_basis}
-                      for s in reply.data]}
+# Where a forecast's rates come from, and what each is per: `get_machine_state` gives units per in-stock class day
+# (`vending.demand`), the startup briefing only units per calendar day over the last 7 days.
+FORECAST_SOURCES = {"get_machine_state": ("units_per_class_day", "class_day"),
+                    "get_briefing": ("units_per_day", "calendar_day")}
 
 
-def _forecast(connect: Callable[[], psycopg.Connection]) -> dict | None:
-    """`demand_forecast`, or None if it can't be read: the forecast must never stop the run's record. Only
-    the error's class is printed, since a poll reader's error could carry poll bytes."""
+def capture_forecast(out: Outcome, source: str, reply: Any) -> None:
+    """Keep the per-slot demand rates in a reply the model received, as `out.forecast`: the latest such reply wins,
+    so the stored forecast is what the model had when it made its plan. A `get_machine_state` reply carries the
+    class-day rate the agent is told to plan with; the briefing only a calendar-day rate, kept when nothing better
+    came. Never raises: the forecast must never stop a run, its submit or its record. Only the error's class is
+    printed, since a reply can carry poll figures."""
     try:
-        with connect() as conn:
-            return demand_forecast(conn)
-    except Exception as error:      # noqa: BLE001 - the plan is stored without it
-        print(f"the plan's demand forecast couldn't be read ({type(error).__name__}); stored without it",
-              file=sys.stderr, flush=True)
-        return None
+        if not isinstance(reply, dict) or reply.get("success") is False:
+            return
+        field_name, unit = FORECAST_SOURCES[source]
+        rows = reply.get("data") if source == "get_machine_state" else reply.get("slots")
+        if not isinstance(rows, list) or not rows:
+            return
+        if source == "get_briefing" and out.forecast and out.forecast["source"] == "get_machine_state":
+            return
+        slots = [{"slot": r["slot"], "rate": None if r.get(field_name) is None else str(r[field_name]),
+                  "basis": r.get("rate_basis") if isinstance(r.get("rate_basis"), str) else None}
+                 for r in rows if isinstance(r, dict) and isinstance(r.get("slot"), str)]
+        if not slots:
+            return
+        at = reply.get("as_of") if source == "get_machine_state" else reply.get("computed_at")
+        out.forecast = {"source": source, "unit": unit, "as_of": None if at is None else str(at), "slots": slots}
+    except Exception as error:  # noqa: BLE001 - the plan is stored without it
+        print(f"a demand forecast couldn't be kept from {source} ({type(error).__name__})", file=sys.stderr, flush=True)
 
 
 def last_notes(conn: psycopg.Connection, *, live: bool) -> str:
@@ -384,8 +388,9 @@ def brief(now: datetime, notes: str, *, live: bool, startup: str = "") -> str:
             f"Your notes from the last run:\n{notes}")
 
 
-async def startup_read(call_tool: Callable, record_step: Callable) -> str:
-    """One real MCP read before the model loop, never a fabricated model tool-use turn."""
+async def startup_read(call_tool: Callable, record_step: Callable, out: Outcome | None = None) -> str:
+    """One real MCP read before the model loop, never a fabricated model tool-use turn. With `out`, the
+    briefing's per-slot rates are kept as the run's forecast until a `get_machine_state` reply replaces them."""
     metadata: dict[str, Any] = {"source": "startup", "tool": "get_briefing"}
     failed = False
     try:
@@ -402,6 +407,8 @@ async def startup_read(call_tool: Callable, record_step: Callable) -> str:
                     isinstance(reply.get(k), str) and reply[k] for k in ("computed_at", "snapshot_id", "text"))):
             raise ValueError("get_briefing did not return a usable snapshot")
         metadata.update(computed_at=reply["computed_at"], snapshot_id=reply["snapshot_id"], success=True)
+        if out is not None:
+            capture_forecast(out, "get_briefing", reply)
         opening = (f"Trusted startup read from get_briefing (computed_at={reply['computed_at']}, "
                    f"snapshot_id={reply['snapshot_id']}):\n{reply['text']}")
     except Exception as error:
@@ -469,7 +476,7 @@ async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tool
                 await note(turn + 1, "text", block.text)
             elif block.type == "tool_use":
                 await note(turn + 1, "tool_call", json.dumps(block.input or {}, sort_keys=True, default=str),
-                           tool=block.name)
+                           tool=block.name, tool_use_id=block.id)
         if response.stop_reason == "tool_use":
             results = []
             for block in response.content:
@@ -482,7 +489,8 @@ async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tool
                         return
                     results.append({"type": "tool_result", "tool_use_id": block.id, "content": text,
                                     "is_error": failed})
-                    await note(turn + 1, "tool_result", text, tool=block.name, is_error=failed)
+                    await note(turn + 1, "tool_result", text, tool=block.name, is_error=failed,
+                               tool_use_id=block.id)
             messages.append({"role": "user", "content": results})
             continue
         if response.stop_reason == "refusal":
@@ -562,6 +570,8 @@ async def _use(block: Any, call_tool: Callable[[str, dict], Any], schemas: dict,
         result = await call_tool(name, arguments)
     text, reply = _result_text(result)
     failed = bool(getattr(result, "isError", False)) or (reply is not None and reply.get("success") is False)
+    if name == "get_machine_state" and not failed:
+        capture_forecast(out, name, reply)
     if name == PREVIEW and not out.submit_sent:
         if reply and reply.get("ok") and not failed and isinstance(arguments.get("desired"), dict):
             out.plan = {**arguments["desired"], "plan_hash": reply.get("plan_hash")}
@@ -795,6 +805,7 @@ async def _run_owned(*, live: bool, model: str, effort: str, connect: Callable[[
                 # Each paid request checks the lease in the transaction that reserves its budget, so a run
                 # taken over meanwhile reserves and sends nothing (`run_lease.hold`).
                 harness = Harness(client, connect, purpose="live" if live else "test", by="agent",
+                                  run_id=agent_runs.harness_key(run_id),
                                   hold=lambda c: run_lease.hold(c, token, LEASE_MARGIN),
                                   hold_margin=LEASE_MARGIN.total_seconds(), request_deadline=REQUEST_DEADLINE,
                                   stop_at=stop_at)
@@ -807,7 +818,7 @@ async def _run_owned(*, live: bool, model: str, effort: str, connect: Callable[[
                         out.detail = ("submit_desired_state isn't built on this server, so a live run can't "
                                       "submit. Use a dry run.")
                     else:
-                        startup = await startup_read(call_tool, record_step)
+                        startup = await startup_read(call_tool, record_step, out)
                         offered, local = tool_definitions(listed, live=live), {}
                         if price_search.offered(live=live, now=now()):
                             lookups = price_search.PriceSearch(harness, connect, model=model)
@@ -843,14 +854,13 @@ def _record_ending(connect: Callable[[], psycopg.Connection], run_id: int, out: 
     import time
 
     answer = out.answer or {}
-    forecast = _forecast(connect) if out.plan is not None else None
     error = None
     for wait in (0.0, *FINISH_RETRIES):
         if wait:
             time.sleep(wait)
         try:
             with connect() as conn:
-                agent_runs.finish(conn, run_id, out.status, plan=recorded_plan(out.plan, out.answer, forecast),
+                agent_runs.finish(conn, run_id, out.status, plan=recorded_plan(out.plan, out.answer, out.forecast),
                                   update=answer.get("update"),
                                   notes=answer.get("notes"), detail=out.detail,
                                   cost_usd=harness.spent if harness is not None else Decimal(0),

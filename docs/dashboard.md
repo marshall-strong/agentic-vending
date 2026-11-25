@@ -238,46 +238,64 @@ team.
 
 `vending/forecast_panel.py`. No model calls.
 
-- **The forecast** is the demand estimate the agent plans with: each slot's `units_per_class_day` and `rate_basis`
-  from `get_machine_state` (`vending.demand`: own in-stock rate after 5 in-stock class days, else the fall prior for
-  its price). `vending.agent.demand_forecast` stores it in the run's plan as `forecast` when the run records its
-  ending (a few minutes after the briefing that carries the same figures). Plans from before this change have none:
-  **No forecast recorded**. Nothing is reconstructed afterwards.
-- **Expected (est.)** = rate x class days the week's polls cover. Each class day is weighted by the share of a day's
-  sales between the two polls (`demand.HOUR_SHARE`); weekends and breaks are 0 (`vending.class_days`). So a week in
-  progress or with a gap is compared over the stretch its sales were counted over. Demand, not capped by the fill.
-- **Sold** is the report card's: the counters' rise between the week's polls (`replay_week`).
+- **The forecast** is the demand rate the model had when it made the plan, kept from the replies it received
+  (`vending.agent.capture_forecast`), never read again afterwards: each slot's `units_per_class_day` and
+  `rate_basis` from the latest `get_machine_state` reply (`vending.demand`: own in-stock rate after 5 in-stock
+  class days, else the fall prior for its price); if the run never called it, the startup briefing's
+  `units_per_day` (per calendar day, over the last 7 days). The plan stores it as `forecast`, with `source`,
+  `unit` and `as_of`. Keeping it can't fail a run or its submit: a reply it can't read is skipped. Plans from
+  before this change have none: **No forecast recorded**. Nothing is reconstructed afterwards.
+- **Expected (est.)**: a class-day rate x the class days the week's polls cover, each weighted by the share of a
+  day's sales between the two polls (`demand.HOUR_SHARE`; weekends and breaks are 0, `vending.class_days`); a
+  calendar-day rate x the days the polls span. So a week in progress or with a gap is compared over the stretch its
+  sales were counted over. Demand, not capped by the fill.
+- **Sold** is the report card's: the counters' rise between the week's polls (`replay_week`). It needs this week's
+  polls only: when last week can't be rebuilt, the report card has no baseline, but the forecast is still compared.
 - **Weeks** follow the report card's rules: opening week, no plan matched, rejected request, couldn't be read and
-  no sales yet each show a label and no table. A slot the visit swapped (#172) is listed but not compared: the
-  rate was the old product's. A closed week whose polls cover under 6 or over 8 days shows its figures and withholds
-  mean \|diff\|. A slot with no rate or no sales figure has no diff and stays out of the totals.
+  no sales yet each show a label and no table. Not compared, but listed (#172): a slot the visit swapped (the rate
+  was the old product's), and a slot where any receipt between the week's two polls loaded a product other than
+  the one it held at the first (a midweek swap: two products' sales). A closed week whose polls cover under 6 or
+  over 8 days shows its figures and withholds mean \|diff\|. A slot with no rate or no sales figure has no diff and
+  stays out of the totals.
 - **Only our selections**, from the stored assignment now. A forecast entry for any other selection is dropped;
   the panel's text then goes through the report card's numbered-selection scoping.
 
 ## The run page
 
 `/dashboard/run/<id>` (`.json` for its data; `/run/<id>` on `python -m vending.dashboard`), `vending/run_page.py`.
-One live run as it happens. While it says `running` (and is under 2 hours old) the page's script fetches the page
-again every 5 s and swaps it in, keeping folded steps folded and the scroll; it stops once the run has ended. No
-websocket. Without scripts it reloads every 5 s. Same gate and read-only login as the dashboard.
+One live run as it happens. Same gate and read-only login as the dashboard. No websocket.
+
+- **Refresh.** While the run says `running` (and is under 2 hours old), or steps are left to load, the page asks
+  every 5 s for the steps after the last one it has (`?after=<step id>`, at most 200 a time). It appends them and
+  any new drafts, puts a late preview reply's status on its draft, and swaps the figures and the plan. Each refresh
+  reads the run's row, the new steps, a count of all its steps and at most one earlier preview call; never the
+  whole transcript again. Without scripts the page reloads whole every 5 s.
+- **Step text** is cut to 1,000 characters on the page and in the JSON. The database keeps it whole:
+  `preview_desired_state` and `submit_desired_state` calls up to 16,000 characters (`agent_runs.MAX_CALL_TEXT`, so a
+  whole desired state is readable slot by slot), every other step up to 4,000.
 
 | Part | What's in it | Where it comes from |
 |---|---|---|
 | Status | `running`, `submitted`, `skipped`, `halted`, `failed`, or "probably died" after 2 hours; mode, model; a "before the ledger opening" mark for a run that started before it (development spend, not the \$600) | `agent_runs` |
 | Started, Ended | Times in Eastern, how long it ran, the request id | `agent_runs` |
-| Model spend | So far: the sum of the run's `model_calls.cost_usd` (rows labelled `agent run <id> turn <n>`, and any price lookup on the same harness), calls counted, and how many are still at their worst case (`pending`), against `model_run_cap_cents` as set now ("default" when unset). Once the run has ended: `agent_runs.cost_usd`. The meter turns amber at 80% and red at the cap | `model_calls`, `config`, `agent_runs` |
+| Model spend | So far: the sum of `model_calls.cost_usd` for the run's harness, read by its key (`agent_runs.harness_key`, `agent-run-<id>`, through the `model_calls_run` index; a price lookup on the same harness counts too), calls counted, and how many are still at their worst case (`pending`), against `model_run_cap_cents` as set now ("default" when unset). Once the run has ended: `agent_runs.cost_usd`. The meter turns amber at 80% and red at the cap. A run started before this change wrote a random key, so its spend so far reads \$0; once it ends, its recorded cost shows | `model_calls`, `config`, `agent_runs` |
 | Steps | The Runs panel's "How it decided", unfolded: reasoning (the API's summary), text, each tool call and reply | `agent_steps` |
 | Plan | The plan the run recorded (at submit or at its end); before that, the latest draft, with the slots it moved marked. Slot, SKU, fill to, price, keep, reason | `agent_runs.plan`, `agent_steps` |
-| Drafts | Each `preview_desired_state` call: turn, time, whether its preview accepted it (`accepted`, `refused`, `failed`, `waiting`), and chips for what it moved from the draft before it (the first, from the last live plan) | `agent_steps` |
+| Drafts | Each `preview_desired_state` call: turn, time, its own preview reply's status (`accepted`, `refused`, `failed`, `waiting`), and chips for what it moved from the draft before it (the first, from the last live plan) | `agent_steps` |
 | Ended | The run's detail, team update and notes | `agent_runs` |
 
 - **Honesty rules are the Runs panel's.** No raw chain of thought. A failed run's detail and every step marked
   `is_error` show `HIDDEN`, on the public route and the standalone one. Scoping is `dashboard.scope_run`: a run from
   before the current assignment shows no steps, drafts or plan; a payload naming a selection outside ours is dropped
   or replaced; a saved poll reply keeps only our rows.
+- **Drafts and the plan are typed.** Each entry is reduced to a catalog SKU, a whole fill and a shelf price; a kept
+  slot is only "keep" (a price or fill it carries doesn't apply). Chips compare those typed entries only, for our
+  slots only, the last live plan included, so no stored text reaches a chip.
+- **A reply is paired with its own call** by the model's tool-use id, stored on both steps (`agent_steps.tool_use_id`,
+  migration 035). A step from before the migration has none: its reply is paired only when its turn has one preview
+  call and one preview reply, else the draft says `waiting`.
 - **Live runs only.** A dry run or replay answers 404 "Not on the live page", as the Runs panel leaves them out.
-- **Tool-call arguments are kept to 16,000 characters** (`agent_runs.MAX_CALL_TEXT`; replies stay at 4,000), so a
-  whole desired state, sourcing links included, is readable slot by slot. A call cut anyway says so.
+- **A database the page can't read** (down, or not migrated) answers the pages' fixed 503, never the error's text.
 
 ## The Products page
 

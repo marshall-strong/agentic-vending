@@ -8,16 +8,19 @@ nothing, a slot the visit swapped is left out of the comparison (#172: the forec
 rate), and a closed week whose polls cover too little or too much of it shows its figures without a verdict
 (here, without its average miss).
 
-**The forecast** is the demand estimate the agent planned with: each slot's units per class day from
-`get_machine_state` (`vending.demand`: the slot's own in-stock rate, or the fall prior for its price), stored
-with the plan as `forecast` when the run ends (`vending.agent.demand_forecast`). Plans recorded before that
-have none, and their weeks say "No forecast recorded". The panel never makes one up afterwards.
+**The forecast** is the demand rate the model had when it made the plan, kept from the replies it received
+(`vending.agent.capture_forecast`), never read again afterwards: each slot's units per class day from the
+latest `get_machine_state` reply (`vending.demand`: own in-stock rate, or the fall prior for its price), or,
+if the run never called it, the startup briefing's units per calendar day over the last 7 days. The plan
+stores it as `forecast`, with its `unit`. Plans recorded before that have none, and their weeks say "No
+forecast recorded". The panel never makes one up afterwards.
 
-**Expected** is that rate times the class days the week's polls cover, each day weighted by the share of a
-day's sales that falls between the two polls (`demand.HOUR_SHARE`: most sell 8 to 11 AM). So a week still in
-progress, or one with a gap in its polls, is compared over the same stretch its sales were counted over. It
-is demand, not capped by the fill: a slot that was empty at the week's last poll sold all it had, and is
-marked, since its demand may have been higher than its sales.
+**Expected** is a class-day rate times the class days the week's polls cover, each day weighted by the share of
+a day's sales that falls between the two polls (`demand.HOUR_SHARE`: most sell 8 to 11 AM); a calendar-day rate
+times the days the polls span. So a week still in progress, or one with a gap in its polls, is compared over
+the same stretch its sales were counted over. It is demand, not capped by the fill: a slot that was empty at
+the week's last poll sold all it had, and is marked, since its demand may have been higher than its sales. A
+slot whose product changed between the week's polls (a midweek swap) is listed but not compared (#172).
 
 **Sold** is what the polls' counters say our slots sold, as the report card counts it (the replayer's
 `get_sales_history`). Unknown stays unknown: a slot with no rate or no sales figure has no difference and is
@@ -93,6 +96,9 @@ def week(card: dict, plan: Any, ours: tuple[str, ...]) -> dict:
     share = class_day_share(start, end)
     out["polls"], out["class_days"] = [start, end], str(_tenth(share))
     rates = _rates(plan["forecast"], ours)
+    # A `get_machine_state` rate is per in-stock class day; a briefing's, per calendar day (`agent.capture_forecast`).
+    unit = "calendar_day" if plan["forecast"].get("unit") == "calendar_day" else "class_day"
+    days = Fraction(int((end - start).total_seconds()), 86400) if unit == "calendar_day" else share
     entries = {str(e.get("slot")): e for e in plan.get("slots", []) if isinstance(e, dict)}
     swapped = set(card.get("swapped") or [])
     for slot in ours:
@@ -101,17 +107,19 @@ def week(card: dict, plan: Any, ours: tuple[str, ...]) -> dict:
         rate, basis = rates.get(slot, (None, None))
         sold, empty = by_slot[slot]["sold"], by_slot[slot]["empty"]
         row = {"slot": slot, "product": by_slot[slot].get("product"), "rate": None if rate is None else str(rate),
-               "basis": basis, "expected": None, "sold": sold, "difference": None, "empty": empty,
+               "unit": unit, "basis": basis, "expected": None, "sold": sold, "difference": None, "empty": empty,
                "counted": False, "note": None}
         pulled = entries.get(slot, {}).get("fill_to") == 0 and not entries.get(slot, {}).get("keep")
         if slot in swapped:
             row["note"] = "swapped at the visit: rate was the old product's; not compared (#172)"
+        elif by_slot[slot].get("product_changed"):
+            row["note"] = "product changed within the week: two products' sales; not compared (#172)"
         elif slot not in rates:
             row["note"] = "no rate recorded for this slot"
         elif rate is None:
             row["note"] = "rate unknown at plan time"
         else:
-            expected = Fraction(0) if pulled else Fraction(rate) * share
+            expected = Fraction(0) if pulled else Fraction(rate) * days
             row["expected"] = str(_tenth(expected))
             if pulled:
                 row["note"] = "pulled by the plan (fill_to 0)"
@@ -166,7 +174,7 @@ def _rates(forecast: dict, ours: tuple[str, ...]) -> dict[str, tuple[Decimal | N
         if not isinstance(entry, dict) or str(entry.get("slot")) not in ours:
             continue
         try:
-            rate = Decimal(str(entry["units_per_class_day"])) if entry.get("units_per_class_day") is not None else None
+            rate = Decimal(str(entry["rate"])) if entry.get("rate") is not None else None
         except (InvalidOperation, ValueError):
             rate = None
         if rate is not None and (not rate.is_finite() or rate < 0):
@@ -256,7 +264,8 @@ def _week_html(w: dict, first: bool) -> str:
         expected = escape(r["expected"]) if r["expected"] is not None else "&mdash;"
         sold = str(int(r["sold"])) if r["sold"] is not None else "unknown"
         diff = escape(_signed(r["difference"])) if r["difference"] is not None else "&mdash;"
-        rate = escape(r["rate"]) if r["rate"] is not None else "unknown"
+        per = "/ class day" if r["unit"] == "class_day" else "/ day (7-day, briefing)"
+        rate = f'{escape(r["rate"])} <span class="sub">{per}</span>' if r["rate"] is not None else "unknown"
         # The basis's kind ("own", "fall prior") on the row; its whole sentence on hover.
         basis = (f'<small title="{escape(r["basis"])}">{escape(r["basis"].split(":", 1)[0])}</small>'
                  if r["basis"] else "")
@@ -265,7 +274,7 @@ def _week_html(w: dict, first: bool) -> str:
                     f'</code></td><td class="fc-rate">{rate}{basis}</td><td>{expected}</td><td>{sold}{empty}</td>'
                     f'<td>{diff}</td><td class="fc-note">{escape(r["note"] or "")}</td></tr>')
     table = ('<div class="fc-wrap"><table class="rc-outcome fc-table"><thead><tr><th scope="col">Slot</th>'
-             '<th scope="col">SKU</th><th scope="col">Rate / class day</th><th scope="col">Expected (est.)</th>'
+             '<th scope="col">SKU</th><th scope="col">Rate</th><th scope="col">Expected (est.)</th>'
              '<th scope="col">Sold</th><th scope="col">Diff</th><th scope="col">Note</th></tr></thead>'
              f'<tbody>{"".join(rows)}</tbody></table></div>')
     meta = ""

@@ -15,9 +15,8 @@ PLANNED = datetime(2026, 12, 3, 20, tzinfo=UTC)   # Thursday of the opening week
 
 def forecast(**rates):
     """A plan's recorded forecast: slot -> units per class day (text, as `get_machine_state` gives it)."""
-    return {"source": "get_machine_state", "as_of": None,
-            "slots": [{"slot": slot, "units_per_class_day": rate, "basis": "fall prior: fast seller"}
-                      for slot, rate in rates.items()]}
+    return {"source": "get_machine_state", "unit": "class_day", "as_of": None,
+            "slots": [{"slot": slot, "rate": rate, "basis": "fall prior: fast seller"} for slot, rate in rates.items()]}
 
 
 def with_forecast(plan, **rates):
@@ -174,19 +173,90 @@ def test_the_recorded_plan_carries_the_forecast_only_when_there_is_one():
     assert "forecast" not in agent.recorded_plan(plan, {}, None)
 
 
-def test_the_forecast_is_the_rate_get_machine_state_gives_for_our_slots(conn):
-    ours = dashboard.our_slots(conn)
-    at = datetime.now(UTC) - timedelta(hours=1)
-    store_poll(conn, "f1", at.isoformat(), {ours[0]: (250, 10), "11" if "11" not in ours else "12": (300, 50)})
-    made = agent.demand_forecast(conn)
-    assert made["source"] == "get_machine_state" and [s["slot"] for s in made["slots"]] == list(ours)
-    first = made["slots"][0]
-    assert first["units_per_class_day"] is not None and first["basis"].startswith("fall prior")
+def test_the_run_stores_the_rates_the_model_received_and_reads_nothing_again(schema_url, conn, monkeypatch):
+    from tests.test_agent import PLAN, Script, Tools, answer, connect as _connect, go, stored, tool_turn, use  # noqa: F401
+    from tests.conftest import open_in
+    from vending.config import set_halted
+    from vending.tools import machine_state
+
+    set_halted(conn, False, "test")
+    connect = lambda: open_in(*schema_url)                                     # noqa: E731
+    got = {"success": True, "as_of": "2026-11-12T14:00:00+00:00", "data": [
+        {"slot": "15", "units_per_class_day": "1.70", "rate_basis": "own: 17 sold over 10 in-stock class days"},
+        {"slot": "16", "units_per_class_day": None, "rate_basis": "no price to pick a fall segment"}]}
+
+    def no_second_read(*args, **kwargs):
+        raise AssertionError("the run read machine state again for its forecast")
+    monkeypatch.setattr(machine_state, "get_machine_state", no_second_read)
+    client = Script(tool_turn(use("get_machine_state")),
+                    tool_turn(use("preview_desired_state", {"desired": PLAN}, id="t2")), answer("submit"))
+    tools = Tools(replies={"get_machine_state": got,
+                           "preview_desired_state": {"success": True, "message": "ok", "ok": True, "plan_hash": "abc"}})
+    run_id, out = go(connect, client, tools)
+    plan = stored(conn, run_id)[2]
+    assert plan["forecast"] == {"source": "get_machine_state", "unit": "class_day", "as_of": got["as_of"], "slots": [
+        {"slot": "15", "rate": "1.70", "basis": got["data"][0]["rate_basis"]},
+        {"slot": "16", "rate": None, "basis": got["data"][1]["rate_basis"]}]}
 
 
-def test_no_polls_means_no_forecast_and_a_broken_read_never_stops_the_record(conn, monkeypatch):
-    assert agent.demand_forecast(conn) is None
+def test_the_briefing_s_calendar_rate_is_kept_only_until_a_class_day_rate_arrives():
+    out = agent.Outcome("skipped", "")
+    briefing = {"success": True, "computed_at": "2026-11-12T13:00:00+00:00", "slots": [{"slot": "15", "units_per_day": "0.86"}]}
+    agent.capture_forecast(out, "get_briefing", briefing)
+    assert out.forecast["unit"] == "calendar_day" and out.forecast["slots"][0]["rate"] == "0.86"
+    agent.capture_forecast(out, "get_machine_state", {"success": True, "data": [{"slot": "15", "units_per_class_day": "1.20"}]})
+    agent.capture_forecast(out, "get_briefing", briefing)
+    assert out.forecast["source"] == "get_machine_state" and out.forecast["slots"][0]["rate"] == "1.20"
+    for broken in (None, "x", {"data": "x"}, {"data": [None, {"slot": object()}]}, {"success": False, "data": [{"slot": "15"}]}):
+        agent.capture_forecast(out, "get_machine_state", broken)          # never raises; keeps what it had
+    assert out.forecast["slots"][0]["rate"] == "1.20"
 
-    def broken():
-        raise RuntimeError("PA1*11*250 should never be printed")
-    assert agent._forecast(broken) is None
+
+def test_a_briefing_rate_is_per_calendar_day(conn, page_conn, opened):  # noqa: F811
+    slot = opened[0]
+    product(conn)
+    week_of_sales(conn, slot)
+    recorded = plan_for(opened, **{slot: {"fill_to": 8, "sale_price": "2.50", "reason": "fill it"}})
+    recorded["forecast"] = {"source": "get_briefing", "unit": "calendar_day", "as_of": None,
+                            "slots": [{"slot": slot, "rate": "1.00", "basis": None}]}
+    live_run(conn, PLANNED, request_id="r1", plan=recorded)
+    fulfilled(conn, "r1", slot, SKU, units_loaded=8, paid="8.00", at=SAT1 - timedelta(hours=3))
+    _, by_week = weeks(page_conn)
+    row = next(r for r in by_week["2026-12-05"]["rows"] if r["slot"] == slot)
+    # 1.00 a calendar day over the 7 days the polls span: 7.0, not the 5 class days.
+    assert row["expected"] == "7.0" and row["unit"] == "calendar_day"
+
+
+def test_a_product_changed_midweek_is_not_compared(conn, page_conn, opened):  # noqa: F811
+    a, b = opened[0], opened[1]
+    for sku in ("OLD-CAN", "NEW-CAN", "KEPT-CAN"):
+        product(conn, sku)
+    receipt(conn, "fill", OPEN + timedelta(hours=1), [(a, "OLD-CAN", 4, "2.00", 0, None),
+                                                      (b, "KEPT-CAN", 10, "10.00", 0, None)])
+    two_slot_sales(conn, a, b)
+    live_run(conn, PLANNED, request_id="friday", plan=with_forecast(plan_for(opened, **{
+        b: {"fill_to": 10, "reason": "keep it"}}), **{a: "1.00", b: "0.40"}))
+    receipt(conn, "friday", SAT1 - timedelta(hours=3), [(b, "KEPT-CAN", 1, "1.00", 0, None)])
+    # A paid midweek visit on Tue 8 Dec swaps slot a to NEW-CAN: the week's sales in a are two products'.
+    receipt(conn, "midweek", SAT1 + timedelta(days=3, hours=15), [(a, "NEW-CAN", 8, "8.00", 0, "OLD-CAN")],
+            off_cycle=True)
+    _, by_week = weeks(page_conn)
+    rows = {r["slot"]: r for r in by_week["2026-12-05"]["rows"]}
+    assert not rows[a]["counted"] and rows[a]["difference"] is None and "product changed" in rows[a]["note"]
+    assert rows[b]["counted"]
+
+
+def test_missing_prior_week_polls_keep_this_week_s_sales(conn, page_conn, opened):  # noqa: F811
+    slot = opened[0]
+    product(conn)
+    # Only this week's polls: last week can't be rebuilt, so the report card can't score a baseline.
+    store_poll(conn, "w1-start", (SAT1 + timedelta(minutes=30)).isoformat(), {slot: (250, 102)})
+    store_poll(conn, "w1-end", (SAT2 - timedelta(hours=1)).isoformat(), {slot: (250, 108)})
+    live_run(conn, PLANNED, request_id="r1", plan=with_forecast(
+        plan_for(opened, **{slot: {"fill_to": 8, "sale_price": "2.50", "reason": "fill it"}}), **{slot: "1.50"}))
+    fulfilled(conn, "r1", slot, SKU, units_loaded=8, paid="8.00", at=SAT1 - timedelta(hours=3))
+    snap, by_week = weeks(page_conn)
+    card = next(c for c in snap["report_cards"]["data"]["weeks"] if c["week"] == "2026-12-05")
+    assert card["outcome"] is None and "Last week can't be rebuilt from the polls." in card["notes"]
+    row = next(r for r in by_week["2026-12-05"]["rows"] if r["slot"] == slot)
+    assert by_week["2026-12-05"]["status"] == "compared" and row["sold"] == 6 and row["counted"]

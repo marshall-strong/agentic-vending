@@ -61,9 +61,9 @@ def test_a_run_in_progress_shows_its_steps_drafts_and_spend_against_the_cap(conn
     step(conn, run, 2, "tool_call", desired(**{A: {"product": "SAMPLE-CAN", "fill_to": 8, "sale_price": "2.75"}}),
          tool="preview_desired_state")
     step(conn, run, 2, "tool_result", json.dumps({"ok": True, "plan_hash": "abc"}), tool="preview_desired_state")
-    model_call(conn, run, 1, "0.50")
-    model_call(conn, run, 2, "0.90", status="pending")
-    model_call(conn, run + 100, 1, "5.00", harness="other")       # another run's call: not this one's
+    model_call(conn, run, 1, "0.50", harness=agent_runs.harness_key(run))
+    model_call(conn, run, 2, "0.90", status="pending", harness=agent_runs.harness_key(run))
+    model_call(conn, run + 100, 1, "5.00", harness=agent_runs.harness_key(run + 100))   # another run's call
     data = run_page.read(page_conn, run, NOW)
     assert data["found"] and data["shown"] and run_page.running(data)
     assert data["spend"] == {"spent": Decimal("1.40"), "calls": 2, "pending": 1}
@@ -213,3 +213,136 @@ def test_the_demo_serves_its_run_pages_from_the_file_alone(no_database):  # noqa
     assert reply.status == 200 and json.loads(reply.body)["demo"] is True
     assert pages.respond("/dashboard/demo/run/999999").status == 404
     assert f'href="{demo.DEMO_RUN}{running}"' in demo.page()
+
+
+# --- Review round (Sol, #247) ----------------------------------------------------------------------
+
+def test_draft_chips_come_from_typed_scoped_entries_only(conn, page_conn):  # noqa: F811
+    open_books(conn)
+    run_at(conn, NOW - timedelta(hours=6), status="submitted", request_id="r1", plan={"slots": [
+        {"slot": A, "keep": True, "sale_price": f"as selection {OUTSIDE}"},
+        {"slot": B, "fill_to": 8, "sale_price": f"selection {OUTSIDE} price"}]})
+    run = run_at(conn, NOW - timedelta(minutes=5))
+    step(conn, run, 1, "tool_call", desired(**{A: {"keep": True, "sale_price": "2.75"}, B: {"fill_to": 8, "sale_price": "2.50"}}),
+         tool="preview_desired_state")
+    data = run_page.read(page_conn, run, NOW)
+    for text in (run_page.html(data), dashboard.to_json(data)):
+        assert f"selection {OUTSIDE}" not in text
+    changes = {c["slot"]: c["labels"] for c in data["drafts"][0]["changes"]}
+    assert A not in changes                    # a kept slot: its price and fill are ignored
+    assert all(OUTSIDE not in label for labels in changes.values() for label in labels)
+
+
+def test_a_refresh_reads_only_steps_after_the_last_one_it_has(conn, page_conn):  # noqa: F811
+    open_books(conn)
+    run = run_at(conn, NOW - timedelta(minutes=5))
+    for n in range(5):
+        step(conn, run, n + 1, "thinking", f"thought {n}")
+    first = run_page.read(page_conn, run, NOW)
+    last = first["run"]["steps"][-1]["id"]
+    step(conn, run, 6, "thinking", "a new thought")
+    more = run_page.read(page_conn, run, NOW, after=last)
+    assert [s["content"] for s in more["run"]["steps"]] == ["a new thought"]
+    assert more["counts"] == {"steps": 6, "turns": 6, "calls": 0} and more["after"] == last
+    page = run_page.html(more)
+    assert "thought 0" not in page and "a new thought" in page and f'data-last="{last + 1}"' in page
+
+
+def test_spend_is_read_by_the_run_s_own_harness_key(conn, page_conn):  # noqa: F811
+    open_books(conn)
+    run = run_at(conn, NOW - timedelta(minutes=5))
+    model_call(conn, run, 1, "0.25", harness=agent_runs.harness_key(run))
+    model_call(conn, run, 2, "0.40", status="pending", harness=agent_runs.harness_key(run))
+    model_call(conn, run, 3, "9.00", harness="someone-else")     # labelled like this run's, but another harness
+    data = run_page.read(page_conn, run, NOW)
+    assert data["spend"] == {"spent": Decimal("0.65"), "calls": 2, "pending": 1}
+    # Read through the run_id index: with sequential scans off, the plan still finds the rows by index.
+    with page_conn.transaction():
+        page_conn.execute("set local enable_seqscan = off")
+        plan = " ".join(r[0] for r in page_conn.execute(
+            "explain select sum(cost_usd) from model_calls where run_id = %s", (agent_runs.harness_key(run),)))
+    assert "model_calls_run" in plan
+
+
+def test_long_draft_calls_are_cut_on_the_page_not_in_the_record(conn, page_conn):  # noqa: F811
+    open_books(conn)
+    run = run_at(conn, NOW - timedelta(minutes=5))
+    big = desired(**{s: {"keep": True, "reason": "r" * 600} for s in TEST_SLOTS})
+    assert len(big) > 10_000
+    for n in range(15):
+        step(conn, run, n + 1, "tool_call", big, tool="preview_desired_state")
+    data = run_page.read(page_conn, run, NOW)
+    assert len(data["run"]["steps"][0]["content"]) <= run_page.SHOWN_CHARS + 200
+    assert len(run_page.html(data)) < 120_000
+    assert page_conn.execute("select max(length(content)) from agent_steps").fetchone()[0] == len(big)
+
+
+def test_parallel_previews_pair_each_reply_with_its_own_call(conn, page_conn):  # noqa: F811
+    open_books(conn)
+    run = run_at(conn, NOW - timedelta(minutes=5))
+    agent_runs.step(conn, run, 1, "tool_call", desired(**{A: {"fill_to": 8}}), tool="preview_desired_state",
+                    tool_use_id="first")
+    agent_runs.step(conn, run, 1, "tool_call", desired(**{A: {"fill_to": 9}}), tool="preview_desired_state",
+                    tool_use_id="second")
+    # The second call's reply is stored first.
+    agent_runs.step(conn, run, 1, "tool_result", json.dumps({"ok": True}), tool="preview_desired_state",
+                    tool_use_id="second")
+    agent_runs.step(conn, run, 1, "tool_result", json.dumps({"ok": False}), tool="preview_desired_state",
+                    tool_use_id="first")
+    data = run_page.read(page_conn, run, NOW)
+    assert [d["status"] for d in data["drafts"]] == ["refused", "accepted"]
+
+
+def test_an_unmigrated_database_answers_the_fixed_503(monkeypatch):
+    monkeypatch.setenv(pages.READER, "set")
+
+    def missing(*args, **kwargs):
+        raise dashboard.Missing('relation "agent_steps" does not exist')
+    monkeypatch.setattr(pages, "_connection", _fake_connection)
+    monkeypatch.setattr(run_page, "read", missing)
+    for path, kind in (("/dashboard/run/5", "text/html"), ("/dashboard/run/5.json", "application/json")):
+        reply = pages.respond(path)
+        assert reply.status == 503 and reply.content_type.startswith(kind) and "agent_steps" not in reply.body
+
+
+def _fake_connection():
+    from contextlib import contextmanager
+
+    @contextmanager
+    def opened():
+        yield None
+    return opened()
+
+
+def test_the_standalone_page_answers_503_on_an_unmigrated_database(served, monkeypatch):  # noqa: F811
+    def missing(*args, **kwargs):
+        raise dashboard.Missing('relation "agent_steps" does not exist')
+    monkeypatch.setattr(run_page, "read", missing)
+    status, _, body = get(f"{served}/run/5")
+    assert status == 503
+
+
+def test_a_refresh_page_carries_only_what_is_new(conn, page_conn):  # noqa: F811
+    open_books(conn)
+    run = run_at(conn, NOW - timedelta(minutes=5))
+    agent_runs.step(conn, run, 1, "tool_call", desired(**{A: {"fill_to": 8}}), tool="preview_desired_state",
+                    tool_use_id="u1")
+    first = run_page.read(page_conn, run, NOW)
+    page = run_page.html(first)
+    assert 'data-use="u1"' in page and ">waiting<" in page and 'data-after="0"' in page
+    # Next: u1's reply arrives, and a thought that changes nothing in the plan.
+    agent_runs.step(conn, run, 1, "tool_result", json.dumps({"ok": True}), tool="preview_desired_state",
+                    tool_use_id="u1")
+    agent_runs.step(conn, run, 2, "thinking", "next thought")
+    later = run_page.read(page_conn, run, NOW, after=first["last"])
+    assert later["drafts"] == [] and later["replies"] == [{"use": "u1", "status": "accepted"}]
+    page = run_page.html(later)
+    steps = page.split('<ol id="rp-steps">')[1].split("</ol>")[0]
+    assert "next thought" in steps and "Called" not in steps
+    assert '<div id="rp-plan" data-keep="1">' in page
+    assert '<template id="rp-replies"><li data-use="u1"><span class="pill ok">accepted</span></li></template>' in page
+    # A new draft numbers on from the ones shown and compares with the last one shown.
+    agent_runs.step(conn, run, 3, "tool_call", desired(**{A: {"fill_to": 9}}), tool="preview_desired_state",
+                    tool_use_id="u2")
+    newest = run_page.read(page_conn, run, NOW, after=later["last"])
+    assert [(d["n"], d["changes"]) for d in newest["drafts"]] == [(2, [{"slot": A, "labels": ["fill 8 to 9"]}])]

@@ -320,7 +320,7 @@ def _entry(slot: str, sku: str, fill: int, price: str, reason: str) -> dict:
     return {"slot": slot, "product": sku, "fill_to": fill, "sale_price": price, "reason": reason}
 
 
-# The demand estimate the day-one run recorded with its plan (`vending.agent.demand_forecast`): made-up units per
+# The demand estimate the day-one run recorded with its plan (`vending.agent.capture_forecast`): made-up units per
 # class day, near but not equal to what the simulation sells, so the forecast panel has misses to show.
 FORECAST = {"11": "2.40", "13": "1.20", "16": "0.90", "17": "0.80", "22": "1.00", "24": "0.90", "25": "0.70",
             "28": "0.80", "31": "1.70", "33": "1.70", "36": "0.70", "37": "3.40", "41": "1.30", "44": "0.70",
@@ -329,8 +329,8 @@ FORECAST_BASIS = "fall prior: {segment}; 0 in-stock class days of our own so far
 
 
 def forecast() -> dict:
-    return {"source": "get_machine_state", "as_of": _utc(2, 18).isoformat(),
-            "slots": [{"slot": s, "units_per_class_day": FORECAST[s],
+    return {"source": "get_machine_state", "unit": "class_day", "as_of": _utc(2, 18).isoformat(),
+            "slots": [{"slot": s, "rate": FORECAST[s],
                        "basis": FORECAST_BASIS.format(segment="fast seller" if float(FORECAST[s]) >= 1.5 else
                                                       "slow seller, low-priced")} for s, *_ in DAY_ONE]}
 
@@ -477,11 +477,14 @@ RUN_CAP_CENTS = 200
 
 
 def seed_model_calls(conn, run_id: int) -> None:
+    from vending import agent_runs
+
     for turn, cost, status in RUN_CALLS:
         conn.execute("insert into model_calls (at, purpose, label, run_id, model, key_env, status, max_tokens,"
-                     " worst_case_usd, cost_usd, recorded_by) values (%s, 'live', %s, 'demo-harness', %s,"
+                     " worst_case_usd, cost_usd, recorded_by) values (%s, 'live', %s, %s, %s,"
                      " 'VENDING_ANTHROPIC_API_KEY', %s, 16000, %s, %s, 'agent')",
-                     (_utc(9, 14, 50 + 2 * int(turn)), f"agent run {run_id} turn {turn}", MODEL, status,
+                     (_utc(9, 14, 50 + 2 * int(turn)), f"agent run {run_id} turn {turn}",
+                      agent_runs.harness_key(run_id), MODEL, status,
                       Decimal("0.41") if status == "pending" else Decimal(cost), Decimal(cost)))
 
 

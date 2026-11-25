@@ -1,24 +1,33 @@
 """One agent run, followed as it happens: `/dashboard/run/<id>` (and `/run/<id>` on `python -m vending.dashboard`).
 
-    /dashboard/run/<id>        the page; while the run says `running` its script fetches the page again
-                               every POLL_SECONDS and swaps it in (no websocket)
-    /dashboard/run/<id>.json   the same data as JSON
+    /dashboard/run/<id>             the page
+    /dashboard/run/<id>?after=<n>   the same page with only the steps after step id n, for the page's own refresh
+    /dashboard/run/<id>.json        the data as JSON (`?after=` works there too)
 
 It shows each step as `agent_steps` records it (the Runs panel's "How it decided", unfolded), the draft plans
-as the run previewed them (each `preview_desired_state` call and whether its preview accepted it), the plan the
-run recorded once it has one, the model spend so far against the run cap, and how the run ended. A finished
-run shows the same page, complete, and stops polling.
+as the run previewed them (each `preview_desired_state` call and whether its own preview accepted it), the plan
+the run recorded once it has one, the model spend so far against the run cap, and how the run ended. A finished
+run shows the same page, complete.
+
+**Refresh.** While the run says `running`, or steps are left to load, the page's script asks every
+POLL_SECONDS for the steps after the last one it has (`?after=`), at most STEP_BATCH at a time, appends them,
+adds any new drafts, updates a waiting draft's status when its reply comes in, and swaps the figures and the
+plan. No websocket. Each refresh reads the run's row, the steps after `after`, a count of all its steps, and
+at most one earlier preview call (the baseline a new draft is compared with); never the whole transcript again.
 
 Where each figure comes from:
 - **Steps**: `agent_steps`, oldest first. Reasoning is the summary the API returns, never the raw chain of
-  thought; a step marked `is_error` shows `dashboard.HIDDEN`, never its text; a failed run's `detail` too.
-- **Drafts**: the `desired` argument of each `preview_desired_state` call in the steps, after the steps are
-  scoped to our assignment, and `ok` from its reply. A call stored cut short (`agent_runs.MAX_CALL_TEXT`)
-  can't be read slot by slot and says so.
-- **Spend so far**: the sum of `model_calls.cost_usd` for the run's harness (its rows are labelled
-  `agent run <id> turn <n>`; a price lookup through the same harness shares its `run_id`). A call still
-  `pending` counts at its worst case, as the harness reserved it, so the figure can only overstate. Once the
-  run ends, `agent_runs.cost_usd` (what the harness counted) is the run's cost.
+  thought; a step marked `is_error` shows `dashboard.HIDDEN`, never its text; a failed run's `detail` too. A
+  step's text is cut to SHOWN_CHARS on the page and in the JSON; the database keeps it whole.
+- **Drafts**: the `desired` argument of each `preview_desired_state` call, after the steps are scoped to our
+  assignment, reduced to typed fields (a SKU, a whole fill, a price; a kept slot is just "keep"), and `ok` from
+  the reply with the same `tool_use_id` (migration 035). A step recorded before that has no id: its reply is
+  paired only when its turn has one preview call and one preview reply. A draft is compared with the draft
+  before it; the first, with the last live run's plan, reduced the same way.
+- **Spend so far**: the sum of `model_calls.cost_usd` for the run's harness, read by its key
+  (`agent_runs.harness_key`, through the `model_calls_run` index). A call still `pending` counts at its worst
+  case, as the harness reserved it, so the figure can only overstate. Once the run ends,
+  `agent_runs.cost_usd` (what the harness counted) is the run's cost.
 - **Cap**: `model_run_cap_cents` in `config` now (the harness's default when it isn't set). A run uses the
   cap it read when it started.
 
@@ -31,7 +40,7 @@ Reads only, in one repeatable-read, read-only transaction. No model calls.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
 from functools import partial
 from typing import Any
@@ -40,17 +49,20 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import set_json_loads
 
-from vending import dashboard
+from vending import agent_runs, dashboard, report_card
 from vending import stock as stock_mod
 from vending.harness import DEFAULT_RUN_CAP_CENTS
+from vending.replay.deciders import MAX_FILL
 from vending.slots import SlotsNotRecorded, our_slots
 
 ROUTE = "/dashboard/run/"
 DEMO_ROUTE = "/dashboard/demo/run/"
 POLL_SECONDS = 5
+STEP_BATCH = 200          # steps read per request; more load on the next refresh, straight away
+SHOWN_CHARS = 1000        # characters of one step's text on the page and in the JSON
 PREVIEW = "preview_desired_state"
 CAP_KEY = "model_run_cap_cents"
-PLAN_FIELDS = ("product", "fill_to", "sale_price", "keep", "reason")
+STEP_COLUMNS = "id, turn, at, kind, tool, content, is_error, tool_use_id"
 
 
 def parse(path: str, prefix: str) -> tuple[int, bool] | None:
@@ -65,18 +77,29 @@ def parse(path: str, prefix: str) -> tuple[int, bool] | None:
     return int(rest), as_json
 
 
+def after_of(query: str) -> int:
+    """The `after=` step id from a query string; 0 (from the start) when it is missing or not a number."""
+    from urllib.parse import parse_qs
+
+    value = parse_qs(query).get("after", ["0"])[0]
+    return int(value) if value.isdigit() and len(value) <= 18 else 0
+
+
 # --- Data ----------------------------------------------------------------------------------------
 
-def read(conn: psycopg.Connection, run_id: int, now: datetime | None = None, public: bool = True) -> dict:
-    """Everything the page shows about run `run_id`, from one consistent moment. Reads only."""
+def read(conn: psycopg.Connection, run_id: int, now: datetime | None = None, public: bool = True,
+         after: int = 0) -> dict:
+    """Everything the page shows about run `run_id`, from one consistent moment, with the steps after step id
+    `after` (at most STEP_BATCH). Reads only. Raises `dashboard.Missing` when a table or column it needs isn't
+    there (a database not yet migrated)."""
     set_json_loads(partial(json.loads, parse_float=Decimal), context=conn)
     with conn.transaction():
         conn.execute("set transaction isolation level repeatable read, read only")
         now = now or conn.execute("select transaction_timestamp()").fetchone()[0]
-        return _read(conn, run_id, now, public)
+        return _read(conn, run_id, now, public, after)
 
 
-def _read(conn: psycopg.Connection, run_id: int, now: datetime, public: bool) -> dict:
+def _read(conn: psycopg.Connection, run_id: int, now: datetime, public: bool, after: int) -> dict:
     out: dict[str, Any] = {"as_of": now, "run_id": run_id, "found": False}
     rows = dashboard._rows(conn, sql.SQL(
         "select id, started_at, finished_at, mode, model, status, {}, cost_usd, request_id, team_update, notes, plan"
@@ -101,12 +124,21 @@ def _read(conn: psycopg.Connection, run_id: int, now: datetime, public: bool) ->
         ours = ()
     assigned = (dashboard._optional(conn, "select first_read_at from slot_assignment where id = 1") if ours else None)
     assignment_at = assigned["first_read_at"] if assigned else None
-    try:
-        steps = dashboard._rows(conn, "select turn, at, kind, tool, content, is_error from agent_steps"
-                                      " where run_id = %s order by id", (run_id,))
-    except dashboard.Missing:
-        steps = []
-    previous = dashboard._optional(
+    steps = dashboard._rows(conn, f"select {STEP_COLUMNS} from agent_steps where run_id = %s and id > %s"
+                                  " order by id limit %s", (run_id, after, STEP_BATCH + 1))
+    more = len(steps) > STEP_BATCH
+    steps = steps[:STEP_BATCH]
+    counts = dashboard._rows(conn, "select count(*) as steps, coalesce(max(turn), 0) as turns,"
+                                   " count(*) filter (where kind = 'tool_call') as calls, max(at) as last_at,"
+                                   " count(*) filter (where tool = %s and kind = 'tool_call' and id <= %s) as drafts_before"
+                                   " from agent_steps where run_id = %s", (PREVIEW, after, run_id))[0]
+    # The baseline the first new draft is compared with: the last preview call already shown, else the last plan.
+    baseline = None
+    if counts["drafts_before"]:
+        baseline = dashboard._rows(conn, f"select {STEP_COLUMNS} from agent_steps where run_id = %s and tool = %s"
+                                         " and kind = 'tool_call' and id <= %s order by id desc limit 1",
+                                   (run_id, PREVIEW, after))[0]
+    previous = None if baseline is not None else dashboard._optional(
         conn, "select plan from agent_runs where mode = 'live' and plan is not null"
               " and (started_at, id) < (%s, %s) order by started_at desc, id desc limit 1",
         (run["started_at"], run_id))
@@ -116,32 +148,42 @@ def _read(conn: psycopg.Connection, run_id: int, now: datetime, public: bool) ->
     # The error text of a failed run or step never leaves the database (`dashboard.hide_errors`).
     if run["status"] == "failed" and run["detail"]:
         run["detail"] = dashboard.HIDDEN
-    for step in steps:
+    for step in (*steps, *([baseline] if baseline else [])):
         if step["is_error"]:
             step["content"] = dashboard.HIDDEN
     old = dashboard._older_assignment(run["started_at"], assignment_at)
     dashboard.scope_run(run, set(ours), assignment_at)
+    if baseline is not None and not old:
+        holder = {"started_at": run["started_at"], "status": run["status"], "detail": None, "steps": [baseline]}
+        dashboard.scope_run(holder, set(ours), assignment_at)
+        start = _desired(holder["steps"][0]["content"]) if holder["steps"] else None
+    else:
+        start = previous["plan"] if previous else None
+    drafts, replies = ([], []) if old else _drafts(run["steps"], start, ours, counts["drafts_before"])
+    for step in run["steps"]:
+        if len(step["content"]) > SHOWN_CHARS:
+            step["content"] = (step["content"][:SHOWN_CHARS]
+                               + f"\n... {len(step['content']):,} characters in all; the database keeps the whole text")
     out.update(
-        run=run, opened_at=opened, before_opening=opened is None or run["started_at"] < opened,
-        last_step_at=max((s["at"] for s in steps), default=None) if run["steps"] else None,
-        spend=_spend(conn, run_id), cap=_cap(conn),
-        drafts=[] if old else _drafts(run["steps"], None if previous is None else previous["plan"], ours),
-        plan=None if old else _scope_plan(plan, ours),
+        run=run, after=after, more=more, last=steps[-1]["id"] if steps else after,
+        counts={"steps": counts["steps"], "turns": counts["turns"], "calls": counts["calls"]},
+        opened_at=opened, before_opening=opened is None or run["started_at"] < opened,
+        last_step_at=None if old else counts["last_at"], spend=_spend(conn, run_id), cap=_cap(conn),
+        drafts=drafts, replies=replies, plan=None if old else _scope_plan(plan, ours),
     )
     return out
 
 
 def _spend(conn: psycopg.Connection, run_id: int) -> dict | None:
-    """What the run's model calls cost so far (`model_calls`), or None when that table can't be read."""
+    """What the run's model calls cost so far (`model_calls`, by the harness's key), or None when that table
+    can't be read."""
     try:
-        row = dashboard._optional(
+        return dashboard._optional(
             conn, "select coalesce(sum(cost_usd), 0) as spent, count(*) as calls,"
-                  " count(*) filter (where status = 'pending') as pending"
-                  " from model_calls where run_id in (select run_id from model_calls where label like %s)",
-            (f"agent run {int(run_id)} turn %",))
+                  " count(*) filter (where status = 'pending') as pending from model_calls where run_id = %s",
+            (agent_runs.harness_key(run_id),))
     except dashboard.Missing:
         return None
-    return row
 
 
 def _cap(conn: psycopg.Connection) -> dict:
@@ -153,16 +195,37 @@ def _cap(conn: psycopg.Connection) -> dict:
     return {"usd": None if cents is None else Decimal(cents) / 100, "set": row is not None}
 
 
+def _typed(entry: dict) -> dict:
+    """A plan entry's fields as the page may show them: a catalog SKU, a whole fill, a shelf price. A kept slot
+    is only "keep": the price or fill it carries doesn't apply. Anything else is left out, so no text rides
+    along (`report_card.validate_plan`'s rules)."""
+    if entry.get("keep") is True:
+        return {"keep": True}
+    out: dict[str, Any] = {}
+    product = entry.get("product")
+    if isinstance(product, str) and report_card._SKU.fullmatch(product):
+        out["product"] = product
+    fill = entry.get("fill_to")
+    if isinstance(fill, int) and not isinstance(fill, bool) and 0 <= fill <= MAX_FILL:
+        out["fill_to"] = fill
+    price = report_card._price_text(entry.get("sale_price")) if entry.get("sale_price") is not None else None
+    if price is not None:
+        out["sale_price"] = price
+    return out
+
+
 def _slots(plan: Any, ours: tuple[str, ...]) -> list[dict] | None:
-    """A plan's entries for our slots, in our order, with the fields the page shows; None if it isn't a plan."""
+    """A plan's entries for our slots, in our order, typed (`_typed`), with each reason scoped to our
+    assignment; None if it isn't a plan."""
     if not isinstance(plan, dict) or not isinstance(plan.get("slots"), list):
         return None
     by_slot = {str(e.get("slot")): e for e in plan["slots"] if isinstance(e, dict)}
     out = []
     for slot in ours:
         if slot in by_slot:
-            entry = {k: by_slot[slot][k] for k in PLAN_FIELDS if k in by_slot[slot]}
-            out.append({"slot": slot, **dashboard._scope_text(entry, set(ours))})
+            reason = by_slot[slot].get("reason")
+            out.append({"slot": slot, **_typed(by_slot[slot]),
+                        "reason": dashboard._scope_text(reason, set(ours)) if isinstance(reason, str) else None})
     return out
 
 
@@ -175,33 +238,55 @@ def _scope_plan(plan: Any, ours: tuple[str, ...]) -> dict | None:
             else "scheduled", "reason": dashboard._scope_text(reason, set(ours)), "slots": slots}
 
 
-def _drafts(steps: list[dict], previous: Any, ours: tuple[str, ...]) -> list[dict]:
-    """Each `preview_desired_state` call, oldest first: its plan for our slots, what moved from the draft
-    before it (the first, from the last live plan), and whether its preview accepted it."""
-    out, before = [], previous
-    for i, step in enumerate(steps):
-        if step["kind"] != "tool_call" or step["tool"] != PREVIEW:
-            continue
-        reply = next((s for s in steps[i + 1:] if s["kind"] == "tool_result" and s["tool"] == PREVIEW), None)
-        draft = {"turn": step["turn"], "at": step["at"], "status": _preview_status(reply), "slots": None,
-                 "changes": [], "unreadable": None}
-        try:
-            desired = json.loads(step["content"], parse_float=Decimal)
-        except ValueError:
-            desired, draft["unreadable"] = None, "arguments not readable (stored cut short, or omitted)"
-        else:
-            desired = desired.get("desired") if isinstance(desired, dict) else None
+def _desired(content: str) -> Any:
+    try:
+        value = json.loads(content, parse_float=Decimal)
+    except ValueError:
+        return None
+    return value.get("desired") if isinstance(value, dict) else None
+
+
+def _changes(draft: list[dict], before: list[dict] | None, ours: tuple[str, ...]) -> list[dict]:
+    """What a draft moved from `before`, from typed entries only (`_typed`)."""
+    if before is None:
+        return []
+    strip = lambda rows: {"slots": [{k: v for k, v in r.items() if k != "reason"} for r in rows]}  # noqa: E731
+    return dashboard._plan_changes(strip(draft), strip(before), None, ours)
+
+
+def _drafts(steps: list[dict], start: Any, ours: tuple[str, ...], numbered: int) -> tuple[list[dict], list[dict]]:
+    """The preview calls among `steps`, oldest first, numbered after the `numbered` already shown, each compared
+    with the draft before it (the first with `start`); and the status of each preview reply among `steps`, by
+    tool-use id, for a draft already shown whose reply came later."""
+    results = [s for s in steps if s["kind"] == "tool_result" and s["tool"] == PREVIEW]
+    calls = [s for s in steps if s["kind"] == "tool_call" and s["tool"] == PREVIEW]
+    by_id = {s["tool_use_id"]: s for s in results if s.get("tool_use_id")}
+    before = _slots(start, ours) if start is not None else None
+    drafts = []
+    for n, call in enumerate(calls, numbered + 1):
+        use = call.get("tool_use_id")
+        if use:
+            reply = by_id.get(use)
+        else:   # recorded before migration 035: pair only when the turn can't be confused
+            same_turn = [r for r in results if r["turn"] == call["turn"] and not r.get("tool_use_id")]
+            alone = sum(1 for c in calls if c["turn"] == call["turn"]) == 1
+            reply = same_turn[0] if alone and len(same_turn) == 1 else None
+        draft = {"n": n, "turn": call["turn"], "at": call["at"], "use": use, "status": _preview_status(reply),
+                 "slots": None, "changes": [], "unreadable": None}
+        desired = _desired(call["content"])
         slots = _slots(desired, ours)
         if slots is None:
-            draft["unreadable"] = draft["unreadable"] or "no desired state in the arguments"
+            draft["unreadable"] = ("arguments not readable (stored cut short, or omitted)" if desired is None
+                                   else "no desired state in the arguments")
         else:
-            draft["slots"] = slots
-            draft["visit"] = "midweek" if desired.get("off_cycle") else "scheduled"
-            if before is not None:
-                draft["changes"] = dashboard._plan_changes(desired, before, None, ours)
-            before = desired
-        out.append(draft)
-    return out
+            draft.update(slots=slots, visit="midweek" if desired.get("off_cycle") else "scheduled",
+                         changes=_changes(slots, before, ours))
+            before = slots
+        drafts.append(draft)
+    shown = {c.get("tool_use_id") for c in calls}
+    replies = [{"use": r["tool_use_id"], "status": _preview_status(r)} for r in results
+               if r.get("tool_use_id") and r["tool_use_id"] not in shown]
+    return drafts, replies
 
 
 def _preview_status(reply: dict | None) -> str:
@@ -231,9 +316,11 @@ def running(data: dict) -> bool:
 
 
 def html(data: dict, *, nav: tuple[tuple[str, str], ...] = (), json_href: str = "", demo: bool = False) -> str:
-    """The page. While the run is in progress (and not in the demo) its script polls the page itself."""
+    """The page, or with `data["after"]` its refresh: only the steps and drafts after that step. While the run is
+    in progress, or steps are left to load (and not in the demo), its script asks for the next ones."""
     links = "".join(f' &middot; <a href="{_e(href)}">{_e(label)}</a>' for label, href in nav)
     live = running(data) and not demo
+    more = bool(data.get("more")) and not demo
     head = (f'<header class="top"><h1>Run #{int(data["run_id"])}</h1><span class="meta">Read-only &middot; as of '
             f'{_time(data["as_of"], "etday")} &middot; <span id="live">'
             + ("fixed snapshot" if demo else f"checks every {POLL_SECONDS} s" if live else "not polling")
@@ -247,14 +334,17 @@ def html(data: dict, *, nav: tuple[tuple[str, str], ...] = (), json_href: str = 
     banner = (f'<div class="demo-banner" role="note">{_e(dashboard.DEMO_BANNER)}<a href="{dashboard.DEMO_LIVE_HREF}">'
               f'{dashboard.DEMO_LIVE_HREF}</a></div>' if demo else "")
     status = data["run"]["status"] if data.get("shown") else "not found"
-    reload = (f'<noscript><meta http-equiv="refresh" content="{POLL_SECONDS}"></noscript>' if live else "")
+    reload = f'<noscript><meta http-equiv="refresh" content="{POLL_SECONDS}"></noscript>' if live else ""
+    marks = (f' data-last="{int(data["last"])}" data-after="{int(data["after"])}" data-more="{int(more)}"'
+             if data.get("shown") else "")
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
             + ('<meta name="robots" content="noindex">' if demo else "") + reload
             + f'<title>{dashboard.DEMO_TITLE if demo else ""}Run #{int(data["run_id"])} &middot; {_e(status)}'
             f' &middot; Agent dashboard</title><style>{dashboard.STYLE}{STYLE}</style></head><body>{banner}'
-            f'<main data-run="{int(data["run_id"])}" data-running="{int(live)}">{head}{body}</main>'
-            + (f'<script>{SCRIPT % (POLL_SECONDS * 1000, json.dumps(dashboard.visits.REFRESH_HEADER))}</script>' if live else "")
+            f'<main data-run="{int(data["run_id"])}" data-running="{int(live)}"{marks}>{head}{body}</main>'
+            + (f'<script>{SCRIPT % (POLL_SECONDS * 1000, json.dumps(dashboard.visits.REFRESH_HEADER))}</script>'
+               if live or more else "")
             + '</body></html>')
 
 
@@ -264,7 +354,7 @@ def _fig(label: str, value: str, sub: str = "", tone: str = "") -> str:
 
 
 def _run_html(data: dict) -> str:
-    run, now = data["run"], data["as_of"]
+    run, now, counts = data["run"], data["as_of"], data["counts"]
     end = run["finished_at"] or now
     pills = [dashboard._run_pill(run)]
     if data["before_opening"]:
@@ -274,7 +364,7 @@ def _run_html(data: dict) -> str:
         _fig("Started", _time(run["started_at"], "etday"),
              ("ran " if run["finished_at"] else "running ") + _span(end - run["started_at"])),
         _spend_fig(data),
-        _fig("Steps", str(len(run["steps"])),
+        _fig("Steps", str(int(counts["steps"])),
              f'last {_time(data["last_step_at"], "ago", now)}' if data["last_step_at"] else "none yet"),
     ]
     if run["finished_at"]:
@@ -288,9 +378,13 @@ def _run_html(data: dict) -> str:
     for label, text in (("Update", run["team_update"]), ("Notes", run["notes"])):
         if text:
             ended += f'<p class="rp-detail"><span class="label">{label}</span> {_e(text)}</p>'
-    steps = (dashboard._steps_html(run["id"], run["steps"], open_=True) if run["steps"]
-             else '<p class="empty">No steps recorded yet.</p>')
-    return (f'<section class="rp-top"><div class="rp-figs">{"".join(figs)}</div>{ended}</section>'
+    summary = (f'<summary id="rp-summary">How it decided: {dashboard._plural(int(counts["turns"]), "turn")}, '
+               f'{dashboard._plural(int(counts["calls"]), "tool call")}</summary>')
+    steps = (f'<details class="steps" open data-key="steps-{int(run["id"])}">{summary}'
+             f'<ol id="rp-steps">{"".join(dashboard.step_items(run["steps"]))}</ol></details>')
+    if not counts["steps"]:
+        steps = f'<p class="empty" id="rp-none">No steps recorded yet.</p>{steps}'
+    return (f'<section class="rp-top" id="rp-top"><div class="rp-figs">{"".join(figs)}</div>{ended}</section>'
             f'<div class="grid2"><section id="steps"><h2>Steps</h2>{steps}</section>'
             f'<section id="plan"><h2>Plan</h2>{_plan_html(data)}</section></div>')
 
@@ -330,61 +424,83 @@ def _plan_table(slots: list[dict], changed: frozenset[str] = frozenset()) -> str
             f'<th scope="col">Reason</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>')
 
 
-def _plan_html(data: dict) -> str:
-    plan, drafts = data["plan"], data["drafts"]
-    out = []
-    if plan is not None:
-        out.append(f'<p class="sub">recorded &middot; {_e(plan["visit"])} visit'
-                   + (f' &middot; {_e(plan["reason"])}' if plan["reason"] else "") + '</p>')
-        out.append(_plan_table(plan["slots"]))
-    elif drafts and drafts[-1]["slots"] is not None:
-        last = drafts[-1]
-        out.append(f'<p class="sub">latest draft &middot; turn {int(last["turn"])} &middot; '
-                   f'{_pill(last["status"], _DRAFT_TONE[last["status"]])}</p>')
-        out.append(_plan_table(last["slots"], frozenset(c["slot"] for c in last["changes"])))
+def _draft_item(d: dict) -> str:
+    if d["slots"] is None:
+        moved = f'<span class="dim">{_e(d["unreadable"])}</span>'
+    elif d["changes"]:
+        moved = "".join(_pill(f'{c["slot"]} {lab}', dashboard._change_tone(lab)) for c in d["changes"] for lab in c["labels"])
     else:
-        out.append('<p class="empty">No plan yet.</p>')
-    if drafts:
-        items = []
-        for n, d in enumerate(drafts, 1):
-            if d["slots"] is None:
-                moved = f'<span class="dim">{_e(d["unreadable"])}</span>'
-            elif d["changes"]:
-                moved = "".join(_pill(f'{c["slot"]} {lab}', dashboard._change_tone(lab))
-                                for c in d["changes"] for lab in c["labels"])
-            else:
-                moved = '<span class="dim">no slot changes</span>'
-            items.append(f'<li><b>Draft {n}</b> &middot; turn {int(d["turn"])} &middot; {_time(d["at"], "etclock")} '
-                         f'{_pill(d["status"], _DRAFT_TONE[d["status"]])}<div class="chips">{moved}</div></li>')
-        out.append(f'<h3>Drafts ({len(drafts)})</h3><ol class="rp-drafts">{"".join(items)}</ol>')
-    return "".join(out)
+        moved = '<span class="dim">no slot changes</span>'
+    use = f' data-use="{_e(d["use"])}"' if d["use"] else ""
+    return (f'<li{use}><b>Draft {int(d["n"])}</b> &middot; turn {int(d["turn"])} &middot; {_time(d["at"], "etclock")} '
+            f'{_pill(d["status"], _DRAFT_TONE[d["status"]])}<div class="chips">{moved}</div></li>')
 
 
-# Polls while the run is in progress: fetch this page, swap <main> in, keep open <details> and the scroll.
-# Stops when the page says the run is over. A failed fetch says so and tries again.
+def _plan_html(data: dict) -> str:
+    """The recorded plan, else the latest readable draft in this batch; on a refresh with neither, a marker
+    that tells the page to keep the plan it shows."""
+    plan, drafts = data["plan"], data["drafts"]
+    readable = [d for d in drafts if d["slots"] is not None]
+    if plan is not None:
+        top = (f'<p class="sub">recorded &middot; {_e(plan["visit"])} visit'
+               + (f' &middot; {_e(plan["reason"])}' if plan["reason"] else "") + '</p>' + _plan_table(plan["slots"]))
+        current = f'<div id="rp-plan">{top}</div>'
+    elif readable:
+        last = readable[-1]
+        top = (f'<p class="sub">latest draft &middot; turn {int(last["turn"])} &middot; '
+               f'{_pill(last["status"], _DRAFT_TONE[last["status"]])}</p>'
+               + _plan_table(last["slots"], frozenset(c["slot"] for c in last["changes"])))
+        current = f'<div id="rp-plan">{top}</div>'
+    elif data["after"]:
+        current = '<div id="rp-plan" data-keep="1"></div>'
+    else:
+        current = '<div id="rp-plan"><p class="empty">No plan yet.</p></div>'
+    replies = "".join(f'<li data-use="{_e(r["use"])}">{_pill(r["status"], _DRAFT_TONE[r["status"]])}</li>'
+                      for r in data["replies"])
+    return (current + f'<h3>Drafts</h3><ol class="rp-drafts" id="rp-drafts">{"".join(map(_draft_item, drafts))}</ol>'
+            + f'<template id="rp-replies">{replies}</template>')
+
+
+# The page's refresh: ask for the steps after the last one shown, append them and any new drafts, put each late
+# preview reply's status on its draft, and swap the figures, the step summary and the plan. Stops once the run has
+# ended and nothing is left to load. A failed fetch says so and tries again.
 SCRIPT = """(function () {
   var every = %d, header = %s;
-  function openKeys(root) {
-    var keys = [];
-    root.querySelectorAll('details[data-key]').forEach(function (d) { if (!d.open) keys.push(d.dataset.key); });
-    return keys;
+  function swap(next, id) {
+    var here = document.getElementById(id), there = next.querySelector('#' + id);
+    if (here && there) here.replaceWith(there);
+  }
+  function append(next, id) {
+    var here = document.getElementById(id), there = next.querySelector('#' + id);
+    if (here && there) while (there.firstChild) here.appendChild(there.firstChild);
   }
   function tick() {
-    var main = document.querySelector('main'), headers = {};
+    var main = document.querySelector('main[data-run]'), headers = {};
     headers[header] = '1';
-    fetch(location.pathname + location.search, {headers: headers, cache: 'no-store', credentials: 'same-origin'})
+    fetch(location.pathname + '?after=' + main.dataset.last, {headers: headers, cache: 'no-store', credentials: 'same-origin'})
       .then(function (r) { if (!r.ok) throw new Error(String(r.status)); return r.text(); })
       .then(function (text) {
-        var next = new DOMParser().parseFromString(text, 'text/html').querySelector('main[data-run]');
+        var doc = new DOMParser().parseFromString(text, 'text/html');
+        var next = doc.querySelector('main[data-run]');
         if (!next) throw new Error('signed out');
-        var closed = openKeys(main), y = window.scrollY;
-        next.querySelectorAll('details[data-key]').forEach(function (d) {
-          if (closed.indexOf(d.dataset.key) >= 0) d.open = false;
+        if (next.dataset.after !== main.dataset.last) throw new Error('out of step');
+        swap(next, 'rp-top'); swap(next, 'rp-summary'); append(next, 'rp-steps'); append(next, 'rp-drafts');
+        if (next.querySelector('#rp-steps li')) { var none = document.getElementById('rp-none'); if (none) none.remove(); }
+        var late = next.querySelector('#rp-replies');
+        if (late) late.content.querySelectorAll('li[data-use]').forEach(function (u) {
+          document.querySelectorAll('#rp-drafts li[data-use]').forEach(function (li) {
+            var pill = li.querySelector(':scope > .pill');
+            if (li.dataset.use === u.dataset.use && pill) pill.outerHTML = u.innerHTML;
+          });
         });
-        main.replaceWith(next);
-        document.title = new DOMParser().parseFromString(text, 'text/html').title || document.title;
-        window.scrollTo(0, y);
-        if (next.dataset.running === '1') setTimeout(tick, every);
+        var plan = next.querySelector('#rp-plan');
+        if (plan && !plan.hasAttribute('data-keep')) swap(next, 'rp-plan');
+        swap(next, 'live');
+        main.dataset.last = next.dataset.last; main.dataset.running = next.dataset.running;
+        main.dataset.more = next.dataset.more;
+        document.title = doc.title || document.title;
+        if (next.dataset.more === '1') setTimeout(tick, 0);
+        else if (next.dataset.running === '1') setTimeout(tick, every);
       })
       .catch(function (error) {
         var live = document.getElementById('live');
@@ -392,7 +508,8 @@ SCRIPT = """(function () {
         setTimeout(tick, every);
       });
   }
-  setTimeout(tick, every);
+  var main = document.querySelector('main[data-run]');
+  setTimeout(tick, main && main.dataset.more === '1' ? 0 : every);
 })();"""
 
 STYLE = """
