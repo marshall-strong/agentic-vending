@@ -16,6 +16,8 @@ from fractions import Fraction
 
 from tests.conftest import TEST_SLOTS
 from vending.planner import (
+    MAX_NAME,
+    PULL_UNKNOWN,
     BACK_STOCK,
     PURCHASE,
     RESTOCK,
@@ -832,6 +834,63 @@ class Directive(unittest.TestCase):
                       shopping)
         self.assertIn("only if BJs is unavailable or over its max", shopping)
         self.assertIn(MTDEW_URL, shopping)
+
+
+def _row(directive: str, slot: str) -> list[str]:
+    """One slot's row of the directive table, split into its cells as the simulator reads them."""
+    import re
+    return next(re.split(r"\s{2,}", ln.strip()) for ln in directive.splitlines()
+                if ln.startswith(slot + " ") and "Visit" not in ln)
+
+
+def _named(**names) -> tuple[CatalogProduct, ...]:
+    return tuple(replace(c, name=names.get(c.product)) for c in CATALOG)
+
+
+class DirectiveNames(unittest.TestCase):
+    """#88: the worker reads the catalog's name, with the SKU beside it, and knows what to pull."""
+
+    def test_catalog_name_with_the_sku_beside_it(self):
+        state = replace(current(), catalog=_named(**{MTDEW: "Mountain Dew 20oz", COKE: "Coca-Cola 20oz"}))
+        p = plan_restock(state, desired(restock_15(), pickle_17()), CONFIG, TUESDAY)
+        self.assertTrue(p.ok, p.refusals)
+        self.assertEqual(_row(p.directive, "15")[2], "Mountain Dew 20oz (MTDEW-20OZ)")
+        self.assertIn("  Mountain Dew 20oz (MTDEW-20OZ): 1 x 24-pack", p.directive.split("Shopping list")[1])
+        # The product pulled is named too; one with no name in the catalog keeps its SKU alone.
+        self.assertEqual(_row(p.directive, "17")[2], PICKLE)
+        self.assertEqual(_row(p.directive, "17")[-1], "10 Coca-Cola 20oz (COKE-20OZ) to closet")
+        # A kept slot is named as well.
+        self.assertEqual(_row(p.directive, "16")[2], "Coca-Cola 20oz (COKE-20OZ)")
+
+    def test_sku_alone_when_the_catalog_has_no_name(self):
+        for catalog in (CATALOG, _named(**{MTDEW: "  \n "}), _named(**{MTDEW: MTDEW})):
+            p = plan_restock(replace(current(), catalog=catalog), desired(restock_15()), CONFIG, TUESDAY)
+            self.assertEqual(_row(p.directive, "15")[2], MTDEW)
+            self.assertIn(f"  {MTDEW}: 1 x 24-pack", p.directive)
+
+    def test_a_long_or_spaced_name_stays_one_compact_cell(self):
+        state = replace(current(), catalog=_named(**{MTDEW: "Mountain   Dew\tCode Red Limited Edition Extra Long Name 20oz"}))
+        p = plan_restock(state, desired(restock_15()), CONFIG, TUESDAY)
+        cell = _row(p.directive, "15")[2]
+        self.assertTrue(cell.startswith("Mountain Dew Code Red") and cell.endswith(f"... ({MTDEW})"), cell)
+        self.assertLessEqual(len(cell), MAX_NAME + len(MTDEW) + 3)
+        # The simulator's worker still reads the load from the table.
+        from vending.simulate.bridge import directive_loads
+        self.assertEqual(directive_loads(p.directive, TEST_SLOTS)["15"], 6)
+
+    def test_an_unknown_slot_being_swapped_is_emptied_to_the_closet(self):
+        unknown = SlotState("17", None, None, 0, None, contents_known=False)
+        p = plan(pickle_17(), slots={"17": unknown})
+        self.assertTrue(p.ok, p.refusals)
+        self.assertEqual(_row(p.directive, "17")[-1], PULL_UNKNOWN)
+        # Stock no receipt names is unknown too.
+        p = plan(pickle_17(), slots={"17": SlotState("17", None, None, 3, None)})
+        self.assertEqual(_row(p.directive, "17")[-1], PULL_UNKNOWN)
+
+    def test_a_known_empty_slot_or_a_restock_pulls_nothing(self):
+        p = plan(restock_15(), pickle_17(), slots={"17": SlotState("17", COKE, 200, 0, 125)})
+        self.assertEqual(_row(p.directive, "17")[-1], "-")
+        self.assertEqual(_row(p.directive, "15")[-1], "-")
 
 
 class Inputs(unittest.TestCase):
