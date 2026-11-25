@@ -181,6 +181,16 @@ class CantCompute(RuntimeError):
     """A figure can't be worked out from our records, so nothing is sent."""
 
 
+class NotLoaded(CantCompute):
+    """The only reason the figures can't be worked out: no counted receipt has loaded `slots` (a day-one line that
+    came back unavailable, say), so what is in them isn't known. Nothing is sent and nothing is guessed. The daily
+    job records the round as a skip until they are loaded (#254)."""
+
+    def __init__(self, message: str, slots: tuple[str, ...]):
+        super().__init__(message)
+        self.slots = slots
+
+
 class AlreadyChecked(RuntimeError):
     """Today's check is used, or may be, so a second send is refused."""
 
@@ -365,18 +375,25 @@ def _figures(conn: psycopg.Connection, as_of: str | None) -> Figures:
     counted = stock.stock(conn, until=at, polls_to_until=True)
     by_slot = {c.slot: c for c in counted.slots}
     unknown = [slot for slot in slots if slot not in by_slot]
-    if unknown:
-        raise CantCompute(f"No counted receipt has loaded slots {', '.join(unknown)}, so what is in them "
-                          "isn't known. Nothing was sent.")
     ranged = [f"{slot} ({by_slot[slot].units} to {by_slot[slot].at_most})" for slot in slots
-              if by_slot[slot].at_most is not None and by_slot[slot].at_most != by_slot[slot].units]
-    if ranged:
-        raise CantCompute("These slots' counts are a range, because sales across a product change couldn't "
-                          f"be split: {', '.join(ranged)}. Nothing was sent.")
+              if slot in by_slot and by_slot[slot].at_most is not None
+              and by_slot[slot].at_most != by_slot[slot].units]
     back = {c.product: c.units for c in counted.closet if c.units}
     negative = [f"{sku} ({units})" for sku, units in back.items() if units < 0]
+    # Every reason at once, so an unloaded slot is the skip's reason (`NotLoaded`) only when it is the only one.
+    reasons = []
+    if unknown:
+        reasons.append(f"No counted receipt has loaded slots {', '.join(unknown)}, so what is in them isn't known.")
+    if ranged:
+        reasons.append("These slots' counts are a range, because sales across a product change couldn't be split: "
+                       f"{', '.join(ranged)}.")
     if negative:
-        raise CantCompute(f"The closet count is below zero for {', '.join(negative)}. Nothing was sent.")
+        reasons.append(f"The closet count is below zero for {', '.join(negative)}.")
+    if reasons:
+        message = " ".join(reasons) + " Nothing was sent."
+        if unknown and len(reasons) == 1:
+            raise NotLoaded(message, tuple(unknown))
+        raise CantCompute(message)
     ours = set(slots)
     # Only warnings about our slots or the closet: the others may name a selection that isn't ours.
     warnings = tuple(str(w) for w in counted.warnings
