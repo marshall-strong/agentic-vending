@@ -1,5 +1,5 @@
 """The dashboard's plan history: one card per week (Saturday to Friday, Eastern, the ledger's weeks), newest first,
-the last `WEEKS_SHOWN`, from the ledger's opening.
+the last `WEEKS_SHOWN`, from the ledger's real opening (`ledger.real_opening`: never the 11 Nov test opening).
 
 Each card holds the week's plans and every update to them:
 
@@ -13,7 +13,8 @@ Each card holds the week's plans and every update to them:
   day-one fill), what it was and what it is now (product, price, fill), the agent's reason, and **the inputs the run
   read for that slot**: each tool call in `agent_steps` whose arguments name the slot or the product it held or
   takes, with the reply. Nothing is inferred: a reason that cites nothing is shown as it is, and a slot no call named
-  lists no inputs. The run's other calls are listed by tool name.
+  lists no inputs. The run's other calls are listed by tool name. Replies are matched to calls by turn
+  (`_calls`), and a call whose arguments name a selection outside our assignment anywhere is never matched or shown.
 - **The report card of the week before** (the snapshot's `report_cards`), as the report card graded it.
 - Runs that left no plan (failed, halted, still running) by number.
 
@@ -69,7 +70,7 @@ def read(conn: psycopg.Connection, now: datetime, ours: tuple[str, ...], assignm
          old_text: str, cards: list[dict] | None = None) -> dict:
     """The panel's data. `ours` is the stored assignment the snapshot read; `assignment_at` when it was first read
     (text from runs before it is replaced by `old_text`); `cards` the snapshot's report cards, when they read."""
-    opened = ledger.opening(conn)
+    opened = ledger.real_opening(conn)        # never the 11 Nov test opening
     if opened is None or opened.at > now:
         return {"opened": False, "opens_at": opened.at if opened else None, "weeks": []}
     zone = _eastern()
@@ -91,7 +92,7 @@ def read(conn: psycopg.Connection, now: datetime, ours: tuple[str, ...], assignm
     if fill and fill.get("request_id"):
         request_ids.append(fill["request_id"])
     requests = _requests(conn, request_ids)
-    steps = _steps(conn, [r["id"] for r in runs if r["plan"] is not None])
+    steps = _steps(conn, [r["id"] for r in runs if r["plan"] is not None], assignment_at)
 
     from vending import dashboard as d   # here: the dashboard imports this module
 
@@ -115,7 +116,7 @@ def read(conn: psycopg.Connection, now: datetime, ours: tuple[str, ...], assignm
             "visit": plan.get("visit"), "reason": old_text if older and plan.get("reason") else plan.get("reason"),
             "update": None if older else run["team_update"], "notes": None if older else run["notes"],
             "compared_with": base[0] if base else None, "changes": changes,
-            "other_calls": [] if older else _other_calls(steps.get(run["id"], []), changes),
+            "other_calls": [] if older else _other_calls(steps.get(run["id"], []), changes, set(ours)),
             "request": requests.get(run["request_id"]) if run["request_id"] else None,
             "request_id": run["request_id"]})
         base = (f"#{run['id']}", now_slots)
@@ -191,11 +192,16 @@ def _requests(conn: psycopg.Connection, ids: list[str]) -> dict[str, dict]:
         "select request_id, submitted_at, off_cycle, status, total_paid, visit_fee_cents, request_body"
         " from purchase_requests where request_id = any(%s)", (list(set(ids)),)).fetchall()
     out = {}
+    configured = _configured_fee(conn)
     for r in rows:
-        fee = r["visit_fee_cents"] if r["off_cycle"] and isinstance(r["visit_fee_cents"], int) else None
-        most, unpriced = money_panel._worst_case(r["request_body"])
+        # A midweek visit's fee: the one stored on the request, else the configured fee, as the ledger charges it
+        # (`ledger.visit_times`) and the money panel commits it.
+        fee = None
         if r["off_cycle"]:
-            most += fee if fee is not None else ledger.DEFAULT_MIDWEEK_FEE_CENTS
+            stored = r["visit_fee_cents"]
+            fee = stored if isinstance(stored, int) and not isinstance(stored, bool) else configured
+        most, unpriced = money_panel._worst_case(r["request_body"])
+        most += fee or 0
         out[r["request_id"]] = {
             "id": r["request_id"], "submitted_at": r["submitted_at"], "status": r["status"],
             "off_cycle": r["off_cycle"],
@@ -205,15 +211,27 @@ def _requests(conn: psycopg.Connection, ids: list[str]) -> dict[str, dict]:
     return out
 
 
-def _steps(conn: psycopg.Connection, run_ids: list[int]) -> dict[int, list[dict]]:
-    """Each run's tool calls and replies, oldest first. Empty before migration 014 adds `agent_steps`."""
-    if not run_ids:
+def _configured_fee(conn: psycopg.Connection) -> int:
+    """`config.midweek_fee_cents`, else the ledger's default, as `ledger.visit_times` reads it."""
+    from vending import config
+
+    fee = config.get_value(conn, "midweek_fee_cents", ledger.DEFAULT_MIDWEEK_FEE_CENTS)
+    return fee if isinstance(fee, int) and not isinstance(fee, bool) and fee >= 0 else ledger.DEFAULT_MIDWEEK_FEE_CENTS
+
+
+def _steps(conn: psycopg.Connection, run_ids: list[int], assignment_at: datetime | None) -> dict[int, list[dict]]:
+    """Each run's tool calls and replies, oldest first, for runs started under the current assignment only (the
+    filter is in the query). Empty before migration 014 adds `agent_steps`. A step marked `is_error` comes back
+    without its content: a failure's text is never read."""
+    if not run_ids or assignment_at is None:
         return {}
     try:
         with conn.transaction():
             rows = conn.cursor(row_factory=dict_row).execute(
-                "select run_id, kind, tool, content, is_error from agent_steps where run_id = any(%s)"
-                " and kind in ('tool_call', 'tool_result') order by run_id, id", (run_ids,)).fetchall()
+                "select s.run_id, s.turn, s.kind, s.tool, case when s.is_error then null else s.content end as content,"
+                " s.is_error from agent_steps s join agent_runs r on r.id = s.run_id"
+                " where s.run_id = any(%s) and r.started_at >= %s and s.kind in ('tool_call', 'tool_result')"
+                " order by s.run_id, s.id", (run_ids, assignment_at)).fetchall()
     except (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
         return {}
     out: dict[int, list[dict]] = {}
@@ -222,36 +240,80 @@ def _steps(conn: psycopg.Connection, run_ids: list[int]) -> dict[int, list[dict]
     return out
 
 
-def _calls(steps: list[dict]) -> list[dict]:
-    """Each tool call with the reply that followed it."""
+def _calls(steps: list[dict], ours: set[str]) -> list[dict]:
+    """Each tool call with its reply. The agent records a turn's calls, then their replies in the same order
+    (`vending.agent`), and a run's start-up reads (`get_briefing`, `check_submissions`) as replies with no call before
+    the model's first calls: so within a turn, the k-th reply of a tool after the turn's first call answers its k-th
+    call. A call whose arguments name a selection outside `ours` anywhere (the dashboard's own filter,
+    `dashboard._scope_payload`) is marked `outside` and never shown or matched; a failed call or reply keeps no
+    content."""
+    from vending import dashboard as d
+
     out: list[dict] = []
+    by_turn: dict[int, dict[str, list[dict]]] = {}
     for step in steps:
+        turn = by_turn.setdefault(step["turn"], {})
         if step["kind"] == "tool_call":
-            try:
-                args = json.loads(step["content"], parse_float=Decimal)
-            except ValueError:
-                args = None
-            out.append({"tool": step["tool"], "args": args if isinstance(args, dict) else {}, "reply": None,
-                        "failed": False, "replied": False})
-        elif out and not out[-1]["replied"] and out[-1]["tool"] == step["tool"]:
-            out[-1].update(reply=None if step["is_error"] else step["content"], failed=step["is_error"], replied=True)
+            args, outside = {}, False
+            if not step["is_error"]:
+                try:
+                    value = json.loads(step["content"], parse_float=Decimal)
+                except (TypeError, ValueError):
+                    value = None
+                if isinstance(value, dict):
+                    scoped = d._scope_payload(value, ours)
+                    outside = scoped is d._DROP or scoped != value
+                    args = {} if outside else value
+            call = {"tool": step["tool"], "args": args, "outside": outside, "reply": None,
+                    "failed": bool(step["is_error"]), "replied": False}
+            out.append(call)
+            turn.setdefault(step["tool"], []).append(call)
+            turn.setdefault("\0calls", []).append(call)
+        elif turn.get("\0calls"):          # a reply before the turn's first call is a start-up read: no call
+            waiting = [c for c in turn.get(step["tool"], []) if not c["replied"]]
+            if waiting:
+                waiting[0].update(reply=None if step["is_error"] else step["content"],
+                                  failed=waiting[0]["failed"] or bool(step["is_error"]), replied=True)
     return out
 
 
-def _names_slot(args: dict, slot: str, skus: set[str]) -> bool:
-    """Whether a call is about `slot`: a slot argument, when it has one, decides (so a call about another
-    selection, ours or not, is never this slot's input); else an argument naming the slot's product."""
-    named = [str(args[k]) for k in _SLOT_ARGS if args.get(k) is not None]
+_SLOT_LISTS = ("slots", "selections")
+
+
+def _named(args: dict) -> set[str]:
+    """The selections a call's arguments name: a slot argument or a list of them."""
+    named = {str(args[k]) for k in (*_SLOT_ARGS, "wildcard_slot") if args.get(k) is not None}
+    for key in _SLOT_LISTS:
+        if isinstance(args.get(key), list):
+            named |= {str(v) for v in args[key] if isinstance(v, (str, int)) and not isinstance(v, bool)}
+    return named
+
+
+def _names_slot(call: dict, slot: str, skus: set[str]) -> bool:
+    """Whether a call is about `slot`: the selections its arguments name, when they name any, decide (so a call
+    about another selection is never this slot's input); else an argument naming the slot's product. A call that
+    names a selection outside our assignment is never matched."""
+    if call["outside"] or call["failed"] and not call["args"]:
+        return False
+    named = _named(call["args"])
     if named:
-        return all(n == slot for n in named)
-    return any(isinstance(v, str) and v in skus for v in args.values())
+        return slot in named
+    return any(isinstance(v, str) and v in skus for v in call["args"].values())
+
+
+def _arg_value(v: Any) -> Any:
+    if isinstance(v, list):
+        return ", ".join(str(x) for x in v if isinstance(x, (str, int)) and not isinstance(x, bool))
+    return v
 
 
 def _input(call: dict, slot: str, ours: set[str]) -> dict:
-    """One call as an input to `slot`'s decision: its scalar arguments and what came back, scoped to our selections."""
+    """One call as an input to `slot`'s decision: its arguments (already cut to our assignment, `_calls`) and what came
+    back, scoped to our selections."""
     from vending import dashboard as d
 
-    args = {k: v for k, v in call["args"].items() if isinstance(v, (str, int, Decimal, bool)) or v is None}
+    args = {k: _arg_value(v) for k, v in call["args"].items()
+            if isinstance(v, (str, int, Decimal, bool, list)) or v is None}
     out = {"tool": call["tool"], "args": args, "failed": call["failed"], "reply": None, "omitted": False}
     if call["failed"] or call["reply"] is None:
         return out
@@ -296,7 +358,7 @@ def _changes(now_slots: dict, before: dict | None, ours: tuple[str, ...], steps:
     order, with what drove it: the run's calls that named the slot or its product."""
     from vending import dashboard as d
 
-    calls = [] if older else _calls(steps)
+    calls = [] if older else _calls(steps, set(ours))
     out = []
     for slot in ours:
         new, old = now_slots.get(slot), (before or {}).get(slot)
@@ -306,26 +368,28 @@ def _changes(now_slots: dict, before: dict | None, ours: tuple[str, ...], steps:
             continue
         labels = (d._changes(new, old) if new is not None else ["dropped"]) if before is not None else ["new"]
         skus = {e.get("product") for e in (new, old) if e and isinstance(e.get("product"), str)}
-        inputs = [_input(c, slot, set(ours)) for c in calls if _names_slot(c["args"], slot, skus)]
+        inputs = [_input(c, slot, set(ours)) for c in calls if _names_slot(c, slot, skus)]
         reason = new.get("reason") if new else None
         out.append({"slot": slot, "labels": labels, "old": _view(old), "new": _view(new),
                     "reason": old_text if older and reason else reason, "inputs": inputs})
     return out
 
 
-def _other_calls(steps: list[dict], changes: list[dict]) -> list[dict]:
-    """The run's calls that named none of the changed slots, by tool, in the order first called."""
+def _other_calls(steps: list[dict], changes: list[dict], ours: set[str]) -> list[dict]:
+    """The run's calls that named none of the changed slots, by tool (only its name), in the order first called."""
     named: list[tuple[str, dict]] = []
     counts: dict[str, int] = {}
-    for call in _calls(steps):
-        hit = any(_names_slot(call["args"], c["slot"], {e["product"] for e in (c["new"], c["old"])
+    failed: dict[str, int] = {}
+    for call in _calls(steps, ours):
+        hit = any(_names_slot(call, c["slot"], {e["product"] for e in (c["new"], c["old"])
                                                          if e and isinstance(e.get("product"), str)})
                   for c in changes)
         if not hit:
             counts[call["tool"]] = counts.get(call["tool"], 0) + 1
+            failed[call["tool"]] = failed.get(call["tool"], 0) + int(call["failed"])
             if counts[call["tool"]] == 1:
                 named.append((call["tool"], call))
-    return [{"tool": tool, "n": counts[tool]} for tool, _ in named]
+    return [{"tool": tool, "n": counts[tool], "failed": failed[tool]} for tool, _ in named]
 
 
 def _name_products(conn: psycopg.Connection, runs: list[dict], fill: dict | None) -> None:
@@ -440,8 +504,10 @@ def _plan_html(r: dict, shown: set[int]) -> str:
         facts.append(("Notes", _e(r["notes"])))
     facts.append(("Compared with", _e(r["compared_with"]) if r["compared_with"] else '<span class="dim">nothing: first plan</span>'))
     if r["other_calls"]:
-        facts.append(("Other calls", ", ".join(f'<code>{_e(c["tool"])}</code>' + (f' &times;{c["n"]}' if c["n"] > 1 else "")
-                                                for c in r["other_calls"])))
+        facts.append(("Other calls", ", ".join(
+            f'<code>{_e(c["tool"])}</code>' + (f' &times;{c["n"]}' if c["n"] > 1 else "")
+            + (f' <span class="bad-text">{c["failed"]} failed</span>' if c.get("failed") else "")
+            for c in r["other_calls"])))
     dl = '<dl class="ph-facts">' + "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in facts) + "</dl>"
     if not r["changes"]:
         table = '<p class="dim ph-none">No slot changes</p>'

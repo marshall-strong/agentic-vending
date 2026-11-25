@@ -1059,7 +1059,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False,
     _check_plan_fills(snap)
     snap["pricing"] = _pricing(conn, now, snap)
     snap["price_check_panel"] = _panel(lambda: _isolated(conn, lambda: price_check_panel.read(
-        conn, now, price_check_panel.plan_drinks(snap), live_since, (syncs or {}).get("price_check"))))
+        conn, now, price_check_panel.plan_drinks(snap), (syncs or {}).get("price_check"))))
     snap["plan_history"] = _panel(lambda: _isolated(conn, lambda: plan_history.read(
         conn, now, slots, assignment_at, old_text=OLD_ASSIGNMENT,
         cards=(cards["data"] or {}).get("weeks") if cards["ok"] else None)))

@@ -8,15 +8,20 @@ Where each figure comes from:
   changed, how many drinks it left without a usable price, and what it cost. The model is read from its lookups in
   `price_lookups` (migration 032), which the weekly check logs under its own name (`price_schedule.BY`).
 - **Each store's latest price**: the newest of two records for that store: our sourcing row there
-  (`sourcing_options`: a person's price, a receipt's, or one a price check stored) and the newest price a lookup saw
-  there (`price_lookups`). A cheaper model's find that the second model's check didn't confirm is never a price.
+  (`sourcing_options`: a person's price, a receipt's, or one a price check stored) and the newest verified price a
+  lookup saw there (`price_lookups`). The lookup logs a find before it verifies it, so verification is derived the
+  way `price_search._verified` decides (`_verify`): a check that agreed, a model that needs no check, a find the
+  sourcing row took, or one within `price_check_percent` of a confirmed price. Any other find (a check that
+  disagreed, or one that never ran because the run's searches ran out) is shown as unverified: never a price, never
+  the cheapest.
 - **What we would buy**: the primary and alternate rows in `sourcing_options`, the same rows the fill and the
   planner read.
 - **Flags**: *stale* (a primary or alternate checked more than 7 days ago: the fill's own rule,
   `sourcing.STALE_AFTER`), *no price* (no primary with a price), *not found* (the newest lookup at the store we buy
-  from, after its price was checked, found no usable price), *over the max* (a store we buy from now asks more than
-  the most we pay), and *changed* (a store's unit price moved more than `CHANGE_PERCENT` since the reading before,
-  with the second model's check of it, if one ran).
+  from, after its price was checked, found no usable price), *over the max* (the price the store's cell shows, for
+  a store we buy from, is above that row's max for its pack), *changed* (a store's verified unit price, at the price
+  it was stored at, moved more than `price_check_percent` from the verified one before it) and *unverified* (the
+  newest find at a store didn't clear verification).
 - **Lookup spend**: the cost of every lookup in `price_lookups` this week (Saturday to Friday, Eastern, the ledger's
   weeks) and since the ledger's opening. Benchmark runs (`--no-store`) are left out: they are test spend.
 - **Before the first weekly check**: when the first is due and whether it is switched on, from the worker's own
@@ -54,6 +59,12 @@ CHANGE_PERCENT = 5
 CHECK_WITHIN = timedelta(hours=1)
 # Weekly checks listed.
 RUNS_SHOWN = 8
+# Newest lookups read per drink and store: enough for the newest reading, the verified one before it and the
+# confirmed prices a find may skip its check against.
+LOOKUPS_PER_STORE = 20
+# The lookup's defaults (`price_search.DEFAULT_CHECK_MODEL`, `CONFIRMED_FOR`), here so the page needn't import it.
+DEFAULT_CHECK_MODEL = "claude-sonnet-5-5"
+CONFIRMED_FOR = timedelta(days=28)
 # Lookup outcomes that saw a usable price on the store's page.
 PRICED = ("found",)
 # The lookups' outcome codes (`price_search.REASONS`), in plain words.
@@ -127,17 +138,20 @@ def _ours(snap: dict) -> tuple[str, ...]:
 
 @dataclass
 class _Reading:
-    """One price a lookup saw at a store, with the second model's check of it, if one ran."""
+    """One price a lookup saw at a store, with the second model's check of it, if one ran. `verified` says whether
+    the find cleared the lookup's verification (`_verify`), and `why`."""
     at: datetime
     price_cents: int
     units: int
     model: str
     kind: str
     check: dict | None = None
+    verified: bool = False
+    why: str | None = None
 
     @property
     def trusted(self) -> bool:
-        return self.check is None or self.check["outcome"] == "found"
+        return self.verified
 
     @property
     def shown_cents(self) -> int:
@@ -168,11 +182,11 @@ def _source(checked_by: str) -> str:
     return "person"
 
 
-def read(conn: psycopg.Connection, now: datetime, drinks: dict, opened_at: datetime | None,
-         worker: dict | None = None) -> dict:
+def read(conn: psycopg.Connection, now: datetime, drinks: dict, worker: dict | None = None) -> dict:
     """Everything the panel shows. `drinks` is `plan_drinks(snapshot)`: SKUs of our plan only, so every sourcing and
-    lookup read is filtered to them in the query. `opened_at` is the ledger's opening when it is in the past, else
-    None. `worker` is the worker's `/health` `price_check`, when the worker serves the page."""
+    lookup read is filtered to them in the query. `worker` is the worker's `/health` `price_check`, when the worker
+    serves the page. The opening is the ledger's real one (`ledger.real_opening`: never the 11 Nov test opening),
+    once it is in the past."""
     skus = list(drinks["drinks"])
     missing: list[str] = []
 
@@ -184,6 +198,9 @@ def read(conn: psycopg.Connection, now: datetime, drinks: dict, opened_at: datet
             missing.append(label)
             return default
 
+    opened = part("ledger", lambda: ledger.real_opening(conn), None)
+    opened_at = opened.at if opened is not None and opened.at <= now else None
+    rules = part("settings", lambda: _rules(conn), _rules(None))
     runs = part("weekly checks", lambda: _runs(conn, now), None)
     schedule = part("settings", lambda: _schedule(conn, now, worker), None)
     spend = part("lookup log", lambda: _spend(conn, now, opened_at), None)
@@ -191,10 +208,80 @@ def read(conn: psycopg.Connection, now: datetime, drinks: dict, opened_at: datet
     options = part("sourcing", lambda: _options(conn, skus), None)
     lookups = part("lookup log", lambda: _lookups(conn, skus, now), None) if "lookup log" not in missing else None
     rows = [_drink(sku, drinks["drinks"][sku], names.get(sku), (options or {}).get(sku, {}),
-                   (lookups or {}).get(sku, {}), now) for sku in skus] if options is not None else []
+                   _verify((lookups or {}).get(sku, {}), (options or {}).get(sku, {}), rules), now, rules)
+            for sku in skus] if options is not None else []
     return {"plan": drinks["source"], "runs": runs, "schedule": schedule, "spend": spend,
             "drinks": rows, "sourcing_missing": options is None, "lookups_missing": lookups is None,
-            "missing": missing, "change_percent": CHANGE_PERCENT}
+            "missing": list(dict.fromkeys(missing)), "change_percent": rules["percent"],
+            "check_model": rules["check_model"]}
+
+
+def _rules(conn: psycopg.Connection | None) -> dict:
+    """The lookup's verification settings, as `price_search.Memory.read` reads them: the check model
+    (`price_check_model`) and the percent a find may be from a confirmed price and skip the check
+    (`price_check_percent`, also the change flag's threshold). Defaults without a connection."""
+    model, percent = DEFAULT_CHECK_MODEL, CHANGE_PERCENT
+    if conn is not None:
+        from vending import config
+
+        value = config.get_value(conn, "price_check_model", None)
+        if isinstance(value, str) and value.strip():
+            model = value.strip()
+        value = config.get_value(conn, "price_check_percent", None)
+        if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 100:
+            percent = value
+    return {"check_model": model, "percent": percent, "trusted": _trusted_models(model)}
+
+
+def _trusted_models(check_model: str) -> Callable[[str], bool]:
+    """Whether a model's find needs no check: the check model, or one at least as dear (`price_search._needs_check`,
+    priced from `model_prices.json`). An unpriced model is checked, so its find isn't trusted."""
+    try:
+        from vending.harness import load_prices
+
+        prices = load_prices()
+    except Exception:   # noqa: BLE001 - with no price table, only the check model's own finds are trusted
+        prices = None
+    known: dict[str, bool] = {}
+
+    def trusted(model: str) -> bool:
+        if model == check_model:
+            return True
+        if model not in known:
+            try:
+                known[model] = not prices.rates(model, 0).input < prices.rates(check_model, 0).input
+            except Exception:   # noqa: BLE001 - an unpriced model gets a check
+                known[model] = False
+        return known[model]
+    return trusted
+
+
+def _verify(cells: dict, options: dict, rules: dict) -> dict:
+    """Mark each reading verified or not, the way the lookup decides it stores a find (`price_search._verified`):
+    a check that agreed; a model that needs no check; a find the sourcing row took (stored after it at that price and
+    pack); or a find within `percent` of a verified price for that store and pack from the last `CONFIRMED_FOR`, so
+    it skipped the check. Anything else (a check that disagreed, or a check that never ran because the run's searches
+    ran out) is unverified: never a price, never the cheapest."""
+    for store, cell in cells.items():
+        rows = [o for o in options.values() if o is not None and o.store == store and o.expected_cents]
+        done: list[_Reading] = []
+        for r in cell["readings"]:
+            if r.kind == "check":
+                r.verified, r.why = True, "check model"
+            elif r.check is not None:
+                r.verified = r.check["outcome"] == "found"
+                r.why = "confirmed" if r.verified else None
+            elif rules["trusted"](r.model):
+                r.verified, r.why = True, "model needs no check"
+            elif any(o.units_per_pack == r.units and o.expected_cents == r.price_cents and o.checked_at >= r.at
+                     for o in rows):
+                r.verified, r.why = True, "stored"
+            elif any(p.units == r.units and timedelta(0) <= r.at - p.at <= CONFIRMED_FOR
+                     and abs(r.price_cents - p.shown_cents) * 100 <= rules["percent"] * p.shown_cents for p in done):
+                r.verified, r.why = True, f"within {rules['percent']}% of a confirmed price"
+            if r.verified:
+                done.append(r)
+    return cells
 
 
 def _runs(conn: psycopg.Connection, now: datetime) -> list[dict]:
@@ -306,8 +393,10 @@ def _lookups(conn: psycopg.Connection, skus: list[str], now: datetime) -> dict:
     if not skus:
         return {}
     found = conn.execute(
-        "select sku, store, kind, at, units_per_pack, price_cents, outcome, model from price_lookups"
-        " where sku = any(%s) and not no_store and at <= %s order by sku, store, id", (skus, now)).fetchall()
+        "select sku, store, kind, at, units_per_pack, price_cents, outcome, model from ("
+        " select *, row_number() over (partition by sku, store order by at desc, id desc) as n from price_lookups"
+        " where sku = any(%s) and not no_store and at <= %s) newest"
+        " where n <= %s order by sku, store, at, id", (skus, now, LOOKUPS_PER_STORE)).fetchall()
     out: dict[str, dict] = {}
     for sku, store, kind, at, units, price, outcome, model in found:
         cell = out.setdefault(sku, {}).setdefault(store, {"readings": [], "last": None})
@@ -334,7 +423,8 @@ def _option(o: Any, now: datetime) -> dict:
             "stale": o.is_stale(now), "stock": o.stock}
 
 
-def _drink(sku: str, slots: list[str], name: dict | None, options: dict, lookups: dict, now: datetime) -> dict:
+def _drink(sku: str, slots: list[str], name: dict | None, options: dict, lookups: dict, now: datetime,
+           rules: dict) -> dict:
     primary, alternate = options.get("primary"), options.get("alternate")
     stores, flags = [], []
     units: dict[str, Fraction] = {}
@@ -352,7 +442,7 @@ def _drink(sku: str, slots: list[str], name: dict | None, options: dict, lookups
         elif reading is not None:
             price = {"price_cents": reading.shown_cents, "units": reading.units, "at": reading.at,
                      "source": "price check", "model": reading.model,
-                     "confirmed_by": reading.check["model"] if reading.check else None}
+                     "confirmed_by": reading.check["model"] if reading.check and reading.verified else None}
         if price is not None:
             unit = Fraction(price["price_cents"], price["units"])
             price["unit"] = _dollars(unit)
@@ -363,8 +453,17 @@ def _drink(sku: str, slots: list[str], name: dict | None, options: dict, lookups
         tried = None
         if last is not None and last["outcome"] not in PRICED and (price is None or last["at"] > price["at"]):
             tried = {"at": last["at"], "outcome": last["outcome"], "words": _words(last["outcome"])}
-        stores.append({"store": store, "price": price, "last_try": tried})
-        flags += _changed(store, readings)
+        # The newest find, when it didn't clear verification and is newer than the price shown: shown as unverified.
+        unverified = None
+        if readings and not readings[-1].verified and (price is None or readings[-1].at > price["at"]):
+            r = readings[-1]
+            unverified = {"at": r.at, "price_cents": r.price_cents, "units": r.units,
+                          "unit": _dollars(Fraction(r.price_cents, r.units)), "model": r.model,
+                          "check": None if r.check is None else {"model": r.check["model"],
+                                                                 "words": _words(r.check["outcome"])}}
+            flags.append({"code": "unverified", "store": store, **unverified})
+        stores.append({"store": store, "price": price, "last_try": tried, "unverified": unverified})
+        flags += _changed(store, readings, rules["percent"])
     cheapest = min(units, key=lambda s: (units[s], STORES.index(s))) if units else None
     # The flags about what we would buy.
     if primary is None or primary.expected_cents is None:
@@ -382,13 +481,12 @@ def _drink(sku: str, slots: list[str], name: dict | None, options: dict, lookups
                 and last["kind"] != "check"):
             flags.append({"code": "not_found", "rank": o.rank, "at": last["at"],
                           "stores": [{"store": o.store, "words": _words(last["outcome"])}]})
-        trusted = [r for r in cell["readings"] if r.trusted]
-        if trusted:
-            newest = trusted[-1]
-            if newest.unit() * o.units_per_pack > o.max_cents:
-                flags.append({"code": "over_max", "rank": o.rank, "store": o.store, "at": newest.at,
-                              "price_cents": newest.shown_cents, "units": newest.units,
-                              "unit": _dollars(newest.unit()), "max_cents": o.max_cents, "pack": o.units_per_pack})
+        # The same price the store's cell shows, against this row's max for its pack.
+        shown = next(c["price"] for c in stores if c["store"] == o.store)
+        if shown is not None and Fraction(shown["price_cents"], shown["units"]) * o.units_per_pack > o.max_cents:
+            flags.append({"code": "over_max", "rank": o.rank, "store": o.store, "at": shown["at"],
+                          "price_cents": shown["price_cents"], "units": shown["units"], "unit": shown["unit"],
+                          "max_cents": o.max_cents, "pack": o.units_per_pack})
     missed = [c for c in stores if c["last_try"] is not None and c["price"] is None]
     if primary is None and missed:
         flags.append({"code": "not_found", "rank": None, "at": max(c["last_try"]["at"] for c in missed),
@@ -409,27 +507,22 @@ def _words(outcome: str) -> str:
     return OUTCOME_WORDS.get(outcome, "no usable price")
 
 
-def _changed(store: str, readings: list[_Reading]) -> list[dict]:
-    """A flag when the newest reading at `store` is more than `CHANGE_PERCENT` from the trusted one before it."""
-    if len(readings) < 2:
+def _changed(store: str, readings: list[_Reading], percent: int) -> list[dict]:
+    """A flag when the newest verified price at `store` is more than `percent` from the verified one before it, both
+    at the price they were stored at (a confirmed find at the check's). An unverified find is its own flag."""
+    verified = [r for r in readings if r.verified]
+    if len(verified) < 2:
         return []
-    newest = readings[-1]
-    before = next((r for r in reversed(readings[:-1]) if r.trusted), None)
-    if before is None:
-        return []
-    old, new = before.unit(), Fraction(newest.price_cents, newest.units)
-    if old <= 0 or abs(new - old) * 100 <= CHANGE_PERCENT * old:
+    newest, before = verified[-1], verified[-2]
+    old, new = before.unit(), newest.unit()
+    if old <= 0 or abs(new - old) * 100 <= percent * old:
         return []
     pct = (new - old) * 100 / old
-    check = None
-    if newest.check is not None:
-        check = {"model": newest.check["model"], "confirmed": newest.check["outcome"] == "found",
-                 "unit": _dollars(Fraction(newest.check["price_cents"], newest.units))
-                 if newest.check["price_cents"] else None}
     return [{"code": "changed", "store": store, "at": newest.at, "before_at": before.at,
              "from_unit": _dollars(old), "to_unit": _dollars(new),
              "percent": f"{(Decimal(pct.numerator) / Decimal(pct.denominator)).quantize(Decimal('0.1'), ROUND_HALF_UP):+}",
-             "model": newest.model, "check": check}]
+             "model": newest.model, "verified_by": newest.check["model"] if newest.check else None,
+             "why": newest.why}]
 
 
 # --- Page ---------------------------------------------------------------------------------------
@@ -549,6 +642,10 @@ def _store_cell(cell: dict, cheapest: str | None) -> str:
                 f'{_usd(p["price_cents"])} &middot; {_e(et_day(p["at"]))} &middot; {source}</span>')
     if tried is not None:
         body += f'<span class="sub pc-detail">{_e(et_day(tried["at"]))}: {_e(tried["words"])}</span>'
+    if cell.get("unverified"):
+        u = cell["unverified"]
+        body += (f'<span class="sub pc-detail"><span class="warn-text">unverified</span> ${_e(u["unit"])}/unit '
+                 f'&middot; {_e(et_day(u["at"]))}</span>')
     return f'<td class="pc-store"><span class="k">{_e(cell["store"])}</span>{body}</td>'
 
 
@@ -579,16 +676,16 @@ def _flag(f: dict) -> tuple[str, str]:
                        f'(${_e(f["unit"])}/unit) &gt; max {_usd(f["max_cents"])}/{f["pack"]} &middot; '
                        f'{_e(et_day(f["at"]))}')
     if code == "changed":
-        check = f["check"]
-        if check is None:
-            verdict = "no re-check"
-        elif check["confirmed"]:
-            verdict = f'{_e(check["model"])}: confirmed ${_e(check["unit"])}'
-        else:
-            verdict = f'{_e(check["model"])}: not confirmed, not stored'
+        verdict = (f'confirmed by {_e(f["verified_by"])}' if f["verified_by"] else _e(f["why"] or "verified"))
         return "info", (f'<b>Changed</b> {_e(f["store"])} {_e(f["percent"])}% &middot; ${_e(f["from_unit"])} &rarr; '
                         f'${_e(f["to_unit"])}/unit &middot; {_e(et_day(f["before_at"]))} &rarr; {_e(et_day(f["at"]))} '
                         f'&middot; {verdict}')
+    if code == "unverified":
+        check = f["check"]
+        verdict = (f'{_e(check["model"])}: {_e(check["words"])}' if check else "no check recorded")
+        return "warn", (f'<b>Unverified</b> {_e(f["store"])} {_usd(f["price_cents"])}/{f["units"]} '
+                        f'(${_e(f["unit"])}/unit) &middot; {_e(f["model"])} &middot; {_e(et_day(f["at"]))} &middot; '
+                        f'{verdict} &middot; not used')
     return "muted", _e(code)
 
 

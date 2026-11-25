@@ -152,7 +152,7 @@ def test_each_store_shows_its_latest_price_and_the_cheapest_fresh_one(conn, page
                 {"slot": "16", "product": COKE, "fill_to": 7, "sale_price": "2.50"})
     source(conn, COKE, "primary", "Walmart", 12, 1740, 2050, TUESDAY - timedelta(days=4))
     source(conn, COKE, "alternate", "Costco", 24, 3149, 3600, TUESDAY - timedelta(days=4))
-    lookup(conn, COKE, "Costco", TUESDAY, units=24, cents=3299)            # newer than the row: shown
+    lookup(conn, COKE, "Costco", TUESDAY, units=24, cents=3299, model="claude-sonnet-5-5")   # newer than the row
     lookup(conn, COKE, "Amazon", TUESDAY, outcome="not_found")
     snap, p = panel(page_conn)
     d = drink(p["data"], COKE)
@@ -161,7 +161,7 @@ def test_each_store_shows_its_latest_price_and_the_cheapest_fresh_one(conn, page
     assert cells["Walmart"]["price"]["unit"] == "1.45" and cells["Walmart"]["price"]["source"] == "person"
     assert cells["Costco"]["price"]["unit"] == "1.37" and cells["Costco"]["price"]["source"] == "price check"
     assert cells["Amazon"]["price"] is None and cells["Amazon"]["last_try"]["words"] == "not found"
-    assert cells["BJs"] == {"store": "BJs", "price": None, "last_try": None}
+    assert cells["BJs"] == {"store": "BJs", "price": None, "last_try": None, "unverified": None}
     assert d["cheapest"] == "Costco"
     assert d["primary"]["store"] == "Walmart" and d["alternate"]["store"] == "Costco"
     assert codes(d) == []          # Amazon isn't a store we buy from, so its miss isn't a flag
@@ -177,7 +177,7 @@ def test_stale_not_found_and_over_max_are_flagged_from_the_rows_we_buy_from(conn
     source(conn, PEPSI, "primary", "Walmart", 12, 1620, 1900, TUESDAY - timedelta(days=3))
     lookup(conn, PEPSI, "Walmart", TUESDAY, outcome="out_of_stock")                            # after its check
     source(conn, REDBULL, "primary", "Walmart", 12, 2040, 2400, TUESDAY - timedelta(days=3))
-    lookup(conn, REDBULL, "Walmart", TUESDAY, cents=2520)                                      # over its max
+    lookup(conn, REDBULL, "Walmart", TUESDAY, cents=2520, model="claude-sonnet-5-5")           # over its max
     d = panel(page_conn)[1]["data"]
     coke, pepsi, rb = drink(d, COKE), drink(d, PEPSI), drink(d, REDBULL)
     assert codes(coke) == ["stale"] and coke["flags"][0]["days"] == 9
@@ -199,16 +199,16 @@ def test_a_change_over_five_percent_is_flagged_with_the_second_check(conn, page_
     lookup(conn, PEPSI, "Walmart", TUESDAY, cents=1800)                                        # +11.1%
     lookup(conn, PEPSI, "Walmart", TUESDAY + timedelta(minutes=1), outcome="check_disagrees", cents=1650,
            kind="check", model="claude-sonnet-5-5")
-    lookup(conn, PEPSI, "Costco", TUESDAY - timedelta(days=6), cents=1620)
+    lookup(conn, PEPSI, "Costco", TUESDAY - timedelta(days=6), cents=1620, model="claude-sonnet-5-5")
     lookup(conn, PEPSI, "Costco", TUESDAY, cents=1660)                                         # +2.5%: no flag
     d = panel(page_conn)[1]["data"]
     coke = next(f for f in drink(d, COKE)["flags"] if f["code"] == "changed")
     assert (coke["percent"], coke["from_unit"], coke["to_unit"]) == ("+7.1", "1.40", "1.50")
-    assert coke["check"] == {"model": "claude-sonnet-5-5", "confirmed": True, "unit": "1.50"}
+    assert coke["verified_by"] == "claude-sonnet-5-5"
     pepsi = drink(d, PEPSI)
-    changed = [f for f in pepsi["flags"] if f["code"] == "changed"]
-    assert len(changed) == 1 and changed[0]["store"] == "Walmart" and changed[0]["check"]["confirmed"] is False
-    assert "not_found" not in codes(pepsi)         # the check that didn't confirm is the change's, not a miss
+    # The find the check didn't confirm is unverified, not a change, and not a miss.
+    assert [f["code"] for f in pepsi["flags"]] == ["unverified"]
+    assert pepsi["flags"][0]["store"] == "Walmart" and pepsi["flags"][0]["check"]["model"] == "claude-sonnet-5-5"
     # The find the check didn't confirm is never a price: Walmart still shows the stored row's.
     walmart = next(c for c in pepsi["stores"] if c["store"] == "Walmart")
     assert walmart["price"]["price_cents"] == 1620
@@ -310,3 +310,70 @@ def test_plan_drinks_reads_only_our_selections():
             "stock": {"ok": True, "data": {"slots": {OUTSIDE: {"product": PEPSI}}}}}
     assert price_check_panel.plan_drinks(snap) == {"source": "weekly", "drinks": {COKE: ["15"]}}
     assert price_check_panel.plan_drinks({"ours": {"ok": False}, "plan": snap["plan"]})["drinks"] == {}
+
+
+# --- Sol's review of #246 ------------------------------------------------------------------------
+
+def test_an_unchecked_cheap_find_is_unverified_never_a_price_or_the_cheapest(conn, page_conn):
+    # The lookup logs a find before it checks it; a run whose searches ran out never logs the check.
+    products(conn)
+    weekly_plan(conn, {"slot": "15", "product": COKE})
+    source(conn, COKE, "primary", "Walmart", 12, 1740, 2050, TUESDAY - timedelta(days=1))
+    lookup(conn, COKE, "Costco", TUESDAY, units=24, cents=2400)               # Haiku, no check: $1.00 a unit
+    d = drink(panel(page_conn)[1]["data"], COKE)
+    costco = next(c for c in d["stores"] if c["store"] == "Costco")
+    assert costco["price"] is None and costco["unverified"]["unit"] == "1.00"
+    assert d["cheapest"] == "Walmart" and codes(d) == ["unverified"]
+
+
+def test_a_cheap_find_within_the_check_percent_of_a_confirmed_price_is_verified(conn, page_conn):
+    products(conn)
+    weekly_plan(conn, {"slot": "15", "product": COKE})
+    source(conn, COKE, "primary", "Walmart", 12, 1740, 2050, TUESDAY - timedelta(days=8))
+    lookup(conn, COKE, "Costco", TUESDAY - timedelta(days=7), units=24, cents=3100, model="claude-sonnet-5-5")
+    lookup(conn, COKE, "Costco", TUESDAY, units=24, cents=3150)               # Haiku, 1.6% off: no check needed
+    d = drink(panel(page_conn)[1]["data"], COKE)
+    costco = next(c for c in d["stores"] if c["store"] == "Costco")
+    assert costco["price"]["price_cents"] == 3150 and costco["unverified"] is None and d["cheapest"] == "Costco"
+
+
+def test_the_test_opening_is_not_the_competitions_opening(conn, page_conn):
+    from vending import ledger as ledger_mod
+
+    test_at = datetime(2026, 11, 11, 17, 0, tzinfo=timezone.utc)
+    ledger_mod.record(conn, "opening", 60000, ledger_mod.TEST_OPENING_DETAIL, "test", at=test_at)
+    assert ledger_mod.is_test_opening(ledger_mod.opening(conn))
+    lookup(conn, COKE, "Walmart", NOW - timedelta(days=1), cost="0.5000", by="kevin")
+    sp = panel(page_conn)[1]["data"]["spend"]
+    assert sp["opened"] is False and sp["since_opening"] is None
+
+
+def test_the_change_threshold_uses_the_confirmed_price(conn, page_conn):
+    products(conn)
+    weekly_plan(conn, {"slot": "15", "product": COKE})
+    source(conn, COKE, "primary", "Walmart", 12, 1680, 2050, TUESDAY - timedelta(days=6))
+    lookup(conn, COKE, "Walmart", TUESDAY - timedelta(days=6), cents=1680, model="claude-sonnet-5-5")
+    lookup(conn, COKE, "Walmart", TUESDAY, cents=1770)                        # the find: +5.4%
+    lookup(conn, COKE, "Walmart", TUESDAY + timedelta(minutes=1), cents=1750, kind="check", model="claude-sonnet-5-5")
+    d = drink(panel(page_conn)[1]["data"], COKE)                              # stored at $17.50: +4.2%
+    assert "changed" not in codes(d)
+
+
+def test_over_max_compares_the_price_the_store_cell_shows(conn, page_conn):
+    products(conn)
+    weekly_plan(conn, {"slot": "15", "product": COKE})
+    lookup(conn, COKE, "Walmart", TUESDAY - timedelta(days=2), cents=2100, model="claude-sonnet-5-5")
+    source(conn, COKE, "primary", "Walmart", 12, 1740, 2050, TUESDAY)         # a newer row, under its max
+    d = drink(panel(page_conn)[1]["data"], COKE)
+    walmart = next(c for c in d["stores"] if c["store"] == "Walmart")
+    assert walmart["price"]["price_cents"] == 1740 and "over_max" not in codes(d)
+
+
+def test_the_lookup_read_is_bounded_per_store_and_indexed(conn, page_conn):
+    products(conn)
+    for n in range(price_check_panel.LOOKUPS_PER_STORE + 15):
+        lookup(conn, COKE, "Walmart", TUESDAY - timedelta(hours=n), cents=1740, model="claude-sonnet-5-5")
+    got = price_check_panel._lookups(page_conn, [COKE], NOW)
+    assert len(got[COKE]["Walmart"]["readings"]) == price_check_panel.LOOKUPS_PER_STORE
+    names = {r[0] for r in conn.execute("select indexname from pg_indexes where tablename = 'price_lookups'")}
+    assert {"price_lookups_by_who", "price_lookups_at"} <= names

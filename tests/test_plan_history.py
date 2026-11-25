@@ -138,7 +138,7 @@ def test_each_change_shows_was_now_reason_request_cost_and_its_inputs(conn, open
     sold, price = change["inputs"]
     assert sold["tool"] == "get_sales_history" and sold["reply"] == {"units_sold_in_window": 7, "price": "2.50"}
     assert price["tool"] == "find_pack_price" and price["failed"] is True and price["reply"] is None
-    assert plan["other_calls"] == [{"tool": "get_account_balance", "n": 1}]
+    assert plan["other_calls"] == [{"tool": "get_account_balance", "n": 1, "failed": 0}]
     first_card = week(p["data"], date(2026, 11, 28))["plans"][0]
     assert first_card["id"] == first and first_card["request"]["paid"] == "34.80"
     html = section(snap)
@@ -247,3 +247,70 @@ def test_nothing_about_a_selection_outside_our_assignment_is_shown(conn, opened,
     text = dashboard.to_json(snap["plan_history"]) + section(snap)
     assert f'"{OUTSIDE}"' not in text and "4.45" not in text and "1.95" not in text and "4242" not in text
     assert f"slot={OUTSIDE}" not in text
+
+
+# --- Sol's review of #246 ------------------------------------------------------------------------
+
+def test_a_call_carrying_an_outside_selection_in_any_argument_is_never_shown(conn, opened, page_conn):
+    live(conn, OPENED, [entry("15")])
+    live(conn, NOW - timedelta(days=2), [entry("15", price="2.75")],
+         steps=[("tool_call", "find_pack_price",
+                 json.dumps({"sku": COKE, "store": "Walmart", "wildcard_slot": OUTSIDE}), False),
+                ("tool_result", "find_pack_price", '{"price_per_pack": "17.40"}', False)])
+    snap, p = history(page_conn)
+    plan = week(p["data"], date(2026, 12, 5))["plans"][0]
+    assert plan["changes"][0]["inputs"] == []
+    text = dashboard.to_json(snap["plan_history"]) + section(snap)
+    assert f"wildcard_slot={OUTSIDE}" not in text and f'"wildcard_slot": "{OUTSIDE}"' not in text
+
+
+def test_replies_match_calls_by_turn_order_and_a_slots_list_names_the_slot(conn, opened, page_conn):
+    live(conn, OPENED, [entry("15"), entry("16")])
+    rows = lambda slot, n: json.dumps({"data": [{"slot": slot, "units_sold_in_window": n}]})   # noqa: E731
+    run = live(conn, NOW - timedelta(days=2), [entry("15", price="2.75"), entry("16", price="2.25")],
+               steps=[("tool_result", "get_briefing", '{"data": {"slots": []}}', False),     # the start-up read
+                      ("tool_call", "get_sales_history", json.dumps({"slots": ["15"]}), False),
+                      ("tool_call", "get_sales_history", json.dumps({"slot": "16"}), False),
+                      ("tool_result", "get_sales_history", rows("15", 1515), False),
+                      ("tool_result", "get_sales_history", rows("16", 1616), False)])
+    changes = {c["slot"]: c for c in week(history(page_conn)[1]["data"], date(2026, 12, 5))["plans"][0]["changes"]}
+    assert changes["15"]["inputs"][0]["reply"] == {"units_sold_in_window": 1515}
+    assert changes["15"]["inputs"][0]["args"] == {"slots": "15"}
+    assert changes["16"]["inputs"][0]["reply"] == {"units_sold_in_window": 1616}
+    assert run
+
+
+def test_a_midweek_request_with_no_stored_fee_uses_the_configured_fee(conn, opened, page_conn):
+    from vending.config import set_value
+
+    set_value(conn, "midweek_fee_cents", 3000, "test")
+    request(conn, "pr-mid", OPENED + timedelta(hours=1), status="fulfilled", paid="20.00", off_cycle=True)
+    request(conn, "pr-mid2", NOW - timedelta(days=1), off_cycle=True)
+    live(conn, OPENED, [entry("15")], request="pr-mid")
+    live(conn, NOW - timedelta(days=1), [entry("15", price="2.75")], request="pr-mid2")
+    d = history(page_conn)[1]["data"]
+    done = week(d, date(2026, 11, 28))["plans"][0]["request"]
+    pending = week(d, date(2026, 12, 5))["plans"][0]["request"]
+    assert (done["paid"], done["visit_fee"]) == ("20.00", "30.00")
+    assert pending["most"] == "71.00"          # 2 packs at $20.50, plus the $30.00 fee
+
+
+def test_a_failed_call_keeps_no_content_and_shows_a_fixed_label(conn, opened, page_conn):
+    live(conn, OPENED, [entry("15")])
+    live(conn, NOW - timedelta(days=2), [entry("15", price="2.75")],
+         steps=[("tool_call", "get_sales_history", '{"slot": "15", "note": "db-host-secret"}', True),
+                ("tool_result", "get_sales_history", "connection to db-host-secret refused", True)])
+    snap, p = history(page_conn)
+    plan = week(p["data"], date(2026, 12, 5))["plans"][0]
+    assert plan["changes"][0]["inputs"] == [] and plan["other_calls"] == [
+        {"tool": "get_sales_history", "n": 1, "failed": 1}]
+    text = dashboard.to_json(snap["plan_history"]) + section(snap)
+    assert "db-host-secret" not in text and "1 failed" in section(snap)
+
+
+def test_the_test_opening_starts_no_history(conn, page_conn):
+    test_at = datetime(2026, 11, 11, 17, 0, tzinfo=timezone.utc)
+    ledger.record(conn, "opening", 60000, ledger.TEST_OPENING_DETAIL, "test", at=test_at)
+    live(conn, test_at + timedelta(days=1), [entry("15")])
+    p = history(page_conn)[1]
+    assert p["data"]["opened"] is False and p["data"]["weeks"] == []
