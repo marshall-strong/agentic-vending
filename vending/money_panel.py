@@ -131,7 +131,11 @@ def read(conn: psycopg.Connection, now: datetime) -> dict:
     """
     pending, most = _committed(conn)
     start = ledger.real_opening(conn)
-    if start is not None and start.at > now:
+    if start is None:
+        # No opening yet, or only the 11 Nov test opening: the $600 hasn't started, so no balance,
+        # profit or competition AI spend is shown (the test opening's calls are development spend).
+        return {"opened": False, "committed": pending}
+    if start.at > now:
         return {"opened": False, "opens_at": start.at, "committed": pending}
     try:
         bal = ledger.balance(conn, as_of=now)

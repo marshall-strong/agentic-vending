@@ -761,11 +761,6 @@ def _at(moment: datetime) -> str:
     return f"{moment.astimezone(EASTERN):%a %d %b %Y %H:%M:%S} Eastern"
 
 
-def real_opening(conn: psycopg.Connection) -> Entry | None:
-    opened = opening(conn)
-    return None if is_test_opening(opened) else opened
-
-
 def before_opening(at: datetime, opened_at: datetime | None) -> bool:
     return opened_at is None or at < opened_at
 

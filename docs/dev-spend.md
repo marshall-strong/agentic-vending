@@ -65,5 +65,9 @@ writable `DATABASE_URL`. The Container App uses the writer secret for both. The 
 the request. It updates the charge after the reply. Free scripted runs use
 their scratch database. The CLI keeps the estimate if settlement fails.
 
+A paid run from a laptop on a local database (`127.0.0.1`, as in the README) is refused until `SPEND_DATABASE_URL` is set. A run with `DATABASE_URL` on the team database needs nothing more.
+
+From the real opening, a scheduled price check (the weekly check) is `live`: it comes out of the $600 and the live daily cap, not development spend (#104).
+
 The ledger counts live charges from the real opening against the $600.
 The report lists any tests after that opening separately.

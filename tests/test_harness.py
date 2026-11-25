@@ -464,11 +464,27 @@ def test_no_anthropic_send_outside_harness():
     for path in paths:
         if path == root / "vending/harness.py":
             continue
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        text = path.read_text(encoding="utf-8")
+        # No raw HTTP to the API (a file naming the API's host may not also use an HTTP library),
+        # and no SDK client of any kind, imported under any name.
+        if "anthropic.com" in text:
+            assert not any(lib in text for lib in ("import httpx", "import requests", "urllib.request",
+                                                    "http.client", "aiohttp")), path
+        for node in ast.walk(ast.parse(text)):
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.split(".")[0] == "anthropic":
+                names = {alias.name for alias in node.names}
+                assert not names & CLIENT_NAMES, (path, names)
             if isinstance(node, ast.Call):
                 parts = ast.unparse(node.func).split(".")
-                assert parts[-1] not in {"Anthropic", "AsyncAnthropic"}, path
-                assert parts[-2:] != ["messages", "create"], path
+                assert parts[-1] not in CLIENT_NAMES, path
+                assert not ("messages" in parts[:-1] and parts[-1] in {"create", "stream"}), path
+            if isinstance(node, ast.Attribute) and node.attr in {"create", "stream", "batches"}:
+                chain = ast.unparse(node).split(".")
+                assert "messages" not in chain[:-1], path
+
+
+CLIENT_NAMES = {"Anthropic", "AsyncAnthropic", "Client", "AsyncClient", "AnthropicBedrock",
+                "AsyncAnthropicBedrock", "AnthropicVertex", "AsyncAnthropicVertex"}
 
 
 
