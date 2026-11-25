@@ -10,6 +10,8 @@ the team database over the network (issue #250), so they show the queries' own c
 
 from __future__ import annotations
 
+import linecache
+import re
 import time
 from collections.abc import Callable
 from typing import Any
@@ -41,13 +43,13 @@ def timed_snapshot(conn: psycopg.Connection) -> tuple[dict, list[dict], float]:
     one `dashboard._panel` call, named by the key it lands under."""
     from vending import dashboard
 
-    seen: list[tuple[int, float]] = []
+    seen: list[tuple[int, float, str]] = []
     real: Callable = dashboard._panel
 
     def panel(build):
         start = time.perf_counter()
         out = real(build)
-        seen.append((id(out), time.perf_counter() - start))
+        seen.append((id(out), time.perf_counter() - start, _built_as(build)))
         return out
 
     dashboard._panel = panel
@@ -59,13 +61,32 @@ def timed_snapshot(conn: psycopg.Connection) -> tuple[dict, list[dict], float]:
         dashboard._panel = real
     names = {id(v): k for k, v in snap.items() if isinstance(v, dict)}
     panels = []
-    for ident, seconds in seen:
-        name = names.get(ident, "(nested)")
-        value = snap.get(name) if name in snap else None
+    for ident, seconds, where in seen:
+        # Named as `dashboard.py` names it where it is built; else by the key its data landed under.
+        name = names.get(ident, where) if where.startswith("dashboard.py:") else where
+        value = next((v for k, v in snap.items() if id(v) == ident), None)
         ok = bool(value.get("ok")) if isinstance(value, dict) else True
         panels.append({"panel": name, "seconds": round(seconds, 3), "ok": ok,
                        "why": None if ok else str(value.get("why"))[:200]})
     return snap, panels, total
+
+
+# Where a panel's build is written: `"runs": _panel(...)`, `cards = _panel(...)` or `snap["plan"] = _panel(...)`.
+_NAMED = re.compile(r'(?:"(\w+)":\s*|(\w+)\s*=\s*|snap\["(\w+)"\]\s*=\s*)\(?_panel\(')
+
+
+def _built_as(build) -> str:
+    """The name a panel's build is given in `dashboard.py`, from its source line, else the line."""
+    code = getattr(build, "__code__", None)
+    if code is None:
+        return "(unnamed)"
+    try:
+        line = linecache.getline(code.co_filename, code.co_firstlineno)
+    except Exception:       # noqa: BLE001
+        line = ""
+    found = _NAMED.search(line)
+    name = next((g for g in found.groups() if g), None) if found else None
+    return name or f"dashboard.py:{code.co_firstlineno}"
 
 
 def check(url: str, run_ids: list[int], *, label: str = "") -> dict:
@@ -95,7 +116,8 @@ def check(url: str, run_ids: list[int], *, label: str = "") -> dict:
                     html = run_page.html(data)
                     row["render_seconds"] = round(time.perf_counter() - start, 3)
                     row["page_bytes"] = len(html.encode())
-                    row["steps"] = len(data.get("steps") or [])
+                    row["found"] = bool(data.get("found"))
+                    row["steps"] = (data.get("counts") or {}).get("steps")
                 except Exception as error:      # noqa: BLE001 - recorded, the check goes on
                     row["error"] = f"{type(error).__name__}: {str(error).splitlines()[0][:160] if str(error) else ''}"
                 out["runs"].append(row)
