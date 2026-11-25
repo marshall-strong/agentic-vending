@@ -152,15 +152,17 @@ class Budget:
         return self._daily_cap if self._daily_cap is not None else self._daily_cap_used
 
     def client(self):
-        import anthropic
-
         key = (settings.get(self.key_env) or "").strip()
         if not key:
             raise BudgetError(f"{self.key_env} is not set, so no model call was made.")
         if any(ord(ch) < 33 or ord(ch) > 126 for ch in key):
             raise BudgetError(f"{self.key_env} holds spaces or unusual characters inside the key; set it again. "
                               "No model call was made.")
-        return anthropic.Anthropic(api_key=key, base_url=self.base_url, max_retries=0, timeout=300.0)
+        try:
+            harness.check_spend_database()
+        except harness.HarnessError as error:
+            raise BudgetError(str(error)) from None
+        return harness.anthropic_client(api_key=key, base_url=self.base_url, timeout=300.0)
 
     def send(self, client, request: dict, *, spent: Decimal = Decimal(0), label: dict | None = None):
         """One request, capped at what's left of the run (after `spent`) and of today's test cap.

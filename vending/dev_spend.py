@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 import psycopg
 
-from vending import config, db, ledger
+from vending import config, db, harness, ledger
 
 EASTERN = ZoneInfo(ledger.TIMEZONE)
 PURPOSES = ("live", "test")         # the harness's purposes
@@ -32,7 +32,6 @@ DEMO_SOURCE = "from run notes, not the ledger"
 DB_SOURCE = "database"
 DEFAULT_CAP_CENTS = 8500
 CATEGORIES = ("agent runs", "price search", "simulations/bench", "manual")
-PRICE_LABEL = re.compile(r"^(?:price_search(?:_[^ ]+)?|pack price lookup) ")
 
 
 @dataclass(frozen=True)
@@ -132,6 +131,7 @@ class Report:
     totals: Bucket                  # development, all of it (start: the first bucket's)
     source: str
     cap_cents: int = DEFAULT_CAP_CENTS
+    first_spend_date: date | None = None
 
 
 # --- Reading -------------------------------------------------------------------------
@@ -169,18 +169,21 @@ def _price_calls(conn: psycopg.Connection, has_calls: bool) -> tuple[list[Call],
     # Price memory stores a rounded copy of the harness charge. Legacy rows
     # have no call ID. Pair one lookup with one harness row using the writer's
     # label suffix and cost, at the time the harness settled the call.
-    rows = conn.execute("select id, at, sku, store, model, cost_usd from price_lookups"
+    rows = conn.execute("select id, at, sku, store, model, cost_usd, (to_jsonb(p)->>'model_call_id')::bigint"
+                        " from price_lookups p"
                         " where cost_usd <> 0 order by at, id").fetchall()
     candidates = defaultdict(list)
     if has_calls:
         for id_, at, finished, label, amount in conn.execute(
                 "select id, at, finished_at, label, round(cost_usd, 6) from model_calls"
                 " where status <> 'refused' and cost_usd <> 0 order by id"):
-            if PRICE_LABEL.match(label) or label.startswith("agent "):
+            if harness.spend_category(label) == "price search":
                 candidates[amount].append((id_, finished or at, label))
-    used = set()
+    used = {linked for *_, linked in rows if linked is not None}
     out = []
-    for id_, at, sku, store, model, cost in rows:
+    for id_, at, sku, store, model, cost, linked in rows:
+        if linked is not None:
+            continue
         suffix = f" {sku} {store}"
         matches = [(abs(when - at), key) for key, when, label in candidates[cost]
                    if key not in used and label.endswith(suffix) and abs(when - at) <= timedelta(seconds=60)]
@@ -196,18 +199,18 @@ def calls(conn: psycopg.Connection) -> list[Call]:
     """Every model call either table records, each once, oldest first."""
     has_calls = _has(conn, "model_calls")
     out, linked_price_calls = _price_calls(conn, has_calls)
+    has_spend = _has(conn, "model_spend")
     if has_calls:
+        shadow = (" and not exists (select 1 from model_spend s where s.id::text = to_jsonb(m)->>'spend_id')"
+                  if has_spend else "")
         rows = conn.execute(
             "select id, at, purpose, label, run_id, coalesce(answered_by, model), status, cost_usd,"
             " input_tokens + coalesce(cache_write_tokens, 0) + coalesce(cache_read_tokens, 0), output_tokens, detail"
-            " from model_calls where status <> 'refused' order by at, id").fetchall()
+            " from model_calls m where status <> 'refused'"
+            f"{shadow} order by at, id").fetchall()
         for id_, at, purpose, label, run_id, model, status, cost, tokens_in, tokens_out, detail in rows:
             ok = status == "ok" and "kept at worst case" not in detail
-            category = "agent runs"
-            if id_ in linked_price_calls or PRICE_LABEL.match(label):
-                category = "price search"
-            elif label.startswith(("bench ", "sweep ", "replay ")):
-                category = "simulations/bench"
+            category = "price search" if id_ in linked_price_calls else harness.spend_category(label)
             # The price-search label may include a product or selection.
             name = "Price search" if category == "price search" else TURN.sub("", label.strip())
             out.append(Call(at, purpose, model, name, f"run {run_id}", Fraction(cost) * 100, ok,
@@ -222,6 +225,12 @@ def calls(conn: psycopg.Connection) -> list[Call]:
             day = at.astimezone(EASTERN).date()
             out.append(Call(at, purpose, model, label, f"ledger {day} {purpose} {label}", -Fraction(amount), ok,
                             tokens_in if ok else None, tokens_out if ok else None))
+    if has_spend:
+        for at, purpose, category, label, run, model, cost, ok, tin, tout in conn.execute(
+                "select at, purpose, category, label, run_id, model, cost_usd, confirmed, tokens_in, tokens_out"
+                " from model_spend where not refused order by at, id"):
+            out.append(Call(at, purpose, model, label, f"run {run}", Fraction(cost) * 100, ok,
+                            tin if ok else None, tout if ok else None, category=category))
     if _has(conn, "development_spend"):
         for at, category, model, label, run, cost, ok, tin, tout in conn.execute(
                 "select at, category, model, label, run_id, cost_usd, confirmed, tokens_in, tokens_out"
@@ -235,8 +244,8 @@ def calls(conn: psycopg.Connection) -> list[Call]:
 def opening_at(conn: psycopg.Connection) -> datetime | None:
     if not _has(conn, "ledger_entries"):
         return None
-    opened = ledger.opening(conn)
-    return opened.at if opened and not ledger.is_test_opening(opened) else None
+    opened = ledger.real_opening(conn)
+    return opened.at if opened else None
 
 
 # --- Summing (pure) ------------------------------------------------------------------
@@ -256,7 +265,8 @@ def summarise(recorded: list[Call], opened: datetime | None, unit: str, as_of: d
     if unit not in ("week", "day"):
         raise ValueError(f"unit must be week or day, not {unit!r}")
     step = timedelta(days=7 if unit == "week" else 1)
-    kept = sorted((c for c in recorded if opened is None or c.at < opened or c.purpose == "test"), key=lambda c: c.at)
+    kept = sorted((c for c in recorded if not ledger.competition_call(c.purpose, c.at, opened)),
+                  key=lambda c: c.at)
     if not kept:
         buckets = [Bucket(_start(opened, unit))] if opened else []
         return Report(unit, as_of, opened, buckets, [], Bucket(_start(as_of, unit)), source, cap_cents)
@@ -271,7 +281,7 @@ def summarise(recorded: list[Call], opened: datetime | None, unit: str, as_of: d
     grouped: dict[tuple[str, str, bool], list[Call]] = defaultdict(list)
     for c in kept:
         bucket = buckets[_start(c.at, unit)]
-        if opened is None or c.at < opened:
+        if ledger.before_opening(c.at, opened):
             bucket.add(c)
             totals.add(c)
         else:
@@ -280,13 +290,15 @@ def summarise(recorded: list[Call], opened: datetime | None, unit: str, as_of: d
             if not c.confirmed:
                 bucket.after_opening_test_unconfirmed_cents += c.cost_cents
         grouped[(c.run, c.category, opened is not None and c.at >= opened)].append(c)
+    first_spend = next((c.at.astimezone(EASTERN).date() for c in kept
+                        if c.cost_cents and ledger.before_opening(c.at, opened)), None)
     running = Fraction(0)
     for bucket in buckets.values():
         running += bucket.total_cents
         bucket.cumulative_cents = running
     runs = [_run(key[0], group, opened) for key, group in grouped.items()]
     runs.sort(key=lambda r: r.first_at, reverse=True)
-    return Report(unit, as_of, opened, list(buckets.values()), runs, totals, source, cap_cents)
+    return Report(unit, as_of, opened, list(buckets.values()), runs, totals, source, cap_cents, first_spend)
 
 
 def _run(key: str, group: list[Call], opened: datetime | None) -> Run:
@@ -425,6 +437,7 @@ def to_json(report: Report) -> dict:
         "unit": report.unit,
         "source": report.source,
         "cap_usd": _dollars(Fraction(report.cap_cents)),
+        "first_spend_date": report.first_spend_date.isoformat() if report.first_spend_date else None,
         "as_of": report.as_of.astimezone(EASTERN).isoformat(timespec="seconds"),
         "opening_at": report.opening_at.astimezone(EASTERN).isoformat(timespec="seconds") if report.opening_at else None,
         "totals": _bucket_json(t) | {"runs": sum(1 for r in report.runs if not r.after_opening)},
@@ -457,7 +470,8 @@ def render(report: Report) -> str:
     else:
         out.append("No ledger opening yet, so every call so far is development spend, none of it from the $600.")
     if not report.buckets:
-        return "\n".join(out + ["", "No model calls recorded yet."])
+        return "\n".join(out + ["", "No model calls recorded yet.",
+                                 f"$0.00 / ${ledger.money(report.cap_cents)} development cap"])
     rows = [(f"{b.start:%a %d %b}", _count(b.calls, b.calls_unknown), usd(b.total_cents),
              usd(b.by_purpose.get("live", Fraction(0))), usd(b.by_purpose.get("test", Fraction(0))),
              usd(b.unconfirmed_cents) if b.unconfirmed_cents else "", usd(b.cumulative_cents))
@@ -526,32 +540,54 @@ def _input_tokens(row: dict) -> int | None:
     return sum(int(row.get(key) or 0) for key in ("input_tokens", "cache_write_tokens", "cache_read_tokens"))
 
 
-def _import_rows(path: Path, label: str, who: str, at: datetime, unconfirmed: bool):
+def _bench_rows(path: Path):
+    """Read legacy sweep/bench answers. Their files hold no judge calls."""
+    with path.open(encoding="utf-8-sig") as stream:
+        for ordinal, line in enumerate(stream, 1):
+            if not line.strip():
+                continue
+            row = json.loads(line, parse_float=Decimal)
+            if row["model"] == "baseline" or _amount(row["cost_usd"]) == 0:
+                continue
+            yield {"id": str(ordinal), "at": "bench answers", "label": row["case"], "model": row["model"],
+                   "status": "ok" if row["status"] in {"scored", "invalid"} else "error",
+                   "cost_usd": row["cost_usd"], "input_tokens": row["input_tokens"],
+                   "output_tokens": row["output_tokens"]}
+
+
+def _export_rows(path: Path):
     if path.is_dir():
         path /= "model_calls.csv"
+    if path.name == "results.jsonl":
+        yield from _bench_rows(path)
+        return
     with path.open(newline="", encoding="utf-8-sig") as stream:
         rows = csv.DictReader(stream)
         required = {"id", "at", "label", "model", "status", "cost_usd"}
         if not required.issubset(rows.fieldnames or ()):
             raise ValueError("Use a model_calls.csv export.")
-        for row in rows:
-            status = row["status"]
-            if status not in ("refused", "pending", "ok", "error"):
-                raise ValueError("Invalid call status in CSV.")
-            if status == "refused":
-                continue
-            cost = _amount(row["cost_usd"])
-            ok = status == "ok" and row.get("cost_unconfirmed") != "true" and not unconfirmed
-            # New exports carry harness run IDs. For older exports the supplied label
-            # identifies the run, because scratch databases reuse local row IDs and dates.
-            run = row.get("run_id") or label
-            id_ = str(int(row["id"]))
-            key = _source_id("call", run, id_, row["at"])
-            model = row.get("answered_by") or row["model"]
-            yield ((key, at, "simulations/bench", run, label, model, cost, ok,
-                    _input_tokens(row) if ok else None,
-                    int(row["output_tokens"]) if ok and row.get("output_tokens") else None, who),
-                   row.get("run_id"), int(id_), row["at"])
+        yield from rows
+
+
+def _import_rows(path: Path, label: str, who: str, at: datetime, unconfirmed: bool):
+    for row in _export_rows(path):
+        status = row["status"]
+        if status not in ("refused", "pending", "ok", "error"):
+            raise ValueError("Invalid call status in CSV.")
+        if status == "refused":
+            continue
+        cost = _amount(row["cost_usd"])
+        ok = status == "ok" and row.get("cost_unconfirmed") != "true" and not unconfirmed
+        # New exports carry harness run IDs. For older exports the supplied label
+        # identifies the run, because scratch databases reuse local row IDs and dates.
+        run = row.get("run_id") or label
+        id_ = str(int(row["id"]))
+        key = _source_id("call", run, id_, row["at"])
+        model = row.get("answered_by") or row["model"]
+        yield ((key, at, "simulations/bench", run, label, model, cost, ok,
+                _input_tokens(row) if ok else None,
+                int(row["output_tokens"]) if ok and row.get("output_tokens") else None, who),
+               row.get("run_id"), int(id_), row["at"], row.get("spend_id"))
 
 
 def export_calls(conn: psycopg.Connection, path: Path, *, bench_id: int | None = None) -> None:
@@ -561,8 +597,9 @@ def export_calls(conn: psycopg.Connection, path: Path, *, bench_id: int | None =
     rows = conn.execute(
         "select id, at, label, model, effort, status, stop_reason, input_tokens, cache_write_tokens,"
         " cache_read_tokens, output_tokens, max_tokens, worst_case_usd, cost_usd, seconds, run_id, answered_by,"
-        " case when position('kept at worst case' in detail) > 0 then 'true' else 'false' end as cost_unconfirmed"
-        f" from model_calls{where} order by id", params if where else None)
+        " case when position('kept at worst case' in detail) > 0 then 'true' else 'false' end as cost_unconfirmed,"
+        " to_jsonb(m)->>'spend_id' as spend_id"
+        f" from model_calls m{where} order by id", params if where else None)
     with path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream)
         writer.writerow(column.name for column in rows.description)
@@ -578,7 +615,7 @@ def record_command(path: Path, label: str, who: str, at: datetime) -> str:
 def _record(argv: list[str], conn: psycopg.Connection | None, now: datetime | None) -> int:
     parser = argparse.ArgumentParser(prog="python -m vending.dev_spend record")
     source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--from", dest="path", type=Path, help="a simulation directory or model_calls.csv")
+    source.add_argument("--from", dest="path", type=Path, help="a simulation directory, model_calls.csv or bench results.jsonl")
     source.add_argument("--usd", help="a manual amount in dollars")
     parser.add_argument("--label", required=True, help="a unique run label or receipt label")
     parser.add_argument("--by", required=True, help="who recorded the spend")
@@ -598,10 +635,13 @@ def _record(argv: list[str], conn: psycopg.Connection | None, now: datetime | No
             amount = _amount(args.usd)
             key = _source_id("manual", label, who)
             rows = [((key, at, "manual", key, label, "", amount, not args.unconfirmed, None, None, who),
-                     None, None, None)]
+                     None, None, None, None)]
         count = 0
         with conn.transaction():
-            for values, run, id_, source_at in rows:
+            for values, run, id_, source_at, spend_id in rows:
+                if spend_id and conn.execute("select 1 from model_spend where id = %s",
+                                             (spend_id,)).fetchone():
+                    continue
                 if run and conn.execute(
                         "select 1 from model_calls where id = %s and run_id = %s and at = %s",
                         (id_, run, source_at)).fetchone():
@@ -612,7 +652,7 @@ def _record(argv: list[str], conn: psycopg.Connection | None, now: datetime | No
                     " on conflict (source_id) do nothing", values).rowcount
         if own:
             conn.commit()
-    except (ValueError, ArithmeticError, OSError, csv.Error) as error:
+    except (ValueError, ArithmeticError, OSError, csv.Error, KeyError, TypeError) as error:
         parser.error(str(error))
     finally:
         if own:

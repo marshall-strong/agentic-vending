@@ -572,9 +572,9 @@ function header() {
   const source = document.getElementById("source");
   source.hidden = !r.source.includes("not the ledger");
   source.textContent = "Demo data from run notes.";
-  document.getElementById("period").textContent = r.opening_at
-    ? `Real opening ${dateLabel(r.opening_at, true)} at ${r.opening_at.slice(11, 16)} ET`
-    : `As of ${dateLabel(r.as_of, true)} at ${r.as_of.slice(11, 16)} ET`;
+  document.getElementById("period").textContent = r.first_spend_date
+    ? `Recorded spend since ${dateLabel(r.first_spend_date, true)}`
+    : "No recorded spend";
   const later = r.buckets.reduce((s, b) => s + b.after_opening_test_calls, 0);
   document.getElementById("after-note").textContent = later
     ? `(warning: ${later} call${later === 1 ? "" : "s"}, ${usd(sum(r.buckets.map(b => b.after_opening_test_usd)))}; testing should finish before the opening)`

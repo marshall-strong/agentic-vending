@@ -1806,7 +1806,7 @@ def test_before_the_opening_the_spendable_cell_shows_no_test_figures_only_its_ch
     agent_runs.finish(conn, run, "submitted", cost_usd=Decimal("0.77"))
     snap = dashboard.snapshot(page_conn, MONDAY)
     cell = dashboard._status_bar(snap, charts={"spend": "/dashboard/spend"}).split("Spendable", 1)[1].split("</div>")[0]
-    assert "Before the opening" in cell and "development spend, not from the $600" in cell
+    assert "$0.00 / $85.00" in cell and "No recorded spend" in cell
     assert "$6.25" not in cell and "$0.77" not in cell and "drinks" not in cell
     assert '<a href="/dashboard/spend">Development spend by week</a>' in cell
     # A link can't hold a link: the cell is a box, and its label alone links to the money panel.

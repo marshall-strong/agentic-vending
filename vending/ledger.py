@@ -761,9 +761,22 @@ def _at(moment: datetime) -> str:
     return f"{moment.astimezone(EASTERN):%a %d %b %Y %H:%M:%S} Eastern"
 
 
+def real_opening(conn: psycopg.Connection) -> Entry | None:
+    opened = opening(conn)
+    return None if is_test_opening(opened) else opened
+
+
+def before_opening(at: datetime, opened_at: datetime | None) -> bool:
+    return opened_at is None or at < opened_at
+
+
+def competition_call(purpose: str, at: datetime, opened_at: datetime | None) -> bool:
+    return purpose == "live" and not before_opening(at, opened_at)
+
+
 def _development(e: Entry, opened: Entry | None) -> bool:
     """A model call before the opening, or before any opening: development spend, not from the $600 (#104)."""
-    return e.kind == "tokens" and (opened is None or e.at < opened.at)
+    return e.kind == "tokens" and not competition_call("live", e.at, opened.at if opened else None)
 
 
 def _sum(recorded: Iterable[Entry], kind: str) -> Fraction:
@@ -1053,7 +1066,7 @@ def pnl(conn: psycopg.Connection, start: datetime, end: datetime, polls_since: d
     if missing:
         notes.append(f"{missing} receipt lines have no total_paid, so purchases and cost of sales leave them out")
     visits, fees = _visits(conn, start, end)
-    opened = opening(conn)
+    opened = real_opening(conn)
     recorded = entries(conn, start, end)
     # Model calls before the opening are development spend: counting them would make the competition
     # look dearer than it is. Only they are left out; the window's other lines stay (#104).
@@ -1131,7 +1144,7 @@ def pnl_by_week(conn: psycopg.Connection, start: datetime, end: datetime,
         fees[week(at)] += fee
     tokens: dict[date, Fraction] = defaultdict(Fraction)
     adjustments: dict[date, Fraction] = defaultdict(Fraction)
-    opened = opening(conn)
+    opened = real_opening(conn)
     for e in entries(conn, start, end):
         if _development(e, opened):
             continue                                      # left out, as in `pnl()`

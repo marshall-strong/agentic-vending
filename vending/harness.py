@@ -133,6 +133,58 @@ class HarnessError(Exception):
     """The call wasn't made, or failed. The message says why and what was recorded."""
 
 
+SPEND_DATABASE_ENV = "SPEND_DATABASE_URL"
+SPEND_DATABASE_HELP = (
+    "Set SPEND_DATABASE_URL to the team spend database with write access, "
+    "and apply its migrations. No paid request was sent."
+)
+
+
+def anthropic_client(**kwargs):
+    """Create the SDK client used by Harness."""
+    import anthropic
+
+    return anthropic.Anthropic(max_retries=0, **kwargs)
+
+
+def spend_category(label: str, by: str = "") -> str:
+    if label.startswith(("price_search", "price_check ", "pack price lookup ")):
+        return "price search"
+    if by in {"replay", "simulation"} or label.startswith(("bench ", "sweep ", "replay ")):
+        return "simulations/bench"
+    return "agent runs"
+
+
+def spend_connection() -> psycopg.Connection:
+    """Open a separate short connection to the team's spend database."""
+    from vending import db, settings
+
+    url = settings.get(SPEND_DATABASE_ENV)
+    if not url:
+        raise HarnessError(SPEND_DATABASE_HELP)
+    try:
+        return psycopg.connect(url, autocommit=True, connect_timeout=db.CONNECT_TIMEOUT,
+                               options=db.session_options(url, "-c statement_timeout=5000"))
+    except (psycopg.Error, ValueError):
+        raise HarnessError(SPEND_DATABASE_HELP) from None
+
+
+def check_spend_database(connect=None) -> None:
+    connect = connect or spend_connection
+    try:
+        with connect() as conn:
+            writable = conn.execute(
+                "select not current_setting('transaction_read_only')::boolean"
+                " and has_table_privilege('model_spend', 'SELECT')"
+                " and has_table_privilege('model_spend', 'INSERT')"
+                " and has_table_privilege('model_spend', 'UPDATE')"
+            ).fetchone()[0]
+            if not writable:
+                raise HarnessError(SPEND_DATABASE_HELP)
+    except psycopg.Error:
+        raise HarnessError(SPEND_DATABASE_HELP) from None
+
+
 def check_client(client: Any, key_env: str) -> None:
     """Refuse a real Anthropic client that would pay with anything but the key in `key_env`.
 
@@ -377,6 +429,7 @@ class _Reserved:
     worst: Decimal
     call_id: int
     entry: int | None
+    spend_id: uuid.UUID | None
 
 
 class Harness:
@@ -389,16 +442,26 @@ class Harness:
                  key_env: str = DEFAULT_KEY_ENV, run_id: str | None = None,
                  hold: Callable[[psycopg.Connection], str | None] | None = None,
                  hold_margin: float | None = None, request_deadline: float | None = None,
-                 stop_at: float | None = None):
+                 stop_at: float | None = None,
+                 spend_connect: Callable[[], psycopg.Connection] | None = None):
         if purpose not in PURPOSES:
             raise HarnessError(f"purpose must be one of {', '.join(PURPOSES)}, not {purpose!r}")
         if key_env.upper().startswith("ANTHROPIC_"):
             # Claude Code reads ANTHROPIC_* variables, so a team key there would pay for its sessions.
             raise HarnessError(f"use VENDING_ANTHROPIC_API_KEY or another non-ANTHROPIC_ name, not {key_env}")
+        import anthropic
+
         check_client(client, key_env)
+        self.spend_connect = spend_connect
+        if self.spend_connect is None and isinstance(client, anthropic.Anthropic):
+            self.spend_connect = spend_connection
+        if self.spend_connect is not None:
+            check_spend_database(self.spend_connect)
         self.client = client.with_options(max_retries=0)
         self.connect, self.purpose, self.by, self.key_env = connect, purpose, by, key_env
         self.run_id = run_id or uuid.uuid4().hex
+        # Simulated seasons reuse their scratch run numbers.
+        self.spend_run_id = f"{self.run_id} / {uuid.uuid4().hex}" if by == "simulation" else self.run_id
         self.host = socket.gethostname()
         self.prices = prices or load_prices()
         self.min_tokens = min_tokens
@@ -491,6 +554,12 @@ class Harness:
         if daily_budget is not None and not label.startswith(daily_budget.prefix):
             raise HarnessError(f"a call under the {daily_budget.prefix!r} budget must have a label starting with it")
         held = self._reserve(model, effort, counted, wanted, floor, caches, label, reference, searches, daily_budget)
+        if held.spend_id is not None:
+            try:
+                self._reserve_spend(held, label, model)
+            except Exception:
+                self._refused(held, "not sent: spend database unavailable", None, 0.0)
+                raise HarnessError(SPEND_DATABASE_HELP) from None
         self.spent += held.worst
         self.reserved += 1
 
@@ -578,6 +647,7 @@ class Harness:
 
         Every cap is read and the worst case written in one transaction under `LOCK_KEY`, so two calls can't both
         fit in the same room. Each day is the Eastern day of `now`, the reservation's own time."""
+        spend_id = uuid.uuid4() if self.spend_connect else None
         try:
             with self.connect() as conn, conn.transaction():
                 conn.execute(f"set local lock_timeout = '{LOCK_TIMEOUT}'")
@@ -604,27 +674,69 @@ class Harness:
                         "Nothing was spent.")
                 worst = worst_case_usd(model, counted, max_tokens, self.prices, caches=caches, searches=searches)
                 entry = None
-                if self.purpose == "live":      # only live calls are the competition's money
+                opened = ledger.real_opening(conn) if self.purpose == "live" else None
+                if ledger.competition_call(self.purpose, now, opened.at if opened else None):
                     entry = ledger.record_tokens(conn, worst, model, tokens_in(counted, searches), max_tokens,
                                                  f"{reference} pending", by=self.by, at=now).id
+                spend_column = ", spend_id" if spend_id else ""
+                spend_value = ", %s" if spend_id else ""
+                args = (now, self.purpose, label, self.run_id, model, effort, self.key_env, max_tokens,
+                        worst, worst, entry, self.by, self.host)
                 call_id = conn.execute(
                     "insert into model_calls (at, purpose, label, run_id, model, effort, key_env, max_tokens,"
-                    " worst_case_usd, cost_usd, ledger_entry, detail, recorded_by, host)"
-                    " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s) returning id",
-                    (now, self.purpose, label, self.run_id, model, effort, self.key_env, max_tokens,
-                     worst, worst, entry, self.by, self.host)).fetchone()[0]
+                    f" worst_case_usd, cost_usd, ledger_entry, detail, recorded_by, host{spend_column})"
+                    f" values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s{spend_value}) returning id",
+                    (*args, spend_id) if spend_id else args).fetchone()[0]
         except (CapReached, NotHeld):
             raise
         except Exception as error:
             raise HarnessError(f"couldn't write the worst-case estimate ({type(error).__name__}: "
                                f"{error}); nothing was sent") from None
-        return _Reserved(max_tokens, worst, call_id, entry)
+        return _Reserved(max_tokens, worst, call_id, entry, spend_id)
+
+    def _reserve_spend(self, held: _Reserved, label: str, model: str) -> None:
+        category = spend_category(label, self.by)
+        # Avoid putting lookup targets or other request contents in the spend record.
+        name = "Price search" if category == "price search" else label
+        with self.spend_connect() as conn, conn.transaction():
+            conn.execute(
+                "insert into model_spend (id, purpose, category, label, run_id, model, cost_usd)"
+                " values (%s, %s, %s, %s, %s, %s, %s) on conflict (id) do nothing",
+                (held.spend_id, self.purpose, category, name, self.spend_run_id, model, held.worst))
+
+    def _finish_spend(self, held: _Reserved, *, request_id: str | None = None, model: str | None = None,
+                      dollars: Decimal | None = None, confirmed: bool = False,
+                      tokens_in: int | None = None, tokens_out: int | None = None,
+                      refused: bool = False) -> bool:
+        if held.spend_id is None:
+            return True
+        try:
+            with self.spend_connect() as conn, conn.transaction():
+                if request_id:
+                    conn.execute("select pg_advisory_xact_lock(hashtext(%s))", (request_id,))
+                    duplicate = conn.execute("select 1 from model_spend where request_id = %s and id <> %s",
+                                             (request_id, held.spend_id)).fetchone()
+                    if duplicate:
+                        request_id, dollars, refused, confirmed = None, Decimal(0), True, True
+                conn.execute(
+                    "update model_spend set request_id = %s, model = coalesce(%s, model),"
+                    " cost_usd = coalesce(%s, cost_usd), confirmed = %s, tokens_in = %s,"
+                    " tokens_out = %s, refused = %s where id = %s",
+                    (request_id, model, dollars, confirmed, tokens_in, tokens_out, refused, held.spend_id))
+            return True
+        except Exception as error:
+            log.error("team spend row %s still has its estimate (%s)", held.spend_id, type(error).__name__)
+            return False
+
 
     def _settle(self, held: _Reserved, dollars: Decimal, model: str, usage: Any, response: Any, seconds: float,
                 reference: str, note: str) -> bool:
         """Correct the estimate to what the call billed. False if that failed."""
         fresh, read = _n(usage.input_tokens), _n(usage.cache_read_input_tokens)
         written, out = _n(usage.cache_creation_input_tokens), _n(usage.output_tokens)
+        recorded = self._finish_spend(held, request_id=getattr(response, "_request_id", None),
+                                      model=model, dollars=dollars, confirmed="kept at worst case" not in note,
+                                      tokens_in=fresh + read + written, tokens_out=out)
         try:
             with self.connect() as conn, conn.transaction():
                 conn.execute(
@@ -644,13 +756,14 @@ class Harness:
                                  " values ('write', 'ledger.tokens', %s, 'done', %s)",
                                  (Jsonb({"entry": held.entry, "cost": str(dollars), "reference": reference}),
                                   f"model call estimate {held.entry} settled at ${dollars:.6f}"))
-            return True
+            return recorded
         except Exception:
             log.exception("couldn't settle model call %s at $%s; its worst-case estimate stays", held.call_id, dollars)
             return False
 
     def _refused(self, held: _Reserved, reference: str, error: Any, seconds: float) -> None:
         """A 4xx: the API refused it and didn't bill. Keep the row at $0, so the attempt is still seen."""
+        self._finish_spend(held, request_id=_request_id(error), dollars=Decimal(0), confirmed=True, refused=True)
         try:
             with self.connect() as conn, conn.transaction():
                 conn.execute("update model_calls set status = 'refused', finished_at = now(), cost_usd = 0,"
@@ -663,6 +776,7 @@ class Harness:
 
     def _mark(self, held: _Reserved, reference: str, error: Any, seconds: float) -> None:
         """Keep the worst case (it may have billed), and say why."""
+        self._finish_spend(held, request_id=_request_id(error))
         try:
             with self.connect() as conn, conn.transaction():
                 conn.execute("update model_calls set status = 'error', finished_at = now(), request_id = %s,"

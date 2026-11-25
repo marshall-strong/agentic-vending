@@ -439,17 +439,17 @@ class Memory:
 
 def remember(conn: psycopg.Connection, *, sku: str, store: str, kind: str, asked: tuple[int, int], outcome: str,
              model: str, cost: Decimal, by: str, no_store: bool, at: datetime, seen: dict | None = None,
-             searches: Any = None, detail: str | None = None) -> None:
+             searches: Any = None, detail: str | None = None, model_call_id: int | None = None) -> None:
     """Log one lookup in `price_lookups`: what was asked, what the store's page showed (`seen`, as far as the report
     got), the outcome, the model and the cost."""
     seen = seen or {}
     conn.execute(
         "insert into price_lookups (at, sku, store, kind, asked_min, asked_max, units_per_pack, price_cents, url,"
-        " stock, outcome, model, cost_usd, searches, no_store, by, detail)"
-        " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        " stock, outcome, model, cost_usd, searches, no_store, by, detail, model_call_id)"
+        " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (at, sku, store, kind, asked[0], asked[1], seen.get("units"), seen.get("price"), seen.get("url"),
          seen.get("stock"), outcome, model, cost, searches if isinstance(searches, int) else None, no_store, by,
-         (detail or "")[:500] or None))
+         (detail or "")[:500] or None, model_call_id))
 
 
 def confirmed_price(conn: psycopg.Connection, sku: str, store: str, units: int, url: str | None, now: datetime,
@@ -856,10 +856,10 @@ class PriceSearch:
             if kind == "check" and stop.code not in STOP_RUN:
                 stop = _Stop("check_disagrees", f"the check found {stop.code}: {stop.detail}")
             self._remember(sku, store, kind, packs, stop.code, model, self.harness.spent - before, seen,
-                           sent.get("billed"), stop.detail)
+                           sent.get("billed"), stop.detail, sent.get("call_id"))
             raise stop from None
         self._remember(sku, store, kind, packs, "found", model, self.harness.spent - before, seen, found["billed"],
-                       None)
+                       None, sent.get("call_id"))
         return found
 
     def _agrees(self, store: str, checked: dict, found: dict) -> None:
@@ -871,13 +871,13 @@ class PriceSearch:
                                            f"{checked['units']} at {checked['url']}")
 
     def _remember(self, sku: str, store: str, kind: str, packs: Any, outcome: str, model: str, cost: Decimal,
-                  seen: dict, billed: Any, detail: str | None) -> None:
+                  seen: dict, billed: Any, detail: str | None, model_call_id: int | None = None) -> None:
         """`remember`, on its own connection. A log that can't be written never stops the lookup: it is logged."""
         try:
             with self.connect() as conn:
                 remember(conn, sku=sku, store=store, kind=kind, asked=(min(packs), max(packs)), outcome=outcome,
                          model=model, cost=cost, by=self.person or AGENT_BY, no_store=self.bench,
-                         at=self._now(conn), seen=seen, searches=billed, detail=detail)
+                         at=self._now(conn), seen=seen, searches=billed, detail=detail, model_call_id=model_call_id)
         except psycopg.Error as error:
             logger.error("couldn't log the %s lookup of %s at %s (%s): %s", kind, sku, store, outcome, error)
 
@@ -897,6 +897,7 @@ class PriceSearch:
             sent["at"] = True
             raise _Stop("not_searched", str(error)) from None
         sent["at"] = True
+        sent["call_id"] = call.call_id
         response = call.response
         content = list(getattr(response, "content", None) or [])
         billed = getattr(getattr(response.usage, "server_tool_use", None), "web_search_requests", None)
@@ -1636,10 +1637,16 @@ def main(argv: list[str] | None = None, *, client: Any = None,
         print(error, file=sys.stderr)
         report["failures"] = len(todo) if compare else len(needs)
         return 2
-    live = start.on_or_after_start(at) and not args.no_store
     with connect() as conn:
         model = args.model or configured_model(conn, DEFAULT_MODEL)
-    harness = Harness(client, connect, purpose="live" if live else "test", run_cap_usd=cap, now=now, by=by)
+        opened = ledger.real_opening(conn) if label else None
+    scheduled_live = opened is not None and at >= opened.at
+    live = (start.on_or_after_start(at) or scheduled_live) and not args.no_store
+    try:
+        harness = Harness(client, connect, purpose="live" if live else "test", run_cap_usd=cap, now=now, by=by)
+    except HarnessError as error:
+        print(error, file=sys.stderr)
+        return 1
     searcher = PriceSearch(harness, connect, model=model, now=now, person=by, model_fixed=True, max_age=max_age,
                            bench=args.no_store, full=args.full, label=label)
     missed = bool(skipped)

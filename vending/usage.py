@@ -97,7 +97,7 @@ def report(conn: psycopg.Connection, now: datetime, since: date | None = None, r
     windows = ({"from " + since.isoformat(): _since(since)} if since else
                {"today": day_start(now), "last 7 days": _since(week_ago), "all time": None})
     window = list(windows.values())[-1]
-    opened = ledger.opening(conn) if conn.execute("select to_regclass('ledger_entries')").fetchone()[0] else None
+    opened = ledger.real_opening(conn) if conn.execute("select to_regclass('ledger_entries')").fetchone()[0] else None
     start = opened.at if opened else None
     split = {"development": totals(conn, None, start), "competition": totals(conn, start) if start else None}
     return {

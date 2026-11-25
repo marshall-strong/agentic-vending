@@ -255,13 +255,13 @@ def model_client() -> Any:
     login profile, so a run could bill whoever is signed in on that machine. The harness checks
     the client again (`harness.check_client`) before the first request.
     """
-    import anthropic
-
     key = (settings.get(DEFAULT_KEY_ENV) or "").strip()
     if not key:
         raise NoModelKey(f"{DEFAULT_KEY_ENV} isn't set, so no model request was made. The README says "
                          "where the team's key lives and how to set it.")
-    return anthropic.Anthropic(api_key=key, max_retries=0, timeout=REQUEST_TIMEOUT)
+    from vending.harness import anthropic_client
+
+    return anthropic_client(api_key=key, timeout=REQUEST_TIMEOUT)
 
 
 def tool_definitions(listed: list[Any], *, live: bool) -> list[dict]:

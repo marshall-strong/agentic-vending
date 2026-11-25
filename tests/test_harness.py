@@ -157,10 +157,17 @@ REQUEST = {"model": "claude-opus-5-5", "max_tokens": 16000, "messages": [{"role"
 
 
 @pytest.fixture
-def connect(schema_url):
+def empty_connect(schema_url):
     from tests.conftest import open_in
 
     return lambda: open_in(*schema_url)
+
+
+@pytest.fixture
+def connect(empty_connect, conn):
+    conn.execute("insert into ledger_entries (at, kind, amount_cents, detail, recorded_by)"
+                 " values ('2020-01-01T00:00:00Z', 'opening', 60000, 'real opening', 'tester')")
+    return empty_connect
 
 
 def harness(connect, client, **kw):
@@ -435,3 +442,48 @@ def test_one_harness_is_one_run(connect, conn):
 def test_a_key_named_like_claude_codes_is_refused(connect):
     with pytest.raises(HarnessError, match="ANTHROPIC_API_KEY"):
         Harness(FakeClient(), connect, purpose="test", key_env="ANTHROPIC_API_KEY")
+
+
+def test_recorded_harness_uses_team_database_before_send(connect, conn):
+    from vending import harness as module
+
+    def during_send():
+        assert conn.execute("select confirmed, cost_usd > 0 from model_spend").fetchall() == [(False, True)]
+
+    h = module.Harness(FakeClient(during=during_send), connect, purpose="test", spend_connect=connect)
+    h.call(REQUEST, label="sweep test")
+    assert conn.execute("select purpose, confirmed from model_spend").fetchall() == [("test", True)]
+
+
+def test_no_anthropic_send_outside_harness():
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    paths = (path for directory in ("vending", "scripts", "analysis") for path in (root / directory).rglob("*.py"))
+    for path in paths:
+        if path == root / "vending/harness.py":
+            continue
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Call):
+                parts = ast.unparse(node.func).split(".")
+                assert parts[-1] not in {"Anthropic", "AsyncAnthropic"}, path
+                assert parts[-2:] != ["messages", "create"], path
+
+
+
+def test_real_opening_keeps_each_call_in_its_own_books(empty_connect, conn):
+    from datetime import timedelta
+    from vending import dev_spend, ledger
+
+    for purpose in ("live", "test"):
+        harness(empty_connect, FakeClient(), purpose=purpose, now=lambda: NOW).call(REQUEST)
+    assert tokens_entries(conn) == []
+    ledger.record(conn, "opening", 60000, "real opening", "tester", at=NOW + timedelta(hours=1))
+    after = NOW + timedelta(hours=2)
+    for purpose in ("live", "test"):
+        harness(empty_connect, FakeClient(), purpose=purpose, now=lambda: after).call(REQUEST)
+    assert len(tokens_entries(conn)) == 1
+    report = dev_spend.daily(conn, after)
+    assert report.totals.total_cents == Decimal("2.8")
+    assert sum(b.after_opening_test_cents for b in report.buckets) == Decimal("1.4")

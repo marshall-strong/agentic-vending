@@ -161,7 +161,7 @@ def read(conn: psycopg.Connection, start: date | None, end: date | None, view: s
     # The weeks start at the true start's week and count the polls from the same poll start as the totals
     # (`ledger.poll_start`), so a poll at the start day's midnight sharp is in both and the rows add up.
     # A window that hasn't started is empty (get_pnl gives it no length): no rows, as it reads no ledger.
-    opened = ledger.opening(conn)
+    opened = ledger.real_opening(conn)
     weeks = [] if totals.end <= totals.start else ledger.pnl_by_week(
         conn, totals.start, totals.end, ledger.poll_start(totals.start, opened and opened.at))
     # The balance at the end of the last day shown, where the table stops; now when there is no end

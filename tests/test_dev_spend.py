@@ -362,12 +362,11 @@ def test_test_opening_keeps_development_open(conn):
 
 
 def test_price_search_calls_are_counted_once(conn):
-    conn.execute("create table price_lookups (id bigint primary key, at timestamptz, sku text,"
-                 " store text, model text, cost_usd numeric)")
     add(conn, et(12), label="pack price lookup tea Costco")
-    conn.execute("insert into price_lookups values"
-                 " (1, %s, 'tea', 'Costco', 'claude-opus-5-5', 0.10),"
-                 " (2, %s, 'tea', 'Amazon', 'claude-opus-5-5', 0.25)", (et(12), et(12)))
+    for store, cost in [("Costco", "0.10"), ("Amazon", "0.25")]:
+        conn.execute("insert into price_lookups (at, sku, store, model, cost_usd, kind, asked_min,"
+                     " asked_max, outcome, by) values (%s, 'tea', %s, 'claude-opus-5-5', %s,"
+                     " 'search', 1, 1, 'found', 'tester')", (et(12), store, Decimal(cost)))
     totals = dev_spend.weekly(conn, BEFORE_OPEN_NOW).totals
     assert totals.total_cents == 35
     assert totals.by_category == {"price search": 35}
@@ -389,3 +388,19 @@ def test_record_import_is_idempotent_and_uses_actual_date(conn, tmp_path):
     assert report.totals.total_cents == 175
     assert report.totals.unconfirmed_cents == 150
     assert report.totals.by_category == {"simulations/bench": 75, "manual": 100}
+
+
+def test_dashboard_spendable_uses_recorded_spend_until_real_opening(conn):
+    from vending import config, dashboard
+
+    conn.execute("insert into ledger_entries (id, at, kind, amount_cents, detail, recorded_by)"
+                 " values (%s, %s, 'opening', 60000, %s, 'tester')",
+                 (ledger.TEST_OPENING_ID, et(11), ledger.TEST_OPENING_DETAIL))
+    add(conn, et(12), cost="0.25", status="pending")
+    config.set_value(conn, "dev_spend_cap_cents", 9000, "tester")
+    snap = dashboard.snapshot(conn, BEFORE_OPEN_NOW)
+    data = snap["development_spend"]["data"]
+    assert data["total"] == "$0.25" and data["cap"] == "$90.00"
+    assert data["since"] == "12 Nov 2026" and data["unconfirmed"] == "$0.2500"
+    page = dashboard.render(snap)
+    assert "Recorded spend since 12 Nov 2026" in page and "$0.25 / $90.00" in page

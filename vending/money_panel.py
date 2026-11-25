@@ -130,7 +130,7 @@ def read(conn: psycopg.Connection, now: datetime) -> dict:
     (then `opens_at` says when).
     """
     pending, most = _committed(conn)
-    start = ledger.opening(conn)
+    start = ledger.real_opening(conn)
     if start is not None and start.at > now:
         return {"opened": False, "opens_at": start.at, "committed": pending}
     try:
@@ -318,14 +318,15 @@ def html(panel: dict, pnl_href: str | None = None) -> str:
             'one midweek fee and a week of the daily model cap.</p></details>')
     if d.get("problem"):
         return f'<p class="empty bad-text">No balance: {_e(d["problem"])}</p>' + pend + plan
+    unopened_ai = '<p class="sub">Competition AI spend (from the $600): <b>$0.00</b></p>'
     if not d["opened"] and d.get("opens_at"):
         return (f'<p class="empty">The ledger opens {_day(d["opens_at"])}: its opening entry is recorded ahead '
                 'of time, so there is no balance until then. Spend before the opening is development, not from '
-                'the $600.</p>' + pend + plan)
+                'the $600.</p>' + unopened_ai + pend + plan)
     if not d["opened"]:
         return ('<p class="empty">No opening entry in the ledger yet, so there is no balance. Record the '
                 '$600 before the first fill (#107): <code>python -m vending.ledger open --amount 600.00 '
-                '--by NAME</code>. Spend before the opening is development, not from the $600.</p>' + pend + plan)
+                '--by NAME</code>. Spend before the opening is development, not from the $600.</p>' + unopened_ai + pend + plan)
     p = d["pnl"]
     tiles = (
         f'<div class="mtile"><div class="label">Balance</div><div class="big">{_usd(d["balance"])}</div>'
@@ -337,7 +338,7 @@ def html(panel: dict, pnl_href: str | None = None) -> str:
         f'<div class="mtile"><div class="label">Profit since the opening</div><div class="big">{_usd(p["net"])}</div>'
         f'<div class="sub">{p["units_sold"]} units sold &middot; revenue {_usd(p["revenue_ex_tax"])} without tax'
         + ("" if p["net"] is not None else " &middot; unknown until every unit sold has a receipt cost") + "</div></div>")
-    meters = (_meter("Model spend", d["tokens"], MODEL_BUDGET_CENTS, "live calls, from the ledger")
+    meters = (_meter("Competition AI spend (from the $600)", d["tokens"], MODEL_BUDGET_CENTS, "live calls, from the ledger")
               + _meter("Midweek visits", d["visit_fees"], VISIT_BUDGET_CENTS,
                        f'{d["visits"]} visit{"" if d["visits"] == 1 else "s"}'))
     rows = [

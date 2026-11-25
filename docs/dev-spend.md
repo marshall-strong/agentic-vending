@@ -1,6 +1,7 @@
 # Development spend
 
-The dashboard shows API spend against the team's $85 development cap. Set
+The dashboard shows recorded API spend against the team's $85 development cap.
+It lists the date of the first charge in the report. Set
 `dev_spend_cap_cents` in the database config to change the cap. It does not stop calls.
 
 Development ends at the real ledger opening. The 11 Nov test opening does
@@ -55,3 +56,13 @@ dates in the CSV describe the season.
 Reuse the label for repeat imports of an older CSV. Give each separate run
 a unique label. A manual label identifies one receipt per recorder. Use
 `--unconfirmed` if the amount is an estimate.
+
+## Record paid runs
+
+Set `SPEND_DATABASE_URL` to the team spend database with write access before
+a paid run. The harness records the worst-case charge there before it sends
+the request. It updates the charge after the reply. Free scripted runs use
+their scratch database. The CLI keeps the estimate if settlement fails.
+
+The ledger counts live charges from the real opening against the $600.
+The report lists any tests after that opening separately.

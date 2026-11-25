@@ -91,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
     os.environ["DEX_BASE_URL"] = "http://127.0.0.1:9"      # a dead port, should anything get past the tripwires
     os.environ["DEX_API_KEY"] = "simulation-has-no-key"
 
-    from vending import agent, db, dev_spend
+    from vending import agent, db, dev_spend, harness
     from vending.simulate import report, world
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -104,6 +104,13 @@ def main(argv: list[str] | None = None) -> int:
     # A resumed season keeps the schedule it started with: the checkpoint says which, whatever --schedule says.
     st = season.load(checkpoint) if args.resume else None
     schedule = getattr(st, "schedule", "run-day") if st is not None else args.schedule
+    decider = st.decider if st is not None else args.decider
+    if decider == "model":
+        try:
+            harness.check_spend_database()
+        except harness.HarnessError as error:
+            print(error, file=sys.stderr)
+            return 1
     with db.connect() as conn, (live.environment() if schedule == "live" else contextlib.nullcontext()):
         conn.autocommit = True
         if st is None:

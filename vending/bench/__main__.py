@@ -97,6 +97,13 @@ def cmd_run(args) -> int:
         print(f"{model.DEFAULT_KEY_ENV} is not set, so nothing was run. scripts/run_bench.ps1 loads it for you.",
               file=sys.stderr)
         return 1
+    from vending.harness import HarnessError, check_spend_database
+
+    try:
+        check_spend_database()
+    except HarnessError as error:
+        print(error, file=sys.stderr)
+        return 1
     try:
         with _connect() as conn:
             if not store.has_tables(conn):

@@ -15,6 +15,9 @@ You need the local database with the ledger opened, as in [`mcp-server.md`](mcp-
 `python -m vending.ledger open --amount 600.00 --by NAME`. Without an opening entry the page says
 how to record one.
 
+Competition AI spend counts live charges from the real ledger opening and comes out of the $600.
+Development spend stays outside this report. The 11 Nov test opening does not start the competition ledger.
+
 ## What it shows
 
 From the top: the controls (they don't print), four headline tiles, a bar chart of weekly profit,

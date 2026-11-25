@@ -428,7 +428,7 @@ class NotYet:
 
 def _opened(conn: psycopg.Connection, now: datetime) -> ledger.Entry | NotYet:
     """The ledger's opening entry, if it is at or before `now`."""
-    opened = ledger.opening(conn)
+    opened = ledger.real_opening(conn)
     if opened is None:
         return NotYet(None)
     if opened.at > now:

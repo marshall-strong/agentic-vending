@@ -1009,7 +1009,8 @@ def _development_spend(conn: psycopg.Connection, now: datetime) -> dict | None:
             "categories": {name: dev_spend.usd(totals.by_category.get(name, 0))
                            for name in dev_spend.CATEGORIES},
             "unconfirmed": dev_spend.usd(totals.unconfirmed_cents) if totals.unconfirmed_cents else None,
-            "over_cap": totals.total_cents > report.cap_cents}
+            "over_cap": totals.total_cents > report.cap_cents,
+            "since": report.first_spend_date.strftime("%d %b %Y").lstrip("0") if report.first_spend_date else None}
 
 
 def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False,
@@ -2365,8 +2366,10 @@ def _status_bar(snap: dict, items: list[dict] | None = None, charts: dict[str, s
     dev_panel = snap.get("development_spend")
     development = dev_panel["data"] if dev_panel and dev_panel["ok"] else None
     if development is not None:
-        split = " &middot; ".join(f"{name.capitalize()} {amount}"
-                                 for name, amount in development["categories"].items())
+        since = development["since"]
+        coverage = f"Recorded spend since {since}" if since else "No recorded spend"
+        split = " &middot; ".join([coverage, *(f"{name.capitalize()} {amount}"
+                                                 for name, amount in development["categories"].items())])
         if development["unconfirmed"]:
             split += f' &middot; Unconfirmed {development["unconfirmed"]}'
         cells.append(_cell("Spendable", f'{development["total"]} / {development["cap"]}',

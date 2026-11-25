@@ -459,6 +459,7 @@ def run_agent(conn: psycopg.Connection, st: State, kind: str, budget: Decimal, r
     class TestHarness(Harness):
         """Every call is test spend (purpose `test`), as the brief for this run asks, so none reaches the ledger."""
         def __init__(self, client, connect, *, purpose, **kw):
+            kw["by"] = "simulation"
             super().__init__(client, connect, purpose="test", **kw)
 
     # The MCP server's tools read these module globals. Point them at this season for the run only, and
