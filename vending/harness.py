@@ -246,6 +246,26 @@ class PastDeadline(HarnessError):
     """Not sent: the caller's deadline (`stop_at`) passed while the request was being counted or reserved."""
 
 
+class NoCredit(HarnessError):
+    """Not sent, or refused unbilled: the API says the key's account has no credit left (a 400 that says "credit
+    balance", or a billing error). Every later call will fail the same way until a person adds credit, so callers
+    that loop (the price search) stop at once instead of trying each item. Nothing was spent."""
+
+
+def _no_credit(error: Any) -> bool:
+    """The API refused for the account's credit or billing. Read from the error's type and message only: neither
+    is logged or raised (`_describe` gives the class and status)."""
+    if getattr(error, "status_code", None) not in (400, 402):
+        return False
+    parts = [str(getattr(error, "message", "") or "")]
+    body = getattr(error, "body", None)
+    inner = body.get("error") if isinstance(body, dict) and isinstance(body.get("error"), dict) else body
+    if isinstance(inner, dict):
+        parts += [str(inner.get("type") or ""), str(inner.get("message") or "")]
+    words = " ".join(parts).lower()
+    return "credit balance" in words or "billing_error" in words
+
+
 class Abandoned(HarnessError):
     """Sent, but no answer came within `request_deadline`: the harness stopped waiting. It may have billed, so
     its worst case stays in the books. Its thread may still be going: `in_flight()` says so."""
@@ -564,6 +584,9 @@ class Harness:
         try:
             counted = self.client.messages.count_tokens(**{k: v for k, v in request.items() if k in COUNTED}).input_tokens
         except anthropic.APIError as error:
+            if _no_credit(error):
+                raise NoCredit(f"the API says the key has no credit left ({_describe(error)}); nothing was sent "
+                               "or spent") from None
             raise HarnessError(f"counting the request failed ({_describe(error)}); nothing was sent or spent") from None
         # The caller's deadline can't stop this thread, so it is checked here, and again just before sending.
         self._past("while the request was counted")
@@ -606,6 +629,9 @@ class Harness:
             if error.status_code < 500:      # refused by the API, not billed
                 self._refused(held, f"{reference} refused: {_describe(error)}", error, seconds)
                 self.spent -= held.worst
+                if _no_credit(error):
+                    raise NoCredit(f"the model call was refused: the API says the key has no credit left "
+                                   f"({_describe(error)}); not billed") from None
                 raise HarnessError(f"the model call was refused ({_describe(error)}); not billed") from None
             self._mark(held, f"{reference} estimate: {_describe(error)}", error, seconds)
             raise HarnessError(f"the model call failed ({_describe(error)}); kept at its worst case, "

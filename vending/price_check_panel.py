@@ -74,6 +74,7 @@ OUTCOME_WORDS = {
     "over_ceiling": "too dear to price under the ceiling", "implausible_price": "too far from our price to trust",
     "pack_mismatch": "only another pack size", "past_cutoff": "past that store's order cutoff",
     "no_usable_price": "no usable price", "search_cap": "the lookup cap was used up",
+    "no_credit": "the model API key had no credit",
 }
 RUN_OUTCOMES = {"running": "running", "done": "done", "partial": "done, some drinks without a price",
                 "failed": "failed", "skipped": "skipped", "halted": "halted (the halt switch)",

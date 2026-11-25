@@ -503,3 +503,42 @@ def test_real_opening_keeps_each_call_in_its_own_books(empty_connect, conn):
     report = dev_spend.daily(conn, after)
     assert report.totals.total_cents == Decimal("2.8")
     assert sum(b.after_opening_test_cents for b in report.buckets) == Decimal("1.4")
+
+def _no_credit(status=400):
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    body = {"type": "error", "error": {"type": "invalid_request_error",
+                                       "message": "Your credit balance is too low to access the Anthropic API."}}
+    return anthropic.BadRequestError(f"Error code: {status} - {body}",
+                                     response=httpx2.Response(status, request=request), body=body)
+
+
+class NoCreditMessages(FakeMessages):
+    def count_tokens(self, **body):
+        raise _no_credit()
+
+
+def test_a_key_with_no_credit_is_its_own_error_when_counting(connect, conn):
+    from vending.harness import NoCredit
+
+    client = FakeClient()
+    client.messages = NoCreditMessages()
+    with pytest.raises(NoCredit, match="credit"):
+        harness(connect, client).call(REQUEST)
+    assert client.messages.sent == [] and model_calls(conn) == [] and tokens_entries(conn) == []
+
+
+def test_a_key_with_no_credit_is_its_own_error_when_sending(connect, conn):
+    from vending.harness import NoCredit
+
+    h = harness(connect, FakeClient(error=_no_credit()))
+    with pytest.raises(NoCredit, match="not billed"):
+        h.call(REQUEST)
+    assert h.spent == 0 and tokens_entries(conn) == []
+
+
+def test_another_bad_request_is_not_a_credit_error(connect):
+    from vending.harness import NoCredit
+
+    with pytest.raises(HarnessError) as raised:
+        harness(connect, FakeClient(error=_http_error(anthropic.BadRequestError, 400))).call(REQUEST)
+    assert not isinstance(raised.value, NoCredit)

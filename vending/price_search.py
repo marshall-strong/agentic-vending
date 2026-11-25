@@ -147,8 +147,8 @@ import psycopg
 from pydantic import BaseModel
 
 from vending import config, key_dates, ledger, planner, planning, sourcing, start
-from vending.harness import (SEARCH_TOOL_TYPE, Abandoned, Budget, CapReached, Harness, HarnessError, NotHeld,
-                             PastDeadline)
+from vending.harness import (SEARCH_TOOL_TYPE, Abandoned, Budget, CapReached, Harness, HarnessError, NoCredit,
+                             NotHeld, PastDeadline)
 from vending.pricing import Refusal, pack_floor_cents
 from vending.receipt_prices import listing
 from vending.write_gate import Refused, log, run_write
@@ -225,6 +225,8 @@ REASONS = {
     "fresh_price": "That drink already has a fresh price at that store for that pack; use it. Nothing was searched.",
     "search_cap": "The price lookups' cap for this run or today is used up. Plan with the prices you have and name "
                   "the drink left unpriced in the update. Nothing was searched.",
+    "no_credit": "The model API key has no credit left, so no lookup can run until a person adds credit. Plan with "
+                 "the prices you have and name the drinks left unpriced in the update. Nothing was searched.",
     "not_searched": "The search didn't run or didn't answer. Nothing was stored.",
     "no_report": "The search ended without a report. Nothing was stored.",
     "not_found": "No matching listing at that store. Try another store, or plan without the drink. "
@@ -571,7 +573,7 @@ class Outcome:
         return self.code is None
 
 
-STOP_RUN = frozenset({"halted", "search_cap"})     # a comparison that meets one of these stops the whole run
+STOP_RUN = frozenset({"halted", "search_cap", "no_credit"})   # a comparison that meets one of these stops the run
 
 
 @dataclass(frozen=True)
@@ -890,6 +892,8 @@ class PriceSearch:
             call = self.harness.call_detailed(request, label=f"{self.label} {sku} {store}", daily_budget=budget)
         except CapReached as error:
             raise _Stop("search_cap", str(error)) from None
+        except NoCredit as error:       # not a search: counted as none, logged as none, and the run stops
+            raise _Stop("no_credit", str(error)) from None
         except (NotHeld, PastDeadline) as error:
             raise _Stop("not_searched", str(error)) from None
         except (Abandoned, HarnessError) as error:      # it may have run: count its searches
@@ -1710,7 +1714,7 @@ def main(argv: list[str] | None = None, *, client: Any = None,
             last = tried[-1]
             if not last.ok and not (last.code == "fresh_price" and len(tried) == 1):
                 missed, failures = True, failures + 1
-            if last.code in ("halted", "search_cap"):
+            if last.code in STOP_RUN:
                 print("Stopped: no more lookups this run.")
                 break
     report.update(drinks=len(todo) if compare else len(needs), failures=failures, spent=harness.spent)
