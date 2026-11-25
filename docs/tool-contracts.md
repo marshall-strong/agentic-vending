@@ -129,14 +129,19 @@ agent starts a run knowing how fresh each number is. It does not replace `get_ac
   while its latest reading is an unsettled drop; null without receipts (a slot known only from a
   count). A possible sale restarts it: one the counters can't place (unattributed at a swap, or in
   the window over a slot's first receipt), takings with no unit counted, or a stretch no such
-  reading covers, such as before the slot's first reading or across a counter restart. So repeated
+  reading covers, such as before the slot's first reading or across a counter restart. So does a
+  gap of more than 6 hours between two readings of either counter, a lone drop between two equal
+  readings (a misread, or a reset and a sale), and a fulfilled visit with no receipt lines since
+  the stretch of stock began. A takings reading of 0 with units above 0 is a blank field: it
+  proves nothing. Times compare in UTC (Kevin's decisions, 25 Nov; PR #256 review). So repeated
   ambiguity can keep a slot below the threshold. Stock for the rate and the clock comes from one
   history, the stock replay's own, as known at the time asked about (a sale a later poll booked
   isn't in it), with every person's count in it: a loss or pull counts once, as the replay applied
-  it. A count that found the slot empty, or an exact (door) count that found another product, ends
-  a stretch of stock; an exact count of the product sets the stock to what it saw, so it can start
-  one; a photo's units are an estimate and set nothing. A count at a load's own moment is read as
-  after it. Units sold across a product change that the counters can't place (unattributed, #172),
+  it. A count that found the slot empty, or an exact (door) count that names another SKU we know
+  (the approved catalog or a receipt), ends a stretch of stock; an exact count of the product sets
+  the stock to what it saw, so it can start one; a photo's units, and a name that matches no SKU,
+  set nothing. A count that shares its moment with a movement takes the lower of the two orders,
+  and sales in a window holding a count come off what it saw (they may have sold after it). Units sold across a product change that the counters can't place (unattributed, #172),
   and units in the window over a slot's first receipt that the counters don't place on its product
   (a sale at the new price alone, with another price before, is placed), are in neither
   `units_sold_since_load` nor the rate, and the class days their poll window covers are not

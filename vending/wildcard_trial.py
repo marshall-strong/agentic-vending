@@ -313,6 +313,15 @@ def _last_friday(conn: psycopg.Connection, now: datetime) -> tuple[datetime | No
     return start, tuple(sorted(r for r, at in rows if start <= at <= now)), None
 
 
+def requests_without_lines(conn: psycopg.Connection, now: datetime) -> tuple[datetime, ...]:
+    """When each fulfilled request with no lines was fulfilled, up to `now`: visits nothing says what they loaded
+    or pulled. The slow-seller clock (`machine_state._since_sale`) reads it too."""
+    return tuple(at for (at,) in conn.execute(
+        "select r.fulfilled_at from purchase_requests r where r.status = 'fulfilled' and r.fulfilled_at <= %s"
+        " and not exists (select 1 from purchase_lines l where l.request_id = r.request_id)"
+        " order by r.fulfilled_at", (now,)))
+
+
 def _requests_without_lines(conn: psycopg.Connection, start: datetime, now: datetime) -> list[str]:
     """Fulfilled requests, off-cycle ones too, with no lines and a `fulfilled_at` from `start` to `now`."""
     return [r for (r,) in conn.execute(

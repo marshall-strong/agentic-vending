@@ -843,6 +843,7 @@ class _Slot:
     at_most: int = 0              # on hand if none of those were this product: loaded less everything else out
     history: list[Applied] = field(default_factory=list)   # what the replay applied to this run (`SlotCount.history`)
     first_door_close: datetime | None = None  # first load's close minute, for leaderboard attribution
+    first_door_open: datetime | None = None   # first load's door open, when its receipt has door times (`Applied`)
 
 
 def first_in_first_out(movements: list[Movement]) -> Stock:
@@ -921,7 +922,8 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
                                              written_off=slot.pool.units if changed else 0,
                                              replaced_unit_cost=candidate,
                                              first_door_close=m.at if slot is None and m.opened_at is not None
-                                             else None)
+                                             else None,
+                                             first_door_open=m.opened_at if slot is None else None)
             if m.kind == "purchase":
                 survivors = m.to_slot + m.to_closet
                 each = None if m.paid_cents is None or not survivors else m.paid_cents / survivors
@@ -984,9 +986,11 @@ def first_in_first_out(movements: list[Movement]) -> Stock:
             # The same test as the branches below: a door conflict or an unsplit change leaves it unattributed.
             unplaced = m.kind == "sale" and bool(m.door_conflict or across_change or m.changes)
             # A window over the slot's first receipt the replay books to its product, knowing no other: only the
-            # counters at two prices place it there (see `Applied`).
+            # counters at two prices place it there (see `Applied`), or a window that began with the door already
+            # open for that load (nothing sells with the door open, so its sales came after the load).
             assumed = (not unplaced and slot.replaced is None and m.window_since is not None
-                       and m.window_since < slot.since and not (m.kind == "sale" and _solve(m) == 0))
+                       and m.window_since < slot.since and not (m.kind == "sale" and _solve(m) == 0)
+                       and not (slot.first_door_open is not None and m.window_since >= slot.first_door_open))
             slot.history.append(Applied(m.at, "unattributed" if unplaced else "assumed" if assumed else "sale",
                                         m.units, m.window_since, m.booked_at))
             if m.kind == "sale" and m.door_conflict:

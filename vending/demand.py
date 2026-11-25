@@ -93,24 +93,23 @@ def _stretches(history: tuple[Applied, ...] | list[Applied]) -> list[tuple[datet
     history = list(history)
     spans: list[tuple[datetime, datetime | None]] = []
     on_hand, start = 0, None
-    credit, credited = 0, frozenset()   # units the latest count already saw go, and the sales they may be in
     for i, applied in enumerate(history):
         before = on_hand
         if applied.kind == "load":
             on_hand += applied.units
         elif applied.kind == "count":
-            # A sale whose counters' window holds the count may have sold before it: then the count saw it go.
-            # As many as the sure stock before the count less what it saw, up to those windows' units.
-            credited = frozenset(j for j in range(i + 1, len(history)) if history[j].kind in SALES
-                                 and history[j].since is not None and history[j].since < applied.at < history[j].at)
-            credit = min(max(before - applied.units, 0), sum(history[j].units for j in credited))
-            on_hand = applied.units
+            # A count is surely what it saw, unless movements share its moment: it may have come before them, so
+            # it is the lower of the two orders (PR #256 review, item 4). A sale whose counters' window holds the
+            # count may have sold after it, so its units come off what the count saw (item 5).
+            tied = 0
+            for j in range(i - 1, -1, -1):
+                if history[j].at != applied.at:
+                    break
+                if history[j].kind != "count":
+                    tied += history[j].units if history[j].kind == "load" else -history[j].units
+            on_hand = max(applied.units + min(tied, 0), 0)
         else:
-            units = applied.units
-            if i in credited:
-                seen = min(units, credit)
-                credit, units = credit - seen, units - seen
-            on_hand = max(on_hand - units, 0)
+            on_hand = max(on_hand - applied.units, 0)
         if before == 0 and on_hand > 0:
             start = applied.at
         elif before > 0 and on_hand == 0:
@@ -128,8 +127,8 @@ def in_stock_spans(history: tuple[Applied, ...] | list[Applied], now: datetime) 
     person's counts (`stock.run_history`). The stock is a lower bound: a load adds its units; a sale of any kind,
     a pull or a loss takes its units off, never below zero. A count sets it to what was surely there: 0 when the
     slot was found empty or holding another product (a span ends), what an exact count of the product saw
-    otherwise (a span may start). A sale whose counters' window holds the count may already be in what it saw, so
-    those units aren't taken off twice (`_stretches`). Without counts it is the replay's own `SlotCount.units` at
+    otherwise (a span may start), less what movements at its own moment may have taken after it. A sale whose
+    counters' window holds the count may have sold after it, so its units come off too (`_stretches`). Without counts it is the replay's own `SlotCount.units` at
     every step, so a loss or pull is counted once, when and as the replay applied it. A span still open runs to
     `now`. A span's end is the moment it emptied: a day that began then wasn't in stock (`class_days_in_stock`).
     """

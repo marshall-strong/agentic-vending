@@ -74,6 +74,7 @@ those slots. A count that saw a slot empty gives `counted_on_hand` 0 and
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
@@ -312,12 +313,14 @@ def get_machine_state(conn: psycopg.Connection, now: datetime | None = None) -> 
     counts = {c.slot: c for c in counted.slots if c.slot in slots}
     loads = _loads(receipts, now)
     last_loaded = _last_loaded(loads)
+    now = now.astimezone(timezone.utc)
     owned = ours_since(conn)                   # what happened in a slot before it was surely ours doesn't count
     sold_since_load = _sold_since_load(counts, now, owned)
     seen = _seen(conn, now)
     latest_counters = _counters(conn, latest[0], slots)
     demands = _demands(counts, latest_counters, now, _seen_counts(conn, slots, now),
-                       _counter_readings(conn, slots, now), owned, _known_skus(conn, receipts))
+                       _counter_readings(conn, slots, now), owned, _known_skus(conn, receipts),
+                       wildcard_trial.requests_without_lines(conn, now))
     states = build(as_of, latest_counters, start, window_sold,
                    counts, last_loaded, sold_since_load, now, seen, slots=slots, demands=demands)
     wildcard = config.get_value(conn, "wildcard_slot")
@@ -483,7 +486,8 @@ def _loads(receipts: list[dict], now: datetime) -> dict[str, list[tuple[datetime
 def _demands(counts: dict[str, stock.SlotCount], latest: Counters, now: datetime,
              seen: dict[str, list[tuple[datetime, str | None, int | None, bool]]] | None = None,
              readings: dict[str, list[tuple[datetime, int | None, int | None]]] | None = None,
-             owned: datetime | None = None, skus: frozenset[str] = frozenset()) -> dict[str, demand.Demand]:
+             owned: datetime | None = None, skus: frozenset[str] = frozenset(),
+             blind: tuple[datetime, ...] = ()) -> dict[str, demand.Demand]:
     """Each receipted slot's in-stock rate (or prior) for its current product, since it went in,
     and its slow-seller clock. Pure.
 
@@ -505,7 +509,8 @@ def _demands(counts: dict[str, stock.SlotCount], latest: Counters, now: datetime
     doesn't change.
 
     The slow-seller clock (`Demand.class_days_since_sale`) is `_since_sale` of that history and the
-    slot's counter readings (`readings`). Without readings nothing proves silence: 0.
+    slot's counter readings (`readings`), with `blind`: when fulfilled visits with no receipt lines happened
+    (`wildcard_trial.requests_without_lines`). Without readings nothing proves silence: 0.
     """
     demands = {}
     for slot, count in counts.items():
@@ -519,7 +524,7 @@ def _demands(counts: dict[str, stock.SlotCount], latest: Counters, now: datetime
         estimate = demand.estimate(sum(a.units for a in history if a.kind == "sale" and _owned(a, owned)),
                                    len(in_stock), latest.get(slot, (None, None))[0])
         demands[slot] = replace(estimate, class_days_since_sale=_since_sale(
-            history, (readings or {}).get(slot, ()), now, owned))
+            history, (readings or {}).get(slot, ()), now, owned, blind))
     return demands
 
 
@@ -529,7 +534,7 @@ def _owned(sale: stock.Applied, owned: datetime | None) -> bool:
 
 
 def _since_sale(history: tuple[stock.Applied, ...], readings: list[tuple[datetime, int | None, int | None]],
-                now: datetime, owned: datetime | None = None) -> int:
+                now: datetime, owned: datetime | None = None, blind: tuple[datetime, ...] = ()) -> int:
     """The slow-seller clock: class days of proven silence, surely in stock, since the run last sold. Pure.
 
     A class day counts only if all of these hold:
@@ -544,15 +549,23 @@ def _since_sale(history: tuple[stock.Applied, ...], readings: list[tuple[datetim
     slot's first reading, or one across a counter restart (what sold before it went with the old count). A
     drop the next poll hasn't settled may be a restart, and a slot no poll has read for over
     `wildcard_trial.MAX_POLL_GAP` may have sold since: either leaves the clock at 0. With `owned`, readings
-    from before it prove nothing, so the clock starts again when the slot comes back to our assignment.
+    from before it prove nothing, so the clock starts again when the slot comes back to our assignment. A visit
+    with no receipt lines (`blind`) since the stretch of stock began may have emptied the slot: 0 (PR #256 review,
+    item 1). Times compare as instants in UTC, so a gap across the fall-back hour is its elapsed length (item 6).
     """
+    now = _utc(now)
+    readings = [(_utc(at), units, cents) for at, units, cents in readings]
     stocked = demand.in_stock_since(history)
     watched = _watched([r for r in readings if owned is None or r[0] >= owned], now)
-    if stocked is None or watched is None:
+    if stocked is None or watched is None or any(_utc(stocked) <= _utc(v) <= now for v in blind):
         return 0
     first, last = watched
-    begin = max([stocked, first] + [a.at for a in history if a.kind in demand.SALES])
+    begin = max([_utc(stocked), first] + [_utc(a.at) for a in history if a.kind in demand.SALES])
     return len(_whole_days(begin, last))
+
+
+def _utc(at: datetime) -> datetime:
+    return at.astimezone(timezone.utc)
 
 
 def _watched(readings: list[tuple[datetime, int | None, int | None]], now: datetime) -> tuple[datetime, datetime] | None:
@@ -571,7 +584,7 @@ def _watched(readings: list[tuple[datetime, int | None, int | None]], now: datet
             return None
         stretches.append(stretch)
     first, last = max(s[0] for s in stretches), min(s[1] for s in stretches)
-    return None if now - last > wildcard_trial.MAX_POLL_GAP else (first, last)
+    return None if _utc(now) - _utc(last) > wildcard_trial.MAX_POLL_GAP else (first, last)
 
 
 def _zero_stretch(readings: list[tuple[datetime, int]]) -> tuple[datetime, datetime] | None:
@@ -581,11 +594,14 @@ def _zero_stretch(readings: list[tuple[datetime, int]]) -> tuple[datetime, datet
     break it, and a lone drop still waiting for the next poll isn't in it. A window with a rise ends it,
     and so does a restart: the windows on either side of one don't meet. So does a window longer than
     `wildcard_trial.MAX_POLL_GAP` (6 hours): flat counters either side of a gap don't prove nothing sold
-    in it (Kevin, 25 Nov, #172). None when no window shows zero.
+    in it (Kevin, 25 Nov, #172). So does a window that passes over a reading: a lone drop between two equal
+    readings may be a misread, or a reset and a sale (PR #256 review, item 3). None when no window shows zero.
     """
     stretch = None
+    times = sorted(at for at, _ in readings)
     for start, at, rise in counters.windows(readings, zeros=True):
-        if rise or at - start > wildcard_trial.MAX_POLL_GAP:
+        inside = bisect_right(times, start) < bisect_left(times, at)
+        if rise or inside or _utc(at) - _utc(start) > wildcard_trial.MAX_POLL_GAP:
             stretch = None
         elif stretch is not None and start == stretch[1]:
             stretch = (stretch[0], at)
@@ -695,14 +711,16 @@ def price_history(conn: psycopg.Connection, until: datetime,
 def _counter_readings(conn: psycopg.Connection, slots: tuple[str, ...],
                       until: datetime) -> dict[str, list[tuple[datetime, int | None, int | None]]]:
     """Every good poll's units and takings counters for `slots` up to `until`, as `(polled_at, units, cents)` per
-    slot, oldest first: all of them, as the stock replay reads them, so `counters.windows` sees every misread and
-    restart the replay sees."""
+    slot, oldest first, in UTC: all of them, as the stock replay reads them, so `counters.windows` sees every
+    misread and restart the replay sees. Takings of 0 with units above 0 is a blank money field the parser stored
+    as 0 (PR #256 review, item 2): None, so it proves nothing."""
     out: dict[str, list[tuple[datetime, int | None, int | None]]] = {}
     for selection, at, units, cents in conn.execute(
             "select s.selection, p.started_at, s.lifetime_units, s.lifetime_sales_cents from poll_selections s"
             " join polls p using (session_id) where p.device_id = %s and p.crc_ok and s.selection = any(%s)"
             " and p.started_at <= %s order by p.started_at", (DEVICE_ID, list(slots), until)):
-        out.setdefault(selection, []).append((at, units, cents))
+        blank = cents == 0 and units is not None and units > 0
+        out.setdefault(selection, []).append((_utc(at), units, None if blank else cents))
     return out
 
 

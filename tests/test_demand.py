@@ -90,18 +90,19 @@ def test_a_day_is_in_stock_when_its_midnight_falls_in_a_span_end_excluded():
     assert class_days_in_stock([(FRI, monday + timedelta(minutes=1))]) == [monday.date()]
 
 
-def test_a_count_inside_a_sale_windows_doesnt_take_its_units_twice():
-    # Review round 2, item 4. 5 in; a window from Friday evening to Monday evening books 3, and an exact count of 2
-    # on Monday afternoon falls inside it: the count already saw them go, so 2 are left after the poll, not 0.
-    # Had the count seen 4, only 1 can have gone before it: 2 more after, so 2 are left. Seeing 0 ends the span.
+def test_sales_in_a_window_holding_a_count_may_have_come_after_it():
+    # PR #256 review, item 5 (it reverses review round 2, item 4, which credited them to before the count). 5 in; a
+    # window from Friday evening to Monday evening books 3, and an exact count of 2 on Monday afternoon falls
+    # inside it. The sales may all have come after the count, so the sure stock is 2 - 3, never below 0: the span
+    # ends at the poll. A count of 4 leaves 1. Seeing 0 ends the span at the count.
     def run(seen):
         return history([(FRI, 5)], [], Applied(day(3, 22), "sale", 3, since=FRI + timedelta(hours=2)),
                        Applied(day(3, 18), "count", seen))
 
-    assert in_stock_spans(run(2), now=day(6)) == [(FRI, day(6))]
+    assert in_stock_spans(run(2), now=day(6)) == [(FRI, day(3, 22))]
     assert in_stock_spans(run(4), now=day(6)) == [(FRI, day(6))]
     assert in_stock_spans(run(0), now=day(6)) == [(FRI, day(3, 18))]
-    assert in_stock_since(run(2)) == FRI
+    assert in_stock_since(run(2)) is None
 
 
 def test_the_prior_is_the_segment_priced_nearest():

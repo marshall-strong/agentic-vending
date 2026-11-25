@@ -946,15 +946,15 @@ def test_an_empty_count_at_the_loads_own_moment_is_no_proof_of_stock(conn):
     assert (s.class_days_in_stock, s.class_days_since_sale) == (0, 0)
 
 
-def test_a_count_inside_a_sale_window_doesnt_take_the_same_units_twice(conn):
-    # Item 4. 5 Coke in; 3 sell before a door count of 2 on Monday afternoon, and the Monday evening poll books
-    # them (the poll before it is at 2 PM Eastern, `FILL_EVERY`, so the count is inside the window). Receipts and
-    # count agree: 2 left. The slot held stock all along, and has been silent six class days
-    # since the sale (Tue 3 to Tue 10), read early on Wednesday.
+def test_a_count_inside_a_sale_window_proves_no_stock_after_it(conn):
+    # Item 4, reversed by the PR #256 review, item 5. 5 Coke in; a door count of 2 on Monday afternoon falls inside
+    # the window the Monday evening poll books 3 sales in (the poll before it is at 2 PM Eastern, `FILL_EVERY`).
+    # The receipts say 2 are left, but those sales may have come after the count, so nothing proves stock after
+    # the poll: in stock Monday only, and no clock.
     coke(conn, [evening(d, 103) for d in (2, 3, 4, 5, 6, 9, 10)] + [("2026-11-11T06:00:00+00:00", 103)])
     count_15(conn, datetime(2026, 11, 2, 20, tzinfo=UTC), "COKE20", 2)
     s = slot_15(conn, datetime(2026, 11, 11, 6, 30, tzinfo=UTC))
-    assert (s.stock_on_hand, s.class_days_in_stock, s.class_days_since_sale) == (2, 8, 6)
+    assert (s.stock_on_hand, s.class_days_in_stock, s.class_days_since_sale) == (2, 1, 0)
 
 
 def test_a_photo_count_is_no_cap_on_the_stock(conn):
@@ -1102,3 +1102,89 @@ def test_the_day_one_fill_starts_the_clock_even_after_a_test_load_of_the_same_dr
     fulfilled(conn, "fill", datetime(2026, 11, 9, 20, tzinfo=UTC), ("15", "COKE20", "primary", "5.00", 5, 0, 0))
     s = slot_15(conn, datetime(2026, 11, 14, 6, 30, tzinfo=UTC))
     assert (s.stock_on_hand, s.class_days_since_sale) == (5, 4)
+
+
+# --- PR #256 review (GPT-6.2 Sol, 25 Nov) ------------------------------------------------------------------
+# Each is a way unclear evidence let the clock reach the swap threshold, or a demand regression against main.
+
+def at_utc(value):
+    return datetime.fromisoformat(value).replace(tzinfo=UTC)
+
+
+def test_a_visit_with_no_receipt_lines_leaves_the_stock_unproven(conn):
+    # Item 1. A request is fulfilled on Wednesday with no lines: what that visit loaded or pulled is unknown, so the
+    # stretch of stock that runs through it proves nothing (the wildcard's silence check refuses it the same way).
+    hourly_coke(conn, at_utc("2026-11-10T06:00"))
+    fulfilled(conn, "no-lines", at_utc("2026-11-04T20:00"))
+    assert slot_15(conn, TUESDAY).class_days_since_sale == 0
+
+
+def test_a_blank_takings_field_is_no_flat_money_counter(conn):
+    # Item 2. Checksum-good polls report slot 15's units but leave its lifetime takings blank, stored as 0. A
+    # takings counter at 0 with units above 0 never read the money: nothing proves silence on it.
+    from tests.test_evadts import build
+    from vending.sync_history import store
+
+    first = at_utc("2026-10-30T18:00")
+    fulfilled(conn, "r1", at_utc("2026-10-30T19:30"), ("15", "COKE20", "primary", "5.00", 5, 0, 0))
+    raw = build(["ID1*TEST-MACHINE*0000**EVS3.0*", "ID4*2*1840*5", "VA1*0*0*0*0", "PA1*15*250*", "PA2*100**0*0*0*0"])
+    for i in range(89):
+        at = first + timedelta(hours=3 * i)
+        assert store(conn, {"session_id": f"blank-{i}", "device_id": "vmc1", "started_at": at.isoformat()}, raw) == "ok"
+    assert slot_15(conn, TUESDAY).class_days_since_sale == 0
+
+
+def test_a_lone_drop_between_two_equal_readings_breaks_the_count(conn):
+    # Item 3. Slot 15 reads (1 unit, $2.50) hourly, but (0, $0) at 1 PM Eastern on Wednesday, then (1, $2.50) again:
+    # a misread, or a reset followed by one sale. Unclear, so the count starts again after it: Thu, Fri, Mon.
+    at = at_utc("2026-11-04T18:00")
+    hourly_coke(conn, at_utc("2026-11-10T06:00"), units=1, skip=((at, at + timedelta(hours=1)),))
+    readings_of_15(conn, [("lone-drop", at.isoformat(), (250, 0, 0))])
+    assert slot_15(conn, TUESDAY).class_days_since_sale == 3
+
+
+def test_a_count_at_the_moment_of_a_loss_of_everything_cant_revive_the_stock(conn):
+    # Item 4. A count of 5 at the very moment all 5 are recorded lost: the count may have come first. The replay
+    # says 0 on hand, and the clock mustn't take the count as stock after the loss.
+    hourly_coke(conn, at_utc("2026-11-10T06:00"))
+    at = at_utc("2026-11-02T20:00")
+    lose(conn, 5, at)
+    count_15(conn, at, "COKE20", 5)
+    s = slot_15(conn, TUESDAY)
+    assert (s.stock_on_hand, s.class_days_since_sale) == (0, 0)
+
+
+def test_sales_in_the_window_holding_a_count_may_have_come_after_it(conn):
+    # Item 5. 5 Coke in; a door count finds 2 inside the window that books 2 sales. Both may have sold after the
+    # count, leaving 0 (the 3 missing at the count are unexplained). Not surely in stock: no clock.
+    coke(conn, [evening(d, 102) for d in (2, 3, 4, 5, 6, 9)] + [(LATE, 102)])
+    count_15(conn, at_utc("2026-11-02T20:00"), "COKE20", 2)
+    assert slot_15(conn, TUESDAY).class_days_since_sale == 0
+
+
+def test_the_six_hour_gap_is_elapsed_time_across_the_fall_back_hour(conn):
+    # Item 6. No poll from 2 AM EDT to 7 AM EST on Sun 1 Nov: 6 wall-clock hours, 7 elapsed. With the session in
+    # Eastern time the readings come back in that zone, and the gap must still be the elapsed 7 hours.
+    first, end = at_utc("2026-10-29T18:00"), at_utc("2026-11-06T06:00")
+    fulfilled(conn, "fill", first, ("15", "COKE20", "primary", "5.00", 5, 0, 0))
+    at = first
+    while at <= end:
+        if not at_utc("2026-11-01T06:00") <= at < at_utc("2026-11-01T12:00"):
+            store_poll(conn, f"p{int(at.timestamp())}", at.isoformat(), {"15": (250, 100)})
+        at += timedelta(hours=1)
+    assert slot_15(conn, end).class_days_since_sale == 4
+    conn.execute("set time zone 'America/New_York'")
+    assert slot_15(conn, end).class_days_since_sale == 4
+
+
+def test_a_first_fill_sale_after_a_poll_inside_the_visit_is_the_new_products(conn):
+    # Item 7. The door opens at 19:10 UTC, a poll reads slot 15 at 19:20, the door closes at 19:30 and the 20:00
+    # poll shows one sale at the same price. Nothing sells with the door open, so the sale came after the load:
+    # the new product's, as on main.
+    close = at_utc("2026-10-30T19:30")
+    hourly_coke(conn, close, skip=((at_utc("2026-10-30T18:00"), close),))
+    conn.execute("update purchase_requests set door_opened_at = %s, door_closed_at = %s where request_id = 'r1'",
+                 (at_utc("2026-10-30T19:10"), close))
+    readings_of_15(conn, [("inside", at_utc("2026-10-30T19:20").isoformat(), (250, 100)),
+                          ("after", at_utc("2026-10-30T20:00").isoformat(), (250, 101))])
+    assert slot_15(conn, at_utc("2026-10-30T21:00")).units_sold_since_load == 1
