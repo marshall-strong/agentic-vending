@@ -150,7 +150,8 @@ def lane_products(snap: Mapping, ours: Iterable[str]) -> list[str]:
     counts = snap.get("counts") or {}
     if counts.get("ok"):
         named += [v.get("product") for s, v in counts["data"].items() if s in ours]
-    plan = snap.get("weekly_plan", snap.get("plan")) or {}
+    # The plan the machine draws (`dashboard.shown_plan`): before the lock, the day-one fill until it is counted.
+    plan = snap["machine_plan"] if "machine_plan" in snap else snap.get("weekly_plan", snap.get("plan")) or {}
     if plan.get("ok") and plan["data"]:
         named += [(s.get("now") or {}).get("product") for s in plan["data"]["slots"] if s["slot"] in ours]
     # Only text is a product: a stored plan can hold anything, and a list or dict here (unhashable)
@@ -1035,8 +1036,8 @@ def detail_html(lane: Lane, sold: Mapping | None, span: str, linked: bool, first
                 fill_check: str | None = None) -> str:
     """The picked selection's facts in words, each saying where it comes from: product, on hand,
     price, what the slot sold, the next restock, capacity and the agent's whole reason. `first` is the
-    selection's line in the plan for the first fill, before the slot lock. Shown with its shelf
-    while the selection is picked."""
+    selection's line in the plan for the first fill, and in the sent fill request (`sent`), before the slot
+    lock. Shown with its shelf while the selection is picked."""
     item, nxt = lane.now_item, lane.next
     estimate = lane.source == "photo" and not lane.counted_empty
     if lane.counted_empty:
@@ -1067,8 +1068,10 @@ def detail_html(lane: Lane, sold: Mapping | None, span: str, linked: bool, first
     if fill_check:          # the plan's fill against the column's capacity (`capacity.fill_check`)
         tone = "" if fill_check == capacity.NOT_COUNTED else "unk"
         rows.append(("Fill check", f'<span class="sd-fr {tone}">{_e(fill_check)}</span>' if tone else _e(fill_check)))
-    if first:
+    if first and first.get("text"):
         rows.append(("First fill", _e(first["text"])))
+    if first and first.get("sent"):         # the sent fill request's line: what the stocker buys and loads
+        rows.append(("Sent", _e(first["sent"])))
     if lane.wildcard:
         rows.append(("Wildcard", "the one fixed slot that tests products for the others; it may sell above the "
                                  "regular ceiling (config <code>wildcard_slot</code>)"))

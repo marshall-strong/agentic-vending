@@ -293,6 +293,7 @@ def summary(conn: psycopg.Connection, st) -> dict:
         r["due"] = r["due"].astimezone(EASTERN).isoformat()
         r["detail"] = (r["detail"] or "")[:400]
     tracking = conn.execute("select status, error_type, used_check, results from tracking_checks order by id").fetchall()
+    skipped = conn.execute("select coalesce(sum(rounds), 0) from tracking_skips").fetchone()[0]
     prices = conn.execute("select due_at, mode, outcome from price_check_runs order by due_at").fetchall()
     refusals = dict(zip(("preview_refused", "submit_refused", "tool_errors"), conn.execute(
         "select count(*) filter (where tool = 'preview_desired_state' and content like '%%\"ok\": false%%'),"
@@ -308,7 +309,8 @@ def summary(conn: psycopg.Connection, st) -> dict:
         "tracking_checks": {"sent": len(tracking),
                             "answered_200": sum(t[0] == 200 for t in tracking),
                             "outside": sum(1 for t in tracking if t[3] and "outside" in str(t[3])),
-                            "refused": sorted({str(t[1]) for t in tracking if t[1]})},
+                            "refused": sorted({str(t[1]) for t in tracking if t[1]}),
+                            "skipped_rounds": int(skipped)},
         "price_checks": [{"due": p[0].astimezone(EASTERN).isoformat(), "mode": p[1], "outcome": p[2]} for p in prices],
         "refusals": refusals,
         "wakeups": st.live.get("wakeups", []),

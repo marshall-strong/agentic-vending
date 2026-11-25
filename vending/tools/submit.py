@@ -177,6 +177,7 @@ def submit_desired_state(desired: DesiredState, bridge: Callable[[], Bridge],
                          before_post: Callable[[psycopg.Connection, int, dict], list[Refusal]] | None = None,
                          purpose: str | None = None, count_takings: bool = True,
                          run: RunContext | None = None,
+                         adjust: Callable[[planning.Gathered], planning.Gathered] | None = None,
                          ) -> Callable[[psycopg.Connection], SubmitReply]:
     """The write action for the gate. `connect` opens the one side connection that records the
     attempt; it must reach the same database as the gate's. The rest are the fill's (`vending.fill`), never
@@ -189,7 +190,8 @@ def submit_desired_state(desired: DesiredState, bridge: Callable[[], Bridge],
       attempt's row and the exact body about to be sent; any refusal it returns settles the attempt as
       `not_filed` (nothing was sent) and stops the send;
     - `purpose` is saved on the attempt (`purchase_submissions.purpose`);
-    - `count_takings=False` checks the balance without takings from the polls (`planning.gather`).
+    - `count_takings=False` checks the balance without takings from the polls (`planning.gather`);
+    - `adjust` changes what was gathered before it is planned (`planning.plan`): the fill's substitutes.
 
     `run` is the agent run's own context (the MCP server reads it from its environment): its lease, checked at the
     send, and for a scheduled run its time. Never the fill's."""
@@ -197,7 +199,8 @@ def submit_desired_state(desired: DesiredState, bridge: Callable[[], Bridge],
     def action(conn: psycopg.Connection) -> SubmitReply:
         client = bridge()
         try:
-            plan, gathered = planning.plan(conn, desired, client, now, pool=pool, count_takings=count_takings)
+            plan, gathered = planning.plan(conn, desired, client, now, pool=pool, count_takings=count_takings,
+                                           adjust=adjust)
         except planning.NotReady as blocked:
             return SubmitReply(success=False, message=f"Can't submit yet: {blocked}")
         refusals = list(plan.refusals)

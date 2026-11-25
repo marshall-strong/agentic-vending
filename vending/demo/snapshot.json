@@ -3102,7 +3102,8 @@
    "at": "06:00",
    "wrong_setting": false,
    "checks": [],
-   "answered": null
+   "answered": null,
+   "skip": null
   }
  },
  "tracking_alert": {

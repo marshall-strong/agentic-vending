@@ -464,6 +464,43 @@ def test_figures_refuse_a_slot_no_receipt_has_loaded(conn):
         tracking.figures(conn)
 
 
+def test_a_slot_no_receipt_has_loaded_is_its_own_refusal_and_still_sends_nothing(conn):
+    """#254: the only reason is an unloaded slot, so the refusal says which slots (`NotLoaded`). It is still a
+    `CantCompute`: no guesses, nothing sent."""
+    from vending import tracking
+
+    open_ledger(conn)
+    fill(conn, slots=TEST_SLOTS[:-2])
+    poll(conn, "p0", "2026-11-02T18:00:00+00:00")
+    with pytest.raises(tracking.NotLoaded) as raised:
+        tracking.figures(conn)
+    assert raised.value.slots == TEST_SLOTS[-2:]
+    assert isinstance(raised.value, tracking.CantCompute)
+
+
+def test_an_unloaded_slot_with_another_reason_is_a_plain_refusal_naming_both(conn, monkeypatch):
+    """An unloaded slot is the skip's reason only when it is the only reason: a count that is a range on another
+    slot keeps the plain refusal, and its message names both."""
+    from vending import stock, tracking
+
+    open_ledger(conn)
+    fill(conn, slots=TEST_SLOTS[:-1])
+    poll(conn, "p0", "2026-11-02T18:00:00+00:00")
+    real = stock.stock
+
+    def ranged(conn, until=None, lines=None, **kw):
+        counted = real(conn, until=until, lines=lines, **kw)
+        return stock.Stock(counted.closet, tuple(
+            stock.SlotCount(**{**c.__dict__, "units": c.units - 2, "unattributed": 2, "at_most": c.units})
+            if c.slot == "16" else c for c in counted.slots), counted.warnings)
+
+    monkeypatch.setattr(stock, "stock", ranged)
+    with pytest.raises(tracking.CantCompute) as raised:
+        tracking.figures(conn)
+    assert not isinstance(raised.value, tracking.NotLoaded)
+    assert f"slots {TEST_SLOTS[-1]}" in str(raised.value) and "16 (6 to 8)" in str(raised.value)
+
+
 def test_figures_refuse_a_receipt_with_no_total_paid(conn):
     from vending import tracking
 
