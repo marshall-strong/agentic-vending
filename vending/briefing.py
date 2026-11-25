@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from fractions import Fraction
@@ -408,6 +409,78 @@ def _tracking(conn, b: Briefing) -> None:
                f"bridge's {figure} differs by more than its tolerance", tracking_daily.LOOKUPS[figure])
 
 
+# A refusal as the record names it: fixed words per code (`vending.write_gate.Refused` stores
+# "code: message; code: message"). A code not listed here is counted as another reason, never quoted.
+REFUSAL_WORDS = {
+    "above_ceiling": "price above the ceiling",
+    "below_floor": "price below its floor",
+    "price_off_step": "price missing or not in 5-cent steps",
+    "price_unknown": "current price unknown",
+    "price_only_unsupported": "a price change with nothing to load",
+    "insufficient_balance": "not enough balance",
+    "below_spendable_floor": "below the spendable floor",
+    "past_cutoff": "past a store's cutoff",
+    "request_pending": "a request is still open",
+    "too_many_open_requests": "too many open requests",
+    "submission_unresolved": "an earlier submission is unresolved",
+    "plan_changed": "the plan changed since its preview",
+    "slot_list": "the slot list is wrong",
+    "empty_slot": "a slot would be left empty",
+    "product_unknown": "product not active in the catalog",
+    "over_capacity": "fill_to over the column",
+    "unknown_capacity": "column capacity unknown",
+    "bad_fill": "fill_to not valid",
+    "bad_price": "a price not valid",
+    "bad_product": "a product not valid",
+    "bad_sourcing": "sourcing not valid",
+    "bad_field": "a field not valid",
+    "bad_visit": "visit not valid",
+    "not_a_plan": "not a plan",
+    "no_reason": "a changed slot has no reason",
+    "too_many_packs": "too many packs",
+    "nothing_to_load": "nothing to load",
+    "midweek_no_op": "a midweek visit that loads nothing",
+    "note_too_long": "the request's note is too long",
+    "wildcard": "a wildcard rule",
+    "halted": "the halt switch is on",
+    "scheduled_off_cycle": "an off-cycle visit in a scheduled run",
+    "request_limit": "the request limit",
+    "already_in_catalog": "product already in the catalog",
+    "already_requested": "product already requested",
+    "not_a_drink": "not a drink",
+    "alcohol_or_thc": "alcohol or THC",
+    "search_cap": "price lookup cap used up",
+    "fresh_price": "a fresh price exists already",
+    "not_found": "no matching listing",
+}
+_REFUSAL_CODE = re.compile(r"(?:^|; )([a-z][a-z0-9_]{1,40}): ")
+_SLOT_NUMBERS = re.compile(r"\bslots? (\d+(?:(?:, | and )\d+)*)")
+
+
+def refusal_summary(detail: str | None, ours: tuple[str, ...]) -> str:
+    """A stored refusal as fixed words: each known code's phrase, with the slot numbers its message names
+    that are ours. Nothing else of the text is kept, so a selection outside our assignment, a model's
+    words or a product name never reach the briefing."""
+    found = list(_REFUSAL_CODE.finditer(detail or ""))
+    parts, other = [], False
+    for n, match in enumerate(found):
+        words = REFUSAL_WORDS.get(match.group(1))
+        if words is None:
+            other = True
+            continue
+        text = detail[match.end():found[n + 1].start() if n + 1 < len(found) else len(detail)]
+        slots = []
+        for group in _SLOT_NUMBERS.findall(text):
+            slots += [s for s in re.findall(r"\d+", group) if s in ours and s not in slots]
+        if slots:
+            words += f" (slot{'s' if len(slots) > 1 else ''} {', '.join(slots)})"
+        if words not in parts:
+            parts.append(words)
+    if other or not parts:
+        parts.append("another reason" if parts else "refused (unrecognised reason)")
+    return "; ".join(parts)
+
+
 def _week_grade(card: dict) -> WeekGrade:
     o, base, cmp = card.get("outcome") or {}, card.get("baseline") or {}, card.get("comparison")
     g = WeekGrade(week=date.fromisoformat(card["week"]), grade=card["grade"],
@@ -426,7 +499,11 @@ def _record(conn, b: Briefing) -> None:
     """The report card's last closed weeks and the incident log since the last finished live run. The
     same data as the dashboard's panels, so the same honesty rules: a failure's text is never read."""
     now = b.computed_at
-    cards = report_card.report_cards(conn, now, limit=RECORD_READ_WEEKS)
+    # The real opening, never the 11 Nov test one: a practice run before it isn't a week's plan or "the last run".
+    real = ledger.real_opening(conn)
+    if real is None or now < real.at:
+        return
+    cards = report_card.report_cards(conn, now, limit=RECORD_READ_WEEKS, plans_since=real.at, stop_on_cancel=True)
     if not cards["opened"]:
         return
     b.record.opened = True
@@ -438,15 +515,26 @@ def _record(conn, b: Briefing) -> None:
     # Weeks that failed a hard check are already in the week lines, so the log is read without them.
     log = report_card.incidents(conn, now)
     since = conn.execute("select max(started_at) from agent_runs where mode = 'live' and status <> 'running'"
-                         " and started_at <= %s", (now,)).fetchone()[0]
+                         " and started_at >= %s and started_at <= %s", (real.at, now)).fetchone()[0]
     b.record.incidents_since = since
     rows = [r for r in log.get("rows", []) if since is None or r["at"] >= since]
     b.record.incidents_capped = len(rows) >= report_card.INCIDENTS_SHOWN
     for r in rows:
         b.record.incident_counts[r["kind"]] = b.record.incident_counts.get(r["kind"], 0) + 1
-    b.record.incidents = [IncidentNote(at=r["at"], kind=r["kind"], what=r["what"],
-                                       note=None if r["error"] or r["kind"] not in RECORD_NOTE_KINDS else r["note"])
-                          for r in rows[:RECORD_INCIDENTS]]
+    shown = rows[:RECORD_INCIDENTS]
+    # A refusal's stored text can quote a selection that isn't ours (`slot 99 is not one of ours`), so it
+    # is read here only for its codes and slot numbers, and shown as fixed words (`refusal_summary`).
+    refused = {}
+    if any(r["kind"] == "refused" for r in shown):
+        for at, tool, detail in conn.execute(
+                "select at, tool, detail from action_log where outcome = 'refused' and at >= %s and at <= %s"
+                " order by at desc, id desc limit %s", (shown[-1]["at"], now, len(shown) + RECORD_INCIDENTS)):
+            refused.setdefault((at, tool), detail)
+    ours = tuple(b.our_slots)
+    b.record.incidents = [IncidentNote(
+        at=r["at"], kind=r["kind"], what=r["what"],
+        note=(refusal_summary(refused.get((r["at"], r["what"])), ours) if r["kind"] == "refused"
+              else None if r["error"] or r["kind"] not in RECORD_NOTE_KINDS else r["note"])) for r in shown]
 
 
 def _record_section(conn, b: Briefing) -> None:
