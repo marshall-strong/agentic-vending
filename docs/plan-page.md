@@ -78,9 +78,11 @@ python -m vending.fill --submit --hash HASH --accept-deviations --by NAME   # se
 - The request's alternate names the substitute's `sku`, at its own primary sourcing row, with its own
   `change_product`. The bridge takes that (`docs/dex-bridge.md`).
 - Its max per pack is the lower of its row's and the one stored.
-- Refused: on a pooled line, a drink not active in the catalog, one that doesn't fit the column, units staying in
-  the slot (`bad_sourcing`); a row with no checked price (`no_checked_price`) or one over a week old
-  (`stale_price`).
+- Refused (`bad_sourcing`): on a pooled line; a drink not active in the catalog; a slot with units in it (a
+  substitute goes only into an empty slot); a column capacity that isn't known, or one it doesn't fit; the
+  wildcard's backup being another slot's drink, or another slot's backup being the wildcard's drink.
+- Refused too: a row with no checked price (`no_checked_price`) or one over a week old (`stale_price`).
+- The shopping list names the substitute drink, "only if" the line's drink is unavailable at its store.
 - A line with a same-drink alternate never uses one. Without a stored substitute, the request is as before.
 
 While the send runs, it holds the pick, the slot assignment, the sourcing table, the substitutes, our catalog copy,

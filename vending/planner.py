@@ -663,7 +663,7 @@ def plan_restock(current: CurrentState, desired: DesiredState, config: Config,
             extras_placed.add(s.product)
         fed = feeds.get(s.slot, ())
         if source.alternate is not None and source.alternate.sku is not None:
-            if why := _substitute_problem(s, source.alternate.sku, fed, active, capacities):
+            if why := _substitute_problem(s, source.alternate.sku, fed, active, capacities, slots, config):
                 refusals.append(Refusal("bad_sourcing", (
                     f"slot {s.slot}: the alternate {source.alternate.sku} for {s.product} {why}"), s.slot))
         short = s.shortfall + sum(f.from_back_stock for f in fed)
@@ -1287,22 +1287,38 @@ def _size(option: _Option, short: int, extra: int) -> PlannedPurchase:
                            packs * option.units_per_pack - short, sku=option.sku)
 
 
-def _substitute_problem(s: _Slot, sku: str, fed: tuple, active: set[str],
-                        capacities: dict[str, int | None]) -> str | None:
-    """Why a substitute alternate (another drink) can't be bought for slot `s`, or None. The bridge refuses a SKU
-    that isn't orderable; a pooled line also feeds other slots the primary's drink, which a substitute never
-    buys; units staying would share the column; and it must fit the column as the primary does."""
+def _substitute_problem(s: _Slot, sku: str, fed: tuple, active: set[str], capacities: dict[str, int | None],
+                        slots: list[_Slot], config: Config) -> str | None:
+    """Why a substitute alternate (another drink) can't be bought for slot `s`, or None.
+
+    The bridge refuses a SKU that isn't orderable. A pooled line also feeds other slots the primary's drink, which
+    a substitute never buys. A substitute goes only into a slot with no units in it: units left in place would stay
+    under a `change_product` false, outside the floor and the column count. It must fit a column whose capacity is
+    known. And the wildcard's drink must stay in one slot: the wildcard's substitute can't be another slot's drink,
+    and no other slot's substitute can be the wildcard's."""
     if sku == s.product:
         return "is the line's own drink; leave its sku out"
     if sku not in active:
         return "is not active in the catalog"
     if fed:
-        return "can't buy for other slots: the line is pooled (it also stocks " +             ", ".join(f.slot for f in fed) + ")"
-    if s.staying:
-        return f"would share the column with {s.staying} {s.product} staying in it"
+        return "can't buy for other slots: the line is pooled (it also stocks " + ", ".join(f.slot for f in fed) + ")"
+    if s.on_hand or s.staying:
+        return f"can go only into an empty slot, and this one holds {max(s.on_hand, s.staying)} units now"
     limit = capacities.get(sku)
-    if limit is not None and s.fill_to > limit:
+    if limit is None:
+        return "has no known column capacity (no count in capacity_overrides, not on the loading chart)"
+    if s.fill_to > limit:
         return f"holds at most {limit} a column, and the slot fills to {s.fill_to}"
+    wild = config.wildcard_slot
+    if wild is not None:
+        if s.slot == wild:
+            elsewhere = sorted(t.slot for t in slots if t.slot != wild and sku in (t.product, t.state.product))
+            if elsewhere:
+                return (f"is in slot {', '.join(elsewhere)} too, and the wildcard's drink must be in no other slot")
+        else:
+            w = next((t for t in slots if t.slot == wild), None)
+            if w is not None and sku in (w.product, w.state.product):
+                return f"is the wildcard's drink (slot {wild}), which must be in no other slot"
     return None
 
 
@@ -1541,13 +1557,15 @@ def _directive(off_cycle: bool, slots: list[_Slot], names: Mapping[str, str] | N
 def _shopping_row(s: _Slot, o: PlannedPurchase, alternate_for: str | None,
                   names: Mapping[str, str] | None = None) -> str:
     fed = [f for f, _ in s.purchase.feeds] if s.purchase else []
-    row = (f"  {_label(s.product, names or {})}: {o.packs} x {o.units_per_pack}-pack, max "
+    # A substitute is another drink: the row names the drink this choice buys.
+    row = (f"  {_label(o.sku or s.product, names or {})}: {o.packs} x {o.units_per_pack}-pack, max "
            f"{_dollars(o.max_price_per_pack_cents)} a pack, for slot{'s' if fed else ''} "
            f"{', '.join([s.slot, *fed])}")
     if o.units_to_closet:
         row += f" ({o.units_to_closet} to closet)"
     if alternate_for:
-        row += f"; only if {alternate_for} is unavailable or over its max"
+        row += (f"; only if {_label(s.product, names or {})} from {alternate_for} is unavailable or over its max"
+                if o.sku else f"; only if {alternate_for} is unavailable or over its max")
     if o.url:
         row += f"\n    {o.url}"
     return row

@@ -9,7 +9,10 @@ from datetime import timedelta
 import pytest
 
 from tests.test_planner import CONFIG, COKE, PICKLE, TABLE, TUESDAY, codes, current, desired, line, pickle_17
-from vending.planner import DesiredSlot, PurchaseOption, plan_restock
+from vending.planner import DesiredSlot, PurchaseOption, SlotState, plan_restock
+
+EMPTY_17 = {"17": SlotState("17", None, None, 0, None)}
+SOLD_OUT_COKE_17 = {"17": SlotState("17", COKE, 200, 0, None)}
 
 SUB = PurchaseOption("Walmart", 24, "34.99", expected_price_per_pack="29.99", sku=COKE)
 
@@ -21,13 +24,55 @@ def with_alternate(product, alternate):
 # --- The planner (pure) -------------------------------------------------------------------------------
 
 def test_a_substitute_alternate_names_its_own_sku_and_change_product():
-    p = plan_restock(current(table=with_alternate(PICKLE, SUB)), desired(pickle_17()), CONFIG, TUESDAY)
+    p = plan_restock(current(table=with_alternate(PICKLE, SUB), slots=EMPTY_17), desired(pickle_17()), CONFIG,
+                     TUESDAY)
     assert codes(p) == []
     body = line(p, "17").to_api()
     assert body["primary"]["sku"] == PICKLE and body["alternate"]["sku"] == COKE
-    # Slot 17 holds Coke now: the primary changes product; the Coke substitute is what the slot holds.
-    assert body["primary"]["change_product"] is True and body["alternate"]["change_product"] is False
+    assert body["primary"]["change_product"] is True and body["alternate"]["change_product"] is True
     assert body["alternate"]["store"] == "Walmart" and body["alternate"]["sale_price"] == "3.00"
+    # The slot last held Coke and is sold out: the Coke substitute is what it holds, so it changes nothing.
+    p = plan_restock(current(table=with_alternate(PICKLE, SUB), slots=SOLD_OUT_COKE_17), desired(pickle_17()),
+                     CONFIG, TUESDAY)
+    assert codes(p) == [] and line(p, "17").to_api()["alternate"]["change_product"] is False
+
+
+def test_a_substitute_goes_only_into_an_empty_slot():
+    """Sol, #257: six units of the substitute already in the column would stay (change_product false), outside
+    the floor and the column count."""
+    p = plan_restock(current(table=with_alternate(PICKLE, SUB)), desired(pickle_17()), CONFIG, TUESDAY)
+    assert any("only into an empty slot" in r.message for r in p.refusals)
+
+
+def test_a_substitute_needs_a_known_column_capacity():
+    config = replace(CONFIG, capacity_overrides={k: v for k, v in CONFIG.capacity_overrides.items() if k != COKE})
+    p = plan_restock(current(table=with_alternate(PICKLE, SUB), slots=EMPTY_17), desired(pickle_17()), config,
+                     TUESDAY)
+    assert any("no known column capacity" in r.message for r in p.refusals)
+
+
+def test_the_wildcards_drink_stays_in_one_slot_with_substitutes():
+    """Sol, #257: the wildcard's backup may not be another slot's drink, nor another slot's backup the
+    wildcard's."""
+    config = replace(CONFIG, wildcard_slot="17")
+    p = plan_restock(current(table=with_alternate(PICKLE, SUB), slots=EMPTY_17), desired(pickle_17()), config,
+                     TUESDAY)
+    assert any("the wildcard's drink must be in no other slot" in r.message for r in p.refusals)
+    # Slot 18, a regular slot, backs Pickle Potion up with the wildcard's own drink.
+    empty = {s: SlotState(s, None, None, 0, None) for s in ("17", "18")}
+    pickle_sub = PurchaseOption("Walmart", 24, "34.99", expected_price_per_pack="29.99", sku=PICKLE)
+    table = with_alternate(COKE, pickle_sub)
+    p = plan_restock(current(table=table, slots=empty),
+                     desired(pickle_17(), DesiredSlot("18", product=COKE, sale_price="2.50", fill_to=6)),
+                     config, TUESDAY)
+    assert any("is the wildcard's drink" in r.message for r in p.refusals)
+
+
+def test_the_shopping_list_names_the_substitute_drink():
+    p = plan_restock(current(table=with_alternate(PICKLE, SUB), slots=EMPTY_17), desired(pickle_17()), CONFIG,
+                     TUESDAY)
+    walmart = p.directive.split("Walmart\n", 1)[1]
+    assert walmart.lstrip().startswith(COKE) and f"only if {PICKLE} from Amazon is unavailable" in walmart
 
 
 def test_without_a_sku_the_alternate_is_the_lines_own_drink():
@@ -42,15 +87,16 @@ def test_without_a_sku_the_alternate_is_the_lines_own_drink():
     ("itself", PICKLE, "is the line's own drink"),
 ])
 def test_a_substitute_the_bridge_would_refuse_is_refused(case, sku, code_text):
-    p = plan_restock(current(table=with_alternate(PICKLE, replace(SUB, sku=sku))), desired(pickle_17()), CONFIG,
-                     TUESDAY)
+    p = plan_restock(current(table=with_alternate(PICKLE, replace(SUB, sku=sku)), slots=EMPTY_17),
+                     desired(pickle_17()), CONFIG, TUESDAY)
     assert "bad_sourcing" in codes(p)
     assert any(code_text in r.message for r in p.refusals)
 
 
 def test_a_substitute_that_does_not_fit_the_column_is_refused():
     config = replace(CONFIG, capacity_overrides={**CONFIG.capacity_overrides, COKE: 4})
-    p = plan_restock(current(table=with_alternate(PICKLE, SUB)), desired(pickle_17()), config, TUESDAY)
+    p = plan_restock(current(table=with_alternate(PICKLE, SUB), slots=EMPTY_17), desired(pickle_17()), config,
+                     TUESDAY)
     assert "bad_sourcing" in codes(p)
     assert any("holds at most 4" in r.message for r in p.refusals)
 
@@ -170,6 +216,33 @@ def test_the_backup_step_gives_a_line_with_no_other_store_a_substitute(db, fake,
 
 def test_a_same_drink_backup_wins_over_a_substitute(db, fake, schema_url, capsys):  # noqa: F811
     seed(db, fake)
+    lookup(db, "COKE20", "Walmart", 12, 1150)
+    assert alternates.main(["--write", "--by", "Test Runner"], bridge=fake.client,
+                           connect=lambda: open_in(*schema_url), now=NOW) == 0
+    assert db.execute("select count(*) from fill_substitutes").fetchone() == (0,)
+    assert sourcing.options_for(db, ["COKE20"])[-1].store == "Walmart"
+
+
+def test_a_stored_substitute_that_no_longer_fits_is_removed(db, fake, schema_url, capsys):  # noqa: F811
+    """Sol, #257: a stored substitute repriced over its max refused the whole fill, and a rerun left it. Now it is
+    removed when nothing else fits."""
+    plan_id = seed(db, fake)
+    substitute(db, plan_id, "COKE20", "PICKLE", 1000)
+    sourcing.set_option(db, option("PICKLE", **{**PICKLE12, "expected_cents": 1400, "max_cents": 1500},
+                                   checked_at=NOW - timedelta(hours=1)), NOW)
+    assert not preview(schema_url, fake).ok
+    assert alternates.main(["--write", "--by", "Test Runner"], bridge=fake.client,
+                           connect=lambda: open_in(*schema_url), now=NOW) == 0
+    out = capsys.readouterr().out
+    assert "removed" in next(ln for ln in out.splitlines() if ln.startswith("COKE20"))
+    assert "stored substitute: PICKLE, " in out
+    assert db.execute("select count(*) from fill_substitutes").fetchone() == (0,)
+    assert preview(schema_url, fake).ok
+
+
+def test_a_same_drink_backup_replaces_a_stored_substitute(db, fake, schema_url):  # noqa: F811
+    plan_id = seed(db, fake)
+    substitute(db, plan_id, "COKE20", "PICKLE", 1000)
     lookup(db, "COKE20", "Walmart", 12, 1150)
     assert alternates.main(["--write", "--by", "Test Runner"], bridge=fake.client,
                            connect=lambda: open_in(*schema_url), now=NOW) == 0

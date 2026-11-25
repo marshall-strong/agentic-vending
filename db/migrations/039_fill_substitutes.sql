@@ -7,7 +7,7 @@
 -- max_cents:      the most per pack for it here, held to the line's most-we-pay in the pick, so the fill's
 --                 $400 cap and its pick_deviation check hold. The row's own max applies when it is lower.
 create table fill_substitutes (
-    plan_id        bigint      not null references first_fill_plans (id) on delete cascade,
+    plan_id        bigint      not null,               -- first_fill_plans.id; the fill reads the picked one's
     sku            text        not null,
     substitute_sku text        not null check (substitute_sku <> sku),
     max_cents      integer     not null check (max_cents between 1 and 20000),

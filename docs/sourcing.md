@@ -319,7 +319,9 @@ python -m vending.alternates --write --by NAME     # store them
   needed"), at its own primary row checked within `--max-age`, at a store whose cutoff hasn't passed. Cheapest per
   unit first. Its max per pack keeps its packs within the pick's most-we-pay for the line. Stored in
   `fill_substitutes` for the picked plan; the fill sends it as the alternate with its own `sku`
-  ([`plan-page.md`](plan-page.md)). Not on a pooled line: those are listed. A same-drink alternate always wins.
+  ([`plan-page.md`](plan-page.md)). Not on a pooled line: those are listed. A same-drink alternate always wins,
+  and replaces a stored substitute. A stored one is kept only while its price is fresh, its store's cutoff hasn't
+  passed and it still fits; otherwise another is picked, or it is removed.
 - **The fill's checks.** Each one is tried on the fill's planner first. It is kept only if the fill gains no
   refusal and no `pick_deviation`, its most-we-pay stays within the $400 cap, and the spendable floor holds out of
   the $600 opening. The fill counts each line at its dearer choice. While the fill is over the cap or the floor,

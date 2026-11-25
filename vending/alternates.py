@@ -94,17 +94,18 @@ class Line:
     primary: sourcing.Option | None
     before: sourcing.Option | None      # the alternate as stored
     after: sourcing.Option | None       # the alternate this step would store; `before` when it changes nothing
-    action: str                         # kept, set, replaced, lowered, substitute, none
+    action: str                         # kept, set, replaced, lowered, substitute, removed, none
     why: str                            # what changed, or why there is none
+    drop_sub: bool = False              # its stored substitute is removed (`fill_substitutes`)
 
     @property
     def changed(self) -> bool:
-        return self.action in ("set", "replaced", "lowered", "substitute")
+        return self.action in ("set", "replaced", "lowered", "substitute", "removed") or self.drop_sub
 
     @property
     def substitutes(self) -> bool:
         """The backup is another drink (`after.sku` differs), stored in `fill_substitutes`."""
-        return self.after is not None and self.after.sku != self.sku
+        return self.after is not None and self.after.sku != self.sku and self.action != "removed"
 
 
 @dataclass(frozen=True)
@@ -286,8 +287,8 @@ def backups(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = Non
     now = gathered.now
     since = now - max_age
     rows = {(o.sku, o.rank): o for o in gathered.sourcing_rows}
-    # Every stored row of the plan's drinks as read, delisted ones too: the write checks none changed.
-    read = {(o.sku, o.rank): o for o in sourcing.options_for(conn, [p.sku for p in pick.round.purchases])}
+    # The rows the trials use, as the planner read them: the write checks the listed ones haven't changed.
+    read = dict(rows)
     table = harness.load_prices()
     check = price_search.Memory.read(conn).check_model
     trusted = lambda model: not price_search.needs_check(table, model, check)  # noqa: E731
@@ -310,10 +311,13 @@ def backups(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = Non
         if alt is not None and alt.expected_cents is not None and not deviates:
             lines.append(Line(p.sku, primary, alt, alt, "kept", "already has one the fill takes"))
             continue
-        stored = _substitute_row(rows, subs.get(p.sku)) if alt is None else None
-        if stored is not None and not deviates and not (current.refusals - trial(gathered, pick.round, rows).refusals):
-            lines.append(Line(p.sku, primary, stored, stored, "kept", f"its stored substitute {stored.sku}"))
-            continue
+        had = subs.get(p.sku) if alt is None else None
+        stored = _substitute_row(rows, had)
+        with_sub = current
+        if had is not None:
+            # Judged without it first: a same-drink backup wins over a stored substitute.
+            subs = {k: v for k, v in subs.items() if k != p.sku}
+            current = trial(gathered, pick.round, rows, subs)
         fit = min(p.most_cents // max(p.packs, 1), planner.MAX_PRICE_PER_PACK_CENTS)
         tries: list[tuple[str, sourcing.Option, str]] = []
         if (alt is not None and deviates and alt.expected_cents is not None and alt.units_per_pack == p.units_per_pack
@@ -343,13 +347,20 @@ def backups(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = Non
             problem = _worse(current, tried, floor_cents)
             if problem is None:
                 rows, current = attempt, tried
-                lines.append(Line(p.sku, primary, alt, new, action, said))
+                lines.append(Line(p.sku, primary, alt, new, action, said, drop_sub=had is not None))
                 done = True
                 break
             why[new.store] = f"{said.split(' (')[0].split(':')[0]}: {problem}" if action != "lowered" else problem
         if done:
             continue
         # No same-drink backup: another drink of the plan, unless the line keeps a stored same-drink alternate.
+        if had is not None:
+            why_not = _stored_problem(stored, had, since, visit, now) or _worse(current, with_sub, floor_cents)
+            if why_not is None:
+                subs, current = {**subs, p.sku: had}, with_sub
+                lines.append(Line(p.sku, primary, stored, stored, "kept", f"its stored substitute {had.substitute}"))
+                continue
+            why["stored substitute"] = f"{had.substitute}, {why_not}"
         if alt is None:
             picked_sub = None
             for option, most in _substitute_candidates(p, rows, pick.round, now, since, visit):
@@ -366,16 +377,35 @@ def backups(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = Non
                     break
                 why[option.sku] = f"{option.sku}: {problem}"
             if picked_sub is not None:
-                lines.append(Line(p.sku, primary, None, picked_sub, "substitute",
-                                  f"{picked_sub.sku} {_option(picked_sub)}, another drink of the plan"))
+                lines.append(Line(p.sku, primary, stored, picked_sub, "substitute",
+                                  f"{picked_sub.sku} {_option(picked_sub)}, another drink of the plan",
+                                  drop_sub=had is not None and had.substitute != picked_sub.sku))
                 continue
         reasons = "; ".join(f"{store}: {text}" for store, text in why.items()) or "no other store"
         if alt is not None:
             reasons = f"the stored {alt.store} alternate differs from the pick and nothing fits. {reasons}"
         if p.sku in pooled:
             reasons = f"pooled over {in_slots[p.sku]} slots, so no substitute. {reasons}"
+        if had is not None:
+            lines.append(Line(p.sku, primary, stored, None, "removed", reasons, drop_sub=True))
+            continue
         lines.append(Line(p.sku, primary, alt, alt, "none", reasons))
     return Result(pick, since, visit, tuple(lines), first, current, floor_cents, read, subs_read, pooled)
+
+
+def _stored_problem(row: sourcing.Option | None, had: fill.Substitute, since: datetime, visit: date,
+                    now: datetime) -> str | None:
+    """Why a stored substitute can't be kept as it is, or None: its row's price must be checked, fresh and at a
+    store whose cutoff hasn't passed, as a new one's would."""
+    if row is None:
+        return f"{had.substitute} has no checked primary price"
+    if row.checked_at <= since:
+        return f"its price was checked {_when(row.checked_at)}, before {_when(since)}"
+    if price_search.past_cutoff(row.store, visit, now):
+        return f"{row.store} is past its cutoff for the {visit:%a %d %b} stocking"
+    if row.expected_cents > row.max_cents:
+        return f"{_usd(row.expected_cents)} a pack, above its {_usd(row.max_cents)} max"
+    return None
 
 
 def _substitute_row(rows: dict, sub: fill.Substitute | None) -> sourcing.Option | None:
@@ -425,9 +455,11 @@ def write(conn: psycopg.Connection, result: Result, by: str, now: datetime | Non
     if over and changed:
         raise Refused([Refusal(OVER_LIMIT, why) for why in over])
     arguments = {"by": by.strip(), "plan_id": result.picked.id, "label": result.picked.label,
-                 "alternates": [{"sku": ln.sku, "action": ln.action, "buys": ln.after.sku, "store": ln.after.store,
-                                 "units_per_pack": ln.after.units_per_pack, "price_cents": ln.after.expected_cents,
-                                 "max_cents": ln.after.max_cents} for ln in changed]}
+                 "alternates": [{"sku": ln.sku, "action": ln.action, "drop_substitute": ln.drop_sub,
+                                 **({"buys": ln.after.sku, "store": ln.after.store,
+                                     "units_per_pack": ln.after.units_per_pack, "price_cents": ln.after.expected_cents,
+                                     "max_cents": ln.after.max_cents} if ln.after is not None else {})}
+                                for ln in changed]}
     said: list[str] = []
 
     def action(conn: psycopg.Connection) -> price_search.Recorded:
@@ -441,13 +473,20 @@ def write(conn: psycopg.Connection, result: Result, by: str, now: datetime | Non
             raise Refused([Refusal(CHANGED, "the plan's substitutes changed since they were read; run it again")])
         skus = {p.sku for p in result.picked.round.purchases}
         sourcing.lock_skus(conn, skus)
-        for sku in sorted(skus):
+        # The listed drinks' rows, against the very rows the trials used; a delisted drink has no line.
+        for sku in sorted(sourcing.in_catalog(conn, sorted(skus))):
             for rank in sourcing.RANKS:
                 if sourcing.locked_row(conn, sku, rank) != result.read.get((sku, rank)):
                     raise Refused([Refusal(CHANGED, f"{sku}'s {rank} changed since it was read; run it again")])
         at = now or conn.execute("select now()").fetchone()[0]
         for ln in changed:
             row = ln.after
+            if ln.drop_sub:
+                conn.execute("delete from fill_substitutes where plan_id = %s and sku = %s",
+                             (result.picked.id, ln.sku))
+                if ln.action == "removed":
+                    said.append(f"{ln.sku}: its stored substitute removed")
+                    continue
             if ln.substitutes:
                 conn.execute(
                     "insert into fill_substitutes (plan_id, sku, substitute_sku, max_cents, set_by, set_at)"
@@ -482,6 +521,7 @@ def render(r: Result, wrote: bool) -> str:
     rows = [header]
     for ln in r.lines:
         rows.append((ln.sku, _option(ln.primary), _option(ln.before, ln.sku),
+                     "removed" if ln.action == "removed" else
                      "same" if not ln.changed and ln.after is ln.before else
                      f"{ln.action}: {_option(ln.after, ln.sku)}" if ln.changed else "none"))
     widths = [max(len(row[i]) for row in rows) for i in range(len(header))]
@@ -489,7 +529,7 @@ def render(r: Result, wrote: bool) -> str:
     changes = [ln for ln in r.lines if ln.changed]
     if changes:
         out += ["", f"Changes ({len(changes)}):", *(f"- {ln.sku}: {ln.action}, {ln.why}" for ln in changes)]
-    left = [ln for ln in r.lines if ln.action == "none"]
+    left = [ln for ln in r.lines if ln.action in ("none", "removed")]
     if left:
         out += ["", f"Left without a backup ({len(left)}):", *(f"- {ln.sku}: {ln.why}" for ln in left)]
     if pooled_left := [ln.sku for ln in left if ln.sku in r.pooled]:
