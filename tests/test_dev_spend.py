@@ -213,7 +213,7 @@ def test_weekly_sums_equal_daily_sums(conn):
 
 def test_a_database_without_model_calls_reads_the_ledger_alone(conn):
     ledger.record_tokens(conn, "0.12", "claude-opus-5-5", 100, 10, "live agent run 1 msg_01", at=et(11))
-    conn.execute("drop table model_calls")
+    conn.execute("drop table model_calls cascade")
     assert dev_spend.weekly(conn, BEFORE_OPEN_NOW).totals.total_cents == 12
 
 

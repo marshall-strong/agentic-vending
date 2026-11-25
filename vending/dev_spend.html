@@ -573,7 +573,7 @@ function header() {
   source.hidden = !r.source.includes("not the ledger");
   source.textContent = "Demo data from run notes.";
   document.getElementById("period").textContent = r.first_spend_date
-    ? `Recorded spend since ${dateLabel(r.first_spend_date, true)}`
+    ? `Recorded spend since ${short(r.first_spend_date)} ${day(r.first_spend_date).getUTCFullYear()}`
     : "No recorded spend";
   const later = r.buckets.reduce((s, b) => s + b.after_opening_test_calls, 0);
   document.getElementById("after-note").textContent = later
