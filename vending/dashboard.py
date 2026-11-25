@@ -41,9 +41,13 @@ The page, top to bottom:
  - Money (`vending.money_panel`, #48): the balance, spendable and profit since the
    ledger's opening, where the money has gone, what pending requests could still
    cost, and the proposed budget (#113). Before the opening it says how to record it.
+ - Price checks (`vending.price_check_panel`): the weekly price checks, lookup spend, and each store's
+   latest price for every drink in our plan, with stale, not-found, over-max and changed flags.
  - The plan: what changed since the plan before, then one line per slot that
    opens to the agent's reason, what it was, and what the slot holds and sold.
    Then the agent's weekly update and its notes to itself.
+ - Plan history (`vending.plan_history`): one card per week, each plan and update, every changed slot
+   with the agent's reason and the inputs its run read for it.
  - Runs: each run, how it ended, what it cost, and which slots its plan changed, with the steps
    it took (`agent_steps`): its reasoning, each tool call and what came back. Each live run links to
    its own page (`vending.run_page`), which follows it as it happens.
@@ -81,6 +85,7 @@ from psycopg.types.json import set_json_loads
 from vending import (capacity, db, leaderboards, machine_art, midweek_wake, money_panel, plan_rounds, report_card,
                      settings, slot_counts, tracking, visits)
 from vending import agent_runs, agent_schedule, key_dates, price_schedule, pricing_panel, tracking_daily
+from vending import plan_history, price_check_panel
 from vending import forecast_panel  # forecast vs actual, beside the report card
 from vending import stock as stock_mod
 from vending import planner
@@ -1078,6 +1083,11 @@ def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False,
     snap["products"] = _products(conn, machine_art.lane_products(snap, slots))
     _check_plan_fills(snap)
     snap["pricing"] = _pricing(conn, now, snap)
+    snap["price_check_panel"] = _panel(lambda: _isolated(conn, lambda: price_check_panel.read(
+        conn, now, price_check_panel.plan_drinks(snap), (syncs or {}).get("price_check"))))
+    snap["plan_history"] = _panel(lambda: _isolated(conn, lambda: plan_history.read(
+        conn, now, slots, assignment_at, old_text=OLD_ASSIGNMENT,
+        cards=(cards["data"] or {}).get("weeks") if cards["ok"] else None)))
     return snap, assignment_at
 
 
@@ -2517,7 +2527,7 @@ def _runs_html(panel: dict, now: datetime, run_href: str | None = None) -> str:
             body += (f'<p class="follow"><a href="{_e(run_href)}{int(r["id"])}">'
                      + ("Follow this run live" if r["status"] == "running" and not r["stale"] else "Open this run")
                      + '</a></p>')
-        items.append(f'<li class="run{" replay" if r["mode"] == "replay" else ""}">'
+        items.append(f'<li class="run{" replay" if r["mode"] == "replay" else ""}" id="run-{int(r["id"])}">'
                      f'<div class="head"><b>#{r["id"]}</b> {_time(r["started_at"])} {_run_pill(r)}</div>'
                      f'<div class="meta">{" &middot; ".join(meta)}</div>{body}</li>')
     return notice + f'<ol class="timeline">{"".join(items)}</ol>'
@@ -2557,7 +2567,7 @@ def _steps_html(run_id: int, steps: list[dict]) -> str:
     """A run's steps, in order, folded away under one line: what it thought, called and was told."""
     calls = sum(1 for s in steps if s["kind"] == "tool_call")
     turns = max(s["turn"] for s in steps)
-    return (f'<details class="steps" data-key="steps-{int(run_id)}"><summary>How it decided: '
+    return (f'<details class="steps" id="steps-{int(run_id)}" data-key="steps-{int(run_id)}"><summary>How it decided: '
             f'{_plural(turns, "turn")}, {_plural(calls, "tool call")}</summary><ol>{"".join(step_items(steps))}</ol></details>')
 
 
@@ -2932,6 +2942,7 @@ STYLE += money_panel.STYLE   # the money panel's own rules (#48)
 STYLE += pricing_panel.STYLE   # the pricing panel's own rules
 STYLE += leaderboards.STYLE
 STYLE += report_card.STYLE
+STYLE += price_check_panel.STYLE + plan_history.STYLE
 STYLE += forecast_panel.STYLE
 STYLE += tracking_daily.STYLE
 
@@ -3246,6 +3257,13 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
              f'</span></h2>' + (f'<p class="charts">Charts: {chart_links}</p>' if chart_links else "")
              + f'{money_panel.html(snap["money"], charts.get("pnl"))}</section>' if "money" in snap else "")
     pricing = pricing_panel.html(snap["pricing"], snap["ours"]) if "pricing" in snap else ""
+    price_checks = (f'<section id="price-checks"><h2>Price checks <span class="hint">weekly checks &middot; '
+                    f'lookup log &middot; sourcing &middot; Eastern</span></h2>{price_check_panel.html(snap["price_check_panel"])}'
+                    '</section>' if "price_check_panel" in snap else "")
+    shown_runs = {r["id"] for r in snap["runs"]["data"]} if snap["runs"]["ok"] else set()
+    history = (f'<section id="plan-history"><h2>Plan history <span class="hint">Sat&ndash;Fri, Eastern &middot; newest '
+               f'first &middot; live runs from the opening</span></h2>{plan_history.html(snap["plan_history"], shown_runs)}'
+               '</section>' if "plan_history" in snap else "")
     boards = (f'<section id="leaderboards"><h2>Product leaderboards</h2>{leaderboards.html(snap["leaderboards"])}</section>'
               if "leaderboards" in snap else "")
     report = (f'<section id="report-card"><h2>Weekly report card <span class="hint">computed in code &middot; '
@@ -3260,8 +3278,8 @@ def render(snap: dict, refresh: int = REFRESH_SECONDS, json_href: str = "state.j
                 f' &middot; newest first</span></h2>{tracking_daily.panel_html(snap["tracking"])}</section>'
                 if "tracking" in snap else "")
     body = (head + _status_bar(snap, items, charts) + key_dates.html(snap.get("key_dates"))
-            + _cabinet_html(snap, items) + pricing + money + tracking
-            + _plan_section(snap)
+            + _cabinet_html(snap, items) + pricing + price_checks + money + tracking
+            + _plan_section(snap) + history
             + report + forecast + incidents
             + '<div class="grid2">'
             + f'<section id="runs"><h2>Runs <span class="hint">newest first &middot; chips are what each plan '
