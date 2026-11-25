@@ -1476,7 +1476,7 @@ def test_the_plan_cell_says_first_fill_before_the_lock_and_next_restock_after(co
     assert ">For the next restock<" in cell and "2 changes" in cell and f"run #{second} submitted" in cell
     # The plan was made on Mon 9 Nov: the restock it is for is the Friday visit after Thursday's cutoff.
     assert '"sub">Fri 13 Nov &middot; 2 changes' in cell
-    assert '<span class="vm-when">Next restock &middot; Fri 13 Nov</span>' in dashboard.render(after)
+    assert f'<span class="vm-when">Next restock &middot; Fri 13 Nov &middot; run #{second}</span>' in dashboard.render(after)
     assert "first fill" not in cell.lower()
     monkeypatch.setattr(dashboard, "lock_at", lambda: MONDAY + timedelta(days=20))
     before = dashboard.snapshot(page_conn, MONDAY)
@@ -1484,9 +1484,13 @@ def test_the_plan_cell_says_first_fill_before_the_lock_and_next_restock_after(co
     cell = status_cells(before)[5]
     assert ">For the first fill<" in cell and "Friday" not in cell
     assert f"20 slots &middot; {dashboard._cents(p['fill_most_cents'])} of $400" in cell and "not picked" not in cell
-    # Neither "day-one" nor "round" is anywhere on the page, before or after the lock.
+    # The machine's heading names the plan it draws, by its round and ID.
+    when = re.search(r'<span class="vm-when">(.*?)</span>', dashboard.render(before)).group(1)
+    assert when.startswith(f"First fill &middot; round 3 &middot; plan #{p['id']} &middot; picked ")
+    # Apart from that label, neither "day-one" nor "round" is anywhere on the page, before or after the lock.
     for snap in (before, after):
         text = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", dashboard.render(snap), flags=re.S)
+        text = re.sub(r'<span class="vm-when">.*?</span>', "", text)
         text = re.sub(r"<[^>]+>", " ", text).lower()
         assert not re.search(r"\bday[- ]one\b", text) and not re.search(r"\bround\b", text)
 
@@ -1652,7 +1656,7 @@ def test_the_page_says_next_restock_for_what_the_plan_does_and_friday_only_for_t
     snap = dashboard.snapshot(page_conn, MONDAY)
     page = dashboard.render(snap)
     assert '<button type="button" data-view="next" aria-pressed="false">Next restock</button>' in page
-    assert '<span class="vm-when">Next restock &middot; midweek visit</span>' in page
+    assert f'<span class="vm-when">Next restock &middot; midweek visit &middot; run #{second}</span>' in page
     assert "midweek visit &middot; 2 changes" in status_cells(snap)[5]
     assert "+3 at restock" in lane_html(page, "12") and "pulled at restock" in lane_html(page, "14")
     assert "<dt>Next restock</dt>" in page and "pulled at the next restock" in page

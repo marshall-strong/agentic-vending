@@ -375,7 +375,12 @@ def _first_fill(conn: psycopg.Connection, ours: tuple[str, ...], assignment_at: 
                           " order by picked desc, loaded_at desc, id desc limit 1").fetchone()
     if row is None:
         return None
-    current = {"id": row["id"], "picked": row["picked"], "slots": []}
+    picked_at = None
+    if row["picked"]:
+        found = _optional(conn, "select at from action_log where tool = 'plan_store.pick' and arguments ->> 'id' = %s"
+                                " order by at desc, id desc limit 1", (str(row["id"]),))
+        picked_at = found and found["at"]
+    current = {"id": row["id"], "picked": row["picked"], "round": row["label"], "picked_at": picked_at, "slots": []}
     if not ours:
         return {**current, "message": NO_ASSIGNMENT}
     if set(row["slots"]) != set(ours):
@@ -393,6 +398,94 @@ def _first_fill(conn: psycopg.Connection, ours: tuple[str, ...], assignment_at: 
                                   "max_fill_share": _dollars(s.most_cents),
                                   "refusals": [] if older else [_plan_text(message) for message in s.refusals]}}
                       for s in checked.slots.values()]}
+
+
+def _sent_fill(conn: psycopg.Connection, now: datetime) -> dict | None:
+    """The day-one fill request: the latest `fill` submission the bridge accepted (`vending.fill`), unless the
+    bridge rejected it. Its body is the stored request's, else the submission's. None while none is sent."""
+    row = _optional(conn, """
+        select s.request_id, s.at, coalesce(r.request_body, s.body) as body, coalesce(r.status, 'pending') as status,
+               (select a.arguments from action_log a
+                 where a.tool = 'fill.submit' and a.outcome = 'done' and a.result ->> 'request_id' = s.request_id
+                 order by a.at desc, a.id desc limit 1) as logged
+          from purchase_submissions s left join purchase_requests r on r.request_id = s.request_id
+         where s.purpose = 'fill' and s.status = 'accepted' and s.request_id is not null and s.at <= %s
+           and r.status is distinct from 'rejected'
+         order by s.at desc, s.id desc limit 1""", (now,))
+    return row
+
+
+def _restock_row(slot: str, entry: dict, fill_check: str | None = None, sent: str | None = None) -> dict:
+    """One slot of a plan the machine draws, in the agent plan's shape (`_plan`), with nothing to compare."""
+    return {"slot": slot, "now": entry, "before": None, "changed": False, "fill_check": fill_check, "sent": sent}
+
+
+def _picked_fill_plan(first: dict) -> dict:
+    """The first-fill plan (`_first_fill`) as the machine draws it: each line's SKU, price and units, with the
+    pick's own fill checks and reasons."""
+    p = first["data"] if first["ok"] else None
+    if p is None or p.get("message"):
+        return {"ok": True, "data": None} if first["ok"] else first
+    label = ["First fill", f"round {p['round']}", f"plan #{p['id']}",
+             f"picked {key_dates.moment_text(p['picked_at'])}" if p.get("picked_at") else
+             "picked" if p["picked"] else "latest, not picked"]
+    rows = [_restock_row(row["slot"], {"product": row["sku"], "fill_to": row["units"], "reason": row["reason"],
+                                       "sale_price": _dollars(row["price_cents"]) if isinstance(row["price_cents"], int)
+                                       else None}, row.get("fill_check"))
+            for row in p["slots"]]
+    return {"ok": True, "data": {"shows": {"kind": "first_fill", "label": label}, "slots": rows}}
+
+
+_NOTE_LOAD = re.compile(r"\b(\w+)=(\d+)\b")
+
+
+def _sent_fill_plan(sent: dict, ours: tuple[str, ...]) -> dict:
+    """The sent fill request as the machine draws it: each line for one of our selections, what it loads and
+    where it is bought. A back-stock line names its units; a purchase line's are in the pooled request's note
+    (`planner._pool_note`: "slot=units"). Lines for any other selection are left out."""
+    body = sent["body"] if isinstance(sent["body"], dict) else {}
+    note = body.get("note") if isinstance(body.get("note"), str) else ""
+    loads = {slot: int(units) for slot, units in _NOTE_LOAD.findall(note) if slot in ours}
+    rows = []
+    for line in body.get("lines") or []:
+        if not isinstance(line, dict) or line.get("slot") not in ours:
+            continue
+        slot = line["slot"]
+        if line.get("source") == "back_stock":
+            load = line.get("load") if isinstance(line.get("load"), dict) else {}
+            units, where = load.get("units"), "from back stock"
+        else:
+            load = line.get("primary") if isinstance(line.get("primary"), dict) else {}
+            alternate = line.get("alternate") if isinstance(line.get("alternate"), dict) else {}
+            units = loads.get(slot)
+            where = str(load.get("store") or "store unknown") + (f", backup {alternate['store']}"
+                                                                  if alternate.get("store") else "")
+        units = units if isinstance(units, int) and not isinstance(units, bool) else None
+        sku, price = load.get("sku"), load.get("sale_price")
+        try:
+            shown = plan_rounds.format_cents(int(Decimal(str(price)) * 100))
+        except (ArithmeticError, ValueError):
+            shown = "price unknown"
+        text = (f"{sku or 'no SKU'} · {shown} · " + (_plural(units, "unit") if units is not None else "units unknown")
+                + f" · {where}")
+        rows.append(_restock_row(slot, {"product": sku, "sale_price": price, "fill_to": units}, sent=text))
+    logged = sent["logged"] if isinstance(sent["logged"], dict) else {}
+    label = ["First fill sent"]
+    if logged.get("label"):
+        label.append(f"round {logged['label']}")
+    if logged.get("plan_id") is not None:
+        label.append(f"plan #{logged['plan_id']}")
+    label.append(f"sent {key_dates.moment_text(sent['at'])}")
+    return {"shows": {"kind": "sent_fill", "label": label}, "slots": rows}
+
+
+def shown_plan(snap: dict) -> dict:
+    """The plan the machine's Next restock draws, in the agent plan's shape. Before the slot lock, the day-one
+    fill until its receipt is counted (`machine_plan`), then the agent's latest plan; from the lock, the
+    agent's plan."""
+    if "machine_plan" in snap:
+        return snap["machine_plan"]
+    return snap.get("weekly_plan", snap["plan"])
 
 
 def _tags(conn: psycopg.Connection, now: datetime) -> dict:
@@ -1076,6 +1169,14 @@ def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False,
     if before_lock:
         snap["weekly_plan"] = snap["plan"]
         snap["plan"] = _panel(lambda: _isolated(conn, lambda: _first_fill(conn, slots, assignment_at)))
+        fill = _panel(lambda: _isolated(conn, lambda: _sent_fill(conn, now)))
+        if not fill["ok"]:
+            snap["machine_plan"] = fill
+        elif fill["data"] is None:
+            snap["machine_plan"] = _picked_fill_plan(snap["plan"])
+        elif fill["data"]["status"] != "fulfilled":
+            snap["machine_plan"] = {"ok": True, "data": _sent_fill_plan(fill["data"], slots)}
+        # Once the fill's receipt is counted, the machine shows the agent's latest plan, as from the lock.
     hidden_runs = model_test_count["n"] if model_test_count else 0
     hidden_purchases = purchases["data"][1] if purchases["ok"] else 0
     if hidden_runs or hidden_purchases:
@@ -1216,11 +1317,12 @@ def attention(snap: dict) -> list[dict]:
         for level, text in tracking_daily.attention(tracking["data"]):
             add(level, text)
 
-    plan = snap.get("plan") or {}
+    # The fill checks of the plan the machine draws (`shown_plan`): before the lock, the day-one fill's,
+    # until its receipt is counted.
+    plan = shown_plan(snap) if snap.get("plan") else {}
     if plan.get("ok") and plan["data"]:
-        first_fill = "weekly_plan" in snap
         for row in plan["data"]["slots"]:
-            entry = row if first_fill else row.get("now")
+            entry = row.get("now")
             check = row.get("fill_check")
             if entry and check and check != capacity.NOT_COUNTED:
                 reason = entry.get("reason")
@@ -1784,9 +1886,12 @@ def _fill(entry: dict | None) -> int | None:
 
 
 def _check_plan_fills(snap: dict) -> None:
-    """Check explicit weekly fills against the same catalog and counts as the close-up."""
-    plan = snap.get("weekly_plan", snap["plan"])
+    """Check the explicit fills of the plan the machine draws (`shown_plan`) against the same catalog and counts
+    as the close-up. A picked first fill keeps its own checks (`plan_rounds`)."""
+    plan = shown_plan(snap)
     if not plan["ok"] or not plan["data"] or not snap["products"]["ok"]:
+        return
+    if plan["data"].get("shows", {}).get("kind") == "first_fill":
         return
     products = snap["products"].get("data") or {}
     catalog, overrides = products.get("catalog", {}), products.get("overrides", {})
@@ -1805,12 +1910,13 @@ def machine_view(snap: dict) -> dict:
     """What "In the machine" draws for each of our slots, Now and Next restock. Reads nothing.
 
     Now: the price on the tag from the latest poll, and the product and units on hand from the
-    receipts (`vending.stock`); each is None when there is no record of it. Next restock: the latest
-    plan's product, price and fill, falling back to Now for what the plan leaves as is. `next` is
-    None when there is no plan.
+    receipts (`vending.stock`); each is None when there is no record of it. Next restock: the product,
+    price and fill of the plan `shown_plan` gives (before the lock, the day-one fill until its receipt
+    is counted), falling back to Now for what the plan leaves as is. `next` is None when there is no plan.
     """
-    plan, sales, stock = snap.get("weekly_plan", snap["plan"]), snap["sales"], snap["stock"]
+    plan, sales, stock = shown_plan(snap), snap["sales"], snap["stock"]
     p = plan["data"] if plan["ok"] else None
+    agents = p is not None and "shows" not in p     # a first fill's reasons are shown as its own fact
     planned = {s["slot"]: s for s in p["slots"]} if p else {}
     prices = sales["data"]["slots"] if sales["ok"] else {}
     held = stock["data"]["slots"] if stock["ok"] else {}
@@ -1849,7 +1955,8 @@ def machine_view(snap: dict) -> dict:
                           else ["dropped"])
                 change = {"labels": labels, "kind": _change_kind(labels), "reason": (entry or {}).get("reason")}
         out[slot] = {"now": now, "next": nxt, "change": change, "fill_to": _fill(entry),
-                     "reason": (entry or {}).get("reason"), "wildcard": slot == snap.get("wildcard")}
+                     "reason": (entry or {}).get("reason") if agents else None,
+                     "wildcard": slot == snap.get("wildcard")}
     return out
 
 
@@ -1929,23 +2036,29 @@ def _fill_pill(check: str | None) -> str:
 
 def _fill_checks(snap: dict) -> dict:
     """Each selection's under-fill flag in the plan the machine shows for the next restock (`_check_plan_fills`)."""
-    plan = snap.get("weekly_plan", snap["plan"])
+    plan = shown_plan(snap)
     p = plan["data"] if plan["ok"] else None
     return {s["slot"]: s["fill_check"] for s in (p or {}).get("slots", []) if s.get("fill_check")}
 
 
 def _first_fill_lines(snap: dict) -> dict:
-    """Each selection's line in the plan for the first fill, for the close-up's facts. Before the slot lock only."""
+    """Each selection's line in the plan for the first fill, for the close-up's facts, and once the fill is sent,
+    the request's line for it (`sent`). Before the slot lock only."""
     if "weekly_plan" not in snap or not snap["plan"]["ok"]:
         return {}
     p = snap["plan"]["data"]
-    if not p or p.get("message"):
-        return {}
-    return {row["slot"]: {"text": f'{row["product"] or "no product"} · {plan_rounds.format_cents(row["price_cents"])} · '
-                                  f'{_plural(row["units"], "unit")}'
-                                  + (f' · {row["fill_check"]}' if row.get("fill_check") else ""),
-                          "reason": row["reason"]}
-            for row in p["slots"]}
+    out: dict = {}
+    if p and not p.get("message"):
+        out = {row["slot"]: {"text": f'{row["product"] or "no product"} · {plan_rounds.format_cents(row["price_cents"])} · '
+                                     f'{_plural(row["units"], "unit")}'
+                                     + (f' · {row["fill_check"]}' if row.get("fill_check") else ""),
+                             "reason": row["reason"]}
+               for row in p["slots"]}
+    shown = shown_plan(snap)
+    if shown["ok"] and shown["data"] and shown["data"].get("shows", {}).get("kind") == "sent_fill":
+        for row in shown["data"]["slots"]:
+            out.setdefault(row["slot"], {"text": None, "reason": None})["sent"] = row["sent"]
+    return out
 
 
 def _cabinet_html(snap: dict, items: list[dict] | None = None) -> str:
@@ -1953,7 +2066,7 @@ def _cabinet_html(snap: dict, items: list[dict] | None = None) -> str:
     on the right, Needs attention and the plan's changes, or, once one of ours is picked, its shelf
     close up and its facts. On a phone the front comes first and the close-up is a sheet."""
     items = attention(snap) if items is None else items
-    plan = snap.get("weekly_plan", snap["plan"])
+    plan = shown_plan(snap)
     now, sales, stock = snap["as_of"], snap["sales"], snap["stock"]
     view = machine_view(snap) if snap["ours"]["ok"] else {}
     face = {f"{r}{c}" for r in range(1, SHELVES + 1) for c in range(1, COLUMNS + 1)}
@@ -1973,7 +2086,9 @@ def _cabinet_html(snap: dict, items: list[dict] | None = None) -> str:
                                            p is not None and "weekly_plan" not in snap, sold, span,
                                            _first_fill_lines(snap), _fill_checks(snap))
     lede = ""
-    if p is None:
+    if not plan["ok"]:
+        lede = f'<p class="empty v-next">Next restock shows the machine as it is now: {_missing(plan)}</p>'
+    elif p is None:
         lede = '<p class="empty v-next">No plan yet: Next restock shows the machine as it is now.</p>'
     off_face = [s for s in our_selections(snap) if s not in face]
     if off_face:
@@ -2002,8 +2117,8 @@ def _cabinet_html(snap: dict, items: list[dict] | None = None) -> str:
     seg = ('<span class="seg" role="group" aria-label="Show" hidden>'
            '<button type="button" data-view="now" aria-pressed="true">Now</button>'
            '<button type="button" data-view="next" aria-pressed="false">Next restock</button></span>')
-    when = _restock(p)
-    when = f'<span class="vm-when">Next restock &middot; {_e(when)}</span>' if when else ""
+    when = _shown_label(p)
+    when = f'<span class="vm-when">{when}</span>' if when else ""
     panel = ('<aside class="vm-panel" aria-label="Close-up of the picked selection">'
              '<div class="vm-ph"><span class="vm-grab" aria-hidden="true"></span><span class="label">Close-up</span>'
              # "?#vm", not "#vm": without scripts closing must load the page without ?sel=, or the timed
@@ -2017,6 +2132,18 @@ def _cabinet_html(snap: dict, items: list[dict] | None = None) -> str:
             f'</span>{when}{seg}</h2>{lede}'
             f'<div class="ops"><div class="ops-front">{front}{legend}</div>'
             f'<div class="ops-side">{home}{panel}</div></div>{scrim}</section>')
+
+
+def _shown_label(p: dict | None) -> str | None:
+    """Which plan the machine's Next restock draws, as a short label: the first fill (round, plan, when picked),
+    the sent fill request (round, plan, when sent), or the agent's plan (the restock it is for and its run)."""
+    if not p:
+        return None
+    if "shows" in p:
+        parts = p["shows"]["label"]
+    else:
+        parts = ["Next restock", *([when] if (when := _restock(p)) else []), f'run #{p["run"]["id"]}']
+    return " &middot; ".join(_e(part) for part in parts)
 
 
 def _slot_num(slot: str) -> str:
