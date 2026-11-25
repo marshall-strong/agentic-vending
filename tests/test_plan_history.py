@@ -38,7 +38,7 @@ def entry(slot, product=COKE, price="2.50", fill=7, reason="restock what sold"):
 
 
 def live(conn, at, slots, *, status="submitted", mode="live", request=None, cost="0.42", update=None, notes=None,
-         reason="the week's plan", steps=()):
+         reason="the week's plan", steps=(), ids=()):
     run = agent_runs.start(conn, mode=mode, model="claude-sonnet-5-5")
     if status != "running":
         agent_runs.finish(conn, run, status, plan=None if slots is None else
@@ -48,8 +48,9 @@ def live(conn, at, slots, *, status="submitted", mode="live", request=None, cost
     conn.execute("update agent_runs set started_at = %s, finished_at = %s where id = %s",
                  (at, None if status == "running" else at + timedelta(minutes=10), run))
     for n, (kind, tool, content, error) in enumerate(steps):
-        conn.execute("insert into agent_steps (run_id, turn, at, kind, tool, content, is_error)"
-                     " values (%s, 1, %s, %s, %s, %s, %s)", (run, at + timedelta(seconds=n), kind, tool, content, error))
+        conn.execute("insert into agent_steps (run_id, turn, at, kind, tool, content, is_error, tool_use_id)"
+                     " values (%s, 1, %s, %s, %s, %s, %s, %s)",
+                     (run, at + timedelta(seconds=n), kind, tool, content, error, ids[n] if ids else None))
     return run
 
 
@@ -314,3 +315,18 @@ def test_the_test_opening_starts_no_history(conn, page_conn):
     live(conn, test_at + timedelta(days=1), [entry("15")])
     p = history(page_conn)[1]
     assert p["data"]["opened"] is False and p["data"]["weeks"] == []
+
+
+def test_a_reply_is_matched_to_its_call_by_tool_use_id_when_recorded(conn, opened, page_conn):
+    # Migration 035 (#247): each call and its reply carry the model's tool use id, whatever order they land in.
+    live(conn, OPENED, [entry("15"), entry("16")])
+    rows = lambda slot, n: json.dumps({"data": [{"slot": slot, "units_sold_in_window": n}]})   # noqa: E731
+    live(conn, NOW - timedelta(days=2), [entry("15", price="2.75"), entry("16", price="2.25")],
+         steps=[("tool_call", "get_sales_history", json.dumps({"slot": "15"}), False),
+                ("tool_call", "get_sales_history", json.dumps({"slot": "16"}), False),
+                ("tool_result", "get_sales_history", rows("16", 1616), False),
+                ("tool_result", "get_sales_history", rows("15", 1515), False)],
+         ids=["toolu_a", "toolu_b", "toolu_b", "toolu_a"])
+    changes = {c["slot"]: c for c in week(history(page_conn)[1]["data"], date(2026, 12, 5))["plans"][0]["changes"]}
+    assert changes["15"]["inputs"][0]["reply"] == {"units_sold_in_window": 1515}
+    assert changes["16"]["inputs"][0]["reply"] == {"units_sold_in_window": 1616}

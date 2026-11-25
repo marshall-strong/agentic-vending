@@ -221,18 +221,27 @@ def _configured_fee(conn: psycopg.Connection) -> int:
 
 def _steps(conn: psycopg.Connection, run_ids: list[int], assignment_at: datetime | None) -> dict[int, list[dict]]:
     """Each run's tool calls and replies, oldest first, for runs started under the current assignment only (the
-    filter is in the query). Empty before migration 014 adds `agent_steps`. A step marked `is_error` comes back
-    without its content: a failure's text is never read."""
+    filter is in the query). Empty before migration 014 adds `agent_steps`; before migration 035 adds
+    `tool_use_id`, the steps come without it. A step marked `is_error` comes back without its content: a failure's
+    text is never read."""
     if not run_ids or assignment_at is None:
         return {}
-    try:
-        with conn.transaction():
-            rows = conn.cursor(row_factory=dict_row).execute(
-                "select s.run_id, s.turn, s.kind, s.tool, case when s.is_error then null else s.content end as content,"
-                " s.is_error from agent_steps s join agent_runs r on r.id = s.run_id"
-                " where s.run_id = any(%s) and r.started_at >= %s and s.kind in ('tool_call', 'tool_result')"
-                " order by s.run_id, s.id", (run_ids, assignment_at)).fetchall()
-    except (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
+    query = ("select s.run_id, s.turn, s.kind, s.tool, case when s.is_error then null else s.content end as content,"
+             " s.is_error, {tool_use} as tool_use_id from agent_steps s join agent_runs r on r.id = s.run_id"
+             " where s.run_id = any(%s) and r.started_at >= %s and s.kind in ('tool_call', 'tool_result')"
+             " order by s.run_id, s.id")
+    rows = None
+    for tool_use in ("s.tool_use_id", "null::text"):
+        try:
+            with conn.transaction():
+                rows = conn.cursor(row_factory=dict_row).execute(query.format(tool_use=tool_use),
+                                                                 (run_ids, assignment_at)).fetchall()
+            break
+        except psycopg.errors.UndefinedColumn:
+            continue
+        except psycopg.errors.UndefinedTable:
+            return {}
+    if rows is None:
         return {}
     out: dict[int, list[dict]] = {}
     for row in rows:
@@ -241,7 +250,8 @@ def _steps(conn: psycopg.Connection, run_ids: list[int], assignment_at: datetime
 
 
 def _calls(steps: list[dict], ours: set[str]) -> list[dict]:
-    """Each tool call with its reply. The agent records a turn's calls, then their replies in the same order
+    """Each tool call with its reply: the reply with the call's `tool_use_id` (migration 035) when both have one.
+    Without ids (steps recorded before it), by order: the agent records a turn's calls, then their replies in the same order
     (`vending.agent`), and a run's start-up reads (`get_briefing`, `check_submissions`) as replies with no call before
     the model's first calls: so within a turn, the k-th reply of a tool after the turn's first call answers its k-th
     call. A call whose arguments name a selection outside `ours` anywhere (the dashboard's own filter,
@@ -265,12 +275,17 @@ def _calls(steps: list[dict], ours: set[str]) -> list[dict]:
                     outside = scoped is d._DROP or scoped != value
                     args = {} if outside else value
             call = {"tool": step["tool"], "args": args, "outside": outside, "reply": None,
-                    "failed": bool(step["is_error"]), "replied": False}
+                    "failed": bool(step["is_error"]), "replied": False, "id": step.get("tool_use_id")}
             out.append(call)
             turn.setdefault(step["tool"], []).append(call)
             turn.setdefault("\0calls", []).append(call)
+        elif step.get("tool_use_id") and any(c["id"] == step["tool_use_id"] for c in out):
+            waiting = [c for c in out if c["id"] == step["tool_use_id"] and not c["replied"]]
+            if waiting:
+                waiting[0].update(reply=None if step["is_error"] else step["content"],
+                                  failed=waiting[0]["failed"] or bool(step["is_error"]), replied=True)
         elif turn.get("\0calls"):          # a reply before the turn's first call is a start-up read: no call
-            waiting = [c for c in turn.get(step["tool"], []) if not c["replied"]]
+            waiting = [c for c in turn.get(step["tool"], []) if not c["replied"] and not c["id"]]
             if waiting:
                 waiting[0].update(reply=None if step["is_error"] else step["content"],
                                   failed=waiting[0]["failed"] or bool(step["is_error"]), replied=True)

@@ -320,9 +320,25 @@ def _entry(slot: str, sku: str, fill: int, price: str, reason: str) -> dict:
     return {"slot": slot, "product": sku, "fill_to": fill, "sale_price": price, "reason": reason}
 
 
+# The demand estimate the day-one run recorded with its plan (`vending.agent.capture_forecast`): made-up units per
+# class day, near but not equal to what the simulation sells, so the forecast panel has misses to show.
+FORECAST = {"11": "2.40", "13": "1.20", "16": "0.90", "17": "0.80", "22": "1.00", "24": "0.90", "25": "0.70",
+            "28": "0.80", "31": "1.70", "33": "1.70", "36": "0.70", "37": "3.40", "41": "1.30", "44": "0.70",
+            "46": "0.60", "47": "0.70", "52": "0.80", "54": "1.00", "55": "0.70", "58": "0.80"}
+FORECAST_BASIS = "fall prior: {segment}; 0 in-stock class days of our own so far, own rate after 5"
+
+
+def forecast() -> dict:
+    return {"source": "get_machine_state", "unit": "class_day", "as_of": _utc(2, 18).isoformat(),
+            "slots": [{"slot": s, "rate": FORECAST[s],
+                       "basis": FORECAST_BASIS.format(segment="fast seller" if float(FORECAST[s]) >= 1.5 else
+                                                      "slow seller, low-priced")} for s, *_ in DAY_ONE]}
+
+
 def plan_one() -> dict:
     return {"visit": "scheduled", "reason": PLAN_ONE_REASON,
-            "slots": [_entry(s, sku, fill, price, why) for s, sku, fill, price, _, why in DAY_ONE]}
+            "slots": [_entry(s, sku, fill, price, why) for s, sku, fill, price, _, why in DAY_ONE],
+            "forecast": forecast()}
 
 
 def plan_next() -> dict:
@@ -378,6 +394,16 @@ def seed_runs(conn) -> dict[str, int]:
               "Check whether GORGIE outsells vitaminwater, and pick the product for 44.")
     run("now", "live", _utc(9, 14, 50), None, "running")
     return ids
+
+
+def midweek_draft(red_bull: str) -> dict:
+    """A draft the run in progress previews: Friday's plan as a midweek visit, Red Bull (37) at `red_bull`. A
+    desired state lists every slot of ours (`planner._check_slot_list`)."""
+    slots = [{k: v for k, v in e.items() if k != "reason"} for e in plan_next()["slots"]]
+    for e in slots:
+        if e["slot"] == "37":
+            e["sale_price"] = red_bull
+    return {"off_cycle": True, "slots": slots}
 
 
 def seed_steps(conn, ids: dict[str, int]) -> None:
@@ -437,6 +463,16 @@ def seed_steps(conn, ids: dict[str, int]) -> None:
             (1, _utc(9, 14, 51), "tool_result", "get_machine_state", "20 lanes; last poll 1 h 21 min ago", False),
             (2, _utc(9, 14, 53), "tool_call", "submit_desired_state", '{"slots": 20}', False),
             (2, _utc(9, 14, 53), "tool_result", "submit_desired_state", "refused: a request for Friday is already pending (pr-002)", True),
+            (3, _utc(9, 14, 56), "thinking", None, "Friday's request is in. Red Bull is down to 2 with two class days "
+             "to go: preview a midweek top-up to see what it costs.", False),
+            (3, _utc(9, 14, 57), "tool_call", "preview_desired_state", json.dumps({"desired": midweek_draft("3.00")}),
+             False),
+            (3, _utc(9, 14, 57), "tool_result", "preview_desired_state", json.dumps(
+                {"ok": True, "plan_hash": "demo-1", "most_we_pay": "45.40"}), False),
+            (4, _utc(9, 14, 59), "thinking", None, "The visit costs $25 and Red Bull's two days make about $11. "
+             "Try $3.25 instead, as Friday's plan does.", False),
+            (4, _utc(9, 14, 59), "tool_call", "preview_desired_state", json.dumps({"desired": midweek_draft("3.25")}),
+             False),
         ],
     }
     with conn.cursor() as cur:
@@ -444,6 +480,24 @@ def seed_steps(conn, ids: dict[str, int]) -> None:
             cur.executemany(
                 "insert into agent_steps (run_id, turn, at, kind, tool, content, is_error) values (%s, %s, %s, %s, %s, %s, %s)",
                 [(ids[key], *row) for row in rows])
+
+
+# The run in progress's model calls so far (`model_calls`, as the harness writes them): turns 1 to 3 answered,
+# turn 4 still at its worst case. The run cap is the team's $2 (`model_run_cap_cents`).
+RUN_CALLS = (("1", "0.19", "ok"), ("2", "0.24", "ok"), ("3", "0.27", "ok"), ("4", "0.41", "pending"))
+RUN_CAP_CENTS = 200
+
+
+def seed_model_calls(conn, run_id: int) -> None:
+    from vending import agent_runs
+
+    for turn, cost, status in RUN_CALLS:
+        conn.execute("insert into model_calls (at, purpose, label, run_id, model, key_env, status, max_tokens,"
+                     " worst_case_usd, cost_usd, recorded_by) values (%s, 'live', %s, %s, %s,"
+                     " 'VENDING_ANTHROPIC_API_KEY', %s, 16000, %s, %s, 'agent')",
+                     (_utc(9, 14, 50 + 2 * int(turn)), f"agent run {run_id} turn {turn}",
+                      agent_runs.harness_key(run_id), MODEL, status,
+                      Decimal("0.41") if status == "pending" else Decimal(cost), Decimal(cost)))
 
 
 def seed_actions(conn) -> None:
@@ -573,8 +627,8 @@ def seed_visits(conn) -> None:
         # (page_visits has an index on `at`; the writer's own bookkeeping isn't needed to read the counts.)
 
 
-def seed(conn) -> None:
-    """Fill a migrated, empty schema with the made-up week."""
+def seed(conn) -> dict[str, int]:
+    """Fill a migrated, empty schema with the made-up week. Returns the runs' ids by their keys."""
     from vending import config, slots
 
     conn.execute("insert into slot_assignment (team, device_id, slots, first_read_at, last_checked_at, response)"
@@ -588,6 +642,8 @@ def seed(conn) -> None:
     seed_purchases(conn, sim)
     ids = seed_runs(conn)
     seed_steps(conn, ids)
+    seed_model_calls(conn, ids["now"])
+    config.set_value(conn, "model_run_cap_cents", RUN_CAP_CENTS, "kevin")
     seed_counts(conn)
     seed_sourcing(conn)
     seed_price_checks(conn)
@@ -596,6 +652,12 @@ def seed(conn) -> None:
     config.set_halted(conn, False, "kevin")
     conn.execute("update config set updated_at = %s where key = 'halted'", (_utc(2, 14),))
     seed_actions(conn)
+    return ids
+
+
+# Runs with a page of their own in the demo (`vending.run_page`): the one in progress, the last finished one and
+# the failure.
+RUN_PAGES = ("now", "friday", "failed")
 
 
 # Sourcing and the day-one plan go in with the dashboard's seed, so the price-check panel and the plan history
@@ -712,12 +774,14 @@ def sync_round() -> dict:
 def make(writer, reader) -> dict:
     """The demo snapshot from a migrated empty schema: `writer` seeds it, `reader` (read-only, like the
     dashboard's own connection) is snapshotted the way the public page is."""
-    from vending import dashboard, money_panel, slots
+    from vending import dashboard, money_panel, run_page, slots
 
     # Our slots are read as the clock stood at AS_OF, a week after the lock.
     with mock.patch.object(slots, "clock", lambda conn: AS_OF):
-        seed(writer)
+        ids = seed(writer)
         snap = dashboard.snapshot(reader, AS_OF, public=True, syncs=sync_round())
+        # Each run page's data, as the public route reads it (`pages._run`); served from this file by id.
+        snap["run_pages"] = {str(ids[key]): run_page.read(reader, ids[key], AS_OF, public=True) for key in RUN_PAGES}
         # Retain the replay, dialogue and development spend notes from the fictional seed.
         # The served demo reads the finished file and never calls these readers.
         tags = {slot: row["price"] for slot, row in snap["sales"]["data"]["slots"].items()}

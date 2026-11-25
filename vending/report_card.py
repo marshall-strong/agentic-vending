@@ -179,6 +179,8 @@ class _Reader:
         lines = [line for line in stock.receipt_lines(conn) if line["at"] is not None and line["at"] <= now]
         self.moves = stock.load_movements(conn, lines, until=now)
         visits = _visits(lines)
+        # Every visit's (time, (slot, product) loaded), for a product change inside a week (`_by_slot`).
+        self.visits = tuple(visits.values())
         self.matches = []
         for run_id, started, plan, request_id, status, off_cycle in conn.execute(
                 "select r.id, r.started_at, r.plan, r.request_id, q.status, q.off_cycle from agent_runs r"
@@ -253,6 +255,10 @@ def _blank(week: date, final: bool) -> dict:
         "week": week.isoformat(), "ends": (week + timedelta(days=6)).isoformat(), "final": final,
         "grade": "unscored", "run_id": None, "planned_at": None, "checks": [], "outcome": None,
         "baseline": None, "comparison": None, "notes": [], "request": None, "polls": None,
+        # For the forecast panel (`vending.forecast_panel`): each of our slots' units sold this week and whether
+        # the receipts and polls say it was empty at the week's last poll (None: unknown), and the slots the
+        # visit swapped.
+        "by_slot": None, "swapped": [],
     }
 
 
@@ -266,6 +272,9 @@ def _card(reader: _Reader, week: date, *, opening_week: bool, final: bool) -> di
     before, this = reader.week(week - WEEK), reader.week(week)
     card["polls"] = {"last": list(before.polls) if before and before.polls else None,
                      "this": list(this.polls) if this and this.polls else None}
+    # This week's sales stand on this week's polls alone: last week's are needed only to score the baseline.
+    if this is not None and this.polls:
+        card["by_slot"] = _by_slot(reader, this)
     if before is None:
         # The hard checks still run: they need the plan, the receipts and the ledger, not the sales.
         card["notes"].append("Last week can't be rebuilt from the polls.")
@@ -289,6 +298,7 @@ def _card(reader: _Reader, week: date, *, opening_week: bool, final: bool) -> di
         card["notes"].append("Its purchase request was rejected, so the visit loaded nothing from it. "
                              "Only the hard checks are shown.")
     state, swapped = _state(reader, before, week, match)
+    card["swapped"] = list(swapped)
     problems = validate_plan(match.plan, reader.ours)
     if problems:
         card["checks"] = [{"name": "valid plan", "status": scoring.FAIL, "detail": " ".join(problems)}] + [
@@ -329,6 +339,34 @@ def _card(reader: _Reader, week: date, *, opening_week: bool, final: bool) -> di
         card["grade"] = "incomplete" if thin else card["comparison"]["result"]
     card["notes"] += reader.notes
     return _graded(card)
+
+
+def _by_slot(reader: _Reader, this: WeekState) -> dict[str, dict]:
+    """Each of our slots' units sold in the week (None: unknown, never 0), and its product (SKU) and whether
+    it was empty at the week's last poll, from the receipts' and polls' stock replay (None when the receipts
+    don't know it). `product_changed`: a receipt between the week's two polls loaded a product other than the
+    one the slot held at the first, so its sales are two products' (#172).
+    An empty slot sold all it had, so its demand may have been higher than its sales."""
+    first, last = this.polls
+    held = reader.slots_at(last + timedelta(microseconds=1))
+    at_start = reader.slots_at(first + timedelta(microseconds=1))
+    loaded: dict[str, set] = {}
+    for at, loads in reader.visits:
+        if first < at <= last:
+            for slot, sku in loads:
+                loaded.setdefault(slot, set()).add(sku)
+    out = {}
+    for s in this.slots:
+        if s.slot not in reader.ours:
+            continue
+        count = held.get(s.slot)
+        most = None if count is None else (count.units if count.at_most is None else count.at_most)
+        start = at_start.get(s.slot)
+        products = loaded.get(s.slot, set()) | ({start.product} if start is not None else set())
+        out[s.slot] = {"sold": s.units_sold, "empty": None if count is None else most == 0,
+                       "product": count.product if count is not None else None,
+                       "product_changed": len(products) > 1}
+    return out
 
 
 def _thin(week: WeekState) -> bool:
