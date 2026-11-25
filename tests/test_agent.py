@@ -210,6 +210,9 @@ def test_a_live_run_without_submit_built_stops_before_any_model_call(connect, co
 
 
 def test_a_live_run_submits_once_and_records_the_request_id(connect, conn):
+    from vending import ledger
+
+    ledger.record(conn, "opening", 60000, "real opening", "tester", at=NOW)
     client = Script(preview(), tool_turn(submit(), submit(id="s2")), tool_turn(submit(id="s3")),
                     answer("submit", reason="restock 15"))
     schema = {"type": "object", "properties": {"desired": {}, "expected_plan_hash": {}}}
@@ -309,6 +312,9 @@ def test_a_preview_with_defaults_left_out_still_matches_the_submit(connect, conn
 
 
 def test_a_cap_after_the_submit_still_records_submitted(connect, conn):
+    from vending import ledger
+
+    ledger.record(conn, "opening", 60000, "real opening", "tester", at=NOW)
     # The caps are read when the run starts, so once the submit is in, spend the rest of today elsewhere.
     class DaySpentAfterSubmit(Tools):
         async def call(self, name, arguments):
@@ -1395,3 +1401,52 @@ def test_a_dry_run_or_a_run_before_the_start_gets_no_price_lookup(connect, conn,
     assert "find_pack_price" not in [t["name"] for t in client.sent[0]["tools"]]
     assert fake_lookups == []
     assert "There is no tool called find_pack_price" in client.sent[1]["messages"][-1]["content"][0]["content"]
+
+
+@pytest.mark.parametrize("team_host", [True, False], ids=["team-database", "scratch-database"])
+def test_live_agent_spend_database_fallback(conn, schema_url, monkeypatch, team_host):
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    from tests.test_replay_model import FakeAnthropic, KEY
+    from vending import ledger, settings
+
+    ledger.record(conn, "opening", 60000, "real opening", "tester", at=NOW)
+    set_halted(conn, False, "test")
+    url, schema = schema_url
+    local_host = conninfo_to_dict(url)["host"]
+    configured = make_conninfo(url, host="team-db.example" if team_host else local_host,
+                               options=f"-c search_path={schema}")
+    monkeypatch.setattr(settings, "_FILE", {})
+    monkeypatch.setenv("DATABASE_URL", configured)
+    monkeypatch.delenv("SPEND_DATABASE_URL", raising=False)
+    for name in ("PGHOSTADDR", "PGSERVICE", "PGSERVICEFILE", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_CUSTOM_HEADERS"):
+        monkeypatch.delenv(name, raising=False)
+
+    real_connect = psycopg.connect
+
+    def connect_test_server(dsn, **kwargs):
+        if conninfo_to_dict(dsn).get("host") == "team-db.example":
+            dsn = make_conninfo(dsn, host=local_host)
+        return real_connect(dsn, **kwargs)
+
+    monkeypatch.setattr(psycopg, "connect", connect_test_server)
+    api = FakeAnthropic()
+    try:
+        monkeypatch.setenv("ANTHROPIC_BASE_URL", api.url)
+        monkeypatch.setenv("VENDING_ANTHROPIC_API_KEY", KEY)
+        api.reply = (200, "end_turn", json.dumps({"decision": "skip", "reason": "synthetic"}))
+        _, outcome = anyio.run(lambda: agent.run(live=True, now=lambda: NOW,
+                                               open_tools=Tools(LIVE_TOOLS).opener()))
+        if team_host:
+            assert len(api.posts) == 1, outcome.detail
+            row, = conn.execute("select purpose, confirmed, cost_usd from model_spend").fetchall()
+            assert row[:2] == ("live", True)
+            assert tokens(conn) == (1, row[2] * 100)
+            assert conn.execute("select count(*) from model_calls where ledger_entry is not null").fetchone() == (1,)
+        else:
+            assert "SPEND_DATABASE_URL" in outcome.detail
+            assert not api.counts and not api.posts
+            assert tokens(conn) == (0, 0)
+    finally:
+        api.server.shutdown()
+        api.server.server_close()

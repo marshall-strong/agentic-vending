@@ -114,6 +114,7 @@ def api(monkeypatch, schema_url):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "the-claude-code-key-must-not-be-used")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:9")
     monkeypatch.setattr(db, "connect", lambda: open_in(*schema_url))
+    monkeypatch.setattr(harness, "spend_connection", lambda: open_in(*schema_url))
     yield fake
     fake.server.shutdown()
     fake.server.server_close()
@@ -402,3 +403,13 @@ def test_the_harness_checks_the_clients_real_key(api, conn):
     with pytest.raises(harness.HarnessError, match="doesn't use the key"):
         harness.Harness(bearer, db.connect, purpose="test")
     harness.Harness(anthropic.Anthropic(api_key=KEY, base_url=api.url), db.connect, purpose="test")
+
+
+def test_missing_team_spend_database_refuses_before_using_key(api, monkeypatch):
+    def unavailable():
+        raise harness.HarnessError(harness.SPEND_DATABASE_HELP)
+
+    monkeypatch.setattr(harness, "spend_connection", unavailable)
+    with pytest.raises(BudgetError, match="SPEND_DATABASE_URL"):
+        ModelDecider().decide(case("low-balance").state)
+    assert api.counts == [] and api.posts == []

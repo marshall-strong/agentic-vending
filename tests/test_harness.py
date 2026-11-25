@@ -157,10 +157,17 @@ REQUEST = {"model": "claude-opus-5-5", "max_tokens": 16000, "messages": [{"role"
 
 
 @pytest.fixture
-def connect(schema_url):
+def empty_connect(schema_url):
     from tests.conftest import open_in
 
     return lambda: open_in(*schema_url)
+
+
+@pytest.fixture
+def connect(empty_connect, conn):
+    conn.execute("insert into ledger_entries (at, kind, amount_cents, detail, recorded_by)"
+                 " values ('2020-01-01T00:00:00Z', 'opening', 60000, 'real opening', 'tester')")
+    return empty_connect
 
 
 def harness(connect, client, **kw):
@@ -435,3 +442,64 @@ def test_one_harness_is_one_run(connect, conn):
 def test_a_key_named_like_claude_codes_is_refused(connect):
     with pytest.raises(HarnessError, match="ANTHROPIC_API_KEY"):
         Harness(FakeClient(), connect, purpose="test", key_env="ANTHROPIC_API_KEY")
+
+
+def test_recorded_harness_uses_team_database_before_send(connect, conn):
+    from vending import harness as module
+
+    def during_send():
+        assert conn.execute("select confirmed, cost_usd > 0 from model_spend").fetchall() == [(False, True)]
+
+    h = module.Harness(FakeClient(during=during_send), connect, purpose="test", spend_connect=connect)
+    h.call(REQUEST, label="sweep test")
+    assert conn.execute("select purpose, confirmed from model_spend").fetchall() == [("test", True)]
+
+
+def test_no_anthropic_send_outside_harness():
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    paths = (path for directory in ("vending", "scripts", "analysis") for path in (root / directory).rglob("*.py"))
+    for path in paths:
+        if path == root / "vending/harness.py":
+            continue
+        text = path.read_text(encoding="utf-8")
+        # No raw HTTP to the API (a file naming the API's host may not also use an HTTP library),
+        # and no SDK client of any kind, imported under any name.
+        if "anthropic.com" in text:
+            assert not any(lib in text for lib in ("import httpx", "import requests", "urllib.request",
+                                                    "http.client", "aiohttp")), path
+        for node in ast.walk(ast.parse(text)):
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.split(".")[0] == "anthropic":
+                names = {alias.name for alias in node.names}
+                assert not names & CLIENT_NAMES, (path, names)
+            if isinstance(node, ast.Call):
+                parts = ast.unparse(node.func).split(".")
+                assert parts[-1] not in CLIENT_NAMES, path
+                assert not ("messages" in parts[:-1] and parts[-1] in {"create", "stream"}), path
+            if isinstance(node, ast.Attribute) and node.attr in {"create", "stream", "batches"}:
+                chain = ast.unparse(node).split(".")
+                assert "messages" not in chain[:-1], path
+
+
+CLIENT_NAMES = {"Anthropic", "AsyncAnthropic", "Client", "AsyncClient", "AnthropicBedrock",
+                "AsyncAnthropicBedrock", "AnthropicVertex", "AsyncAnthropicVertex"}
+
+
+
+def test_real_opening_keeps_each_call_in_its_own_books(empty_connect, conn):
+    from datetime import timedelta
+    from vending import dev_spend, ledger
+
+    for purpose in ("live", "test"):
+        harness(empty_connect, FakeClient(), purpose=purpose, now=lambda: NOW).call(REQUEST)
+    assert tokens_entries(conn) == []
+    ledger.record(conn, "opening", 60000, "real opening", "tester", at=NOW + timedelta(hours=1))
+    after = NOW + timedelta(hours=2)
+    for purpose in ("live", "test"):
+        harness(empty_connect, FakeClient(), purpose=purpose, now=lambda: after).call(REQUEST)
+    assert len(tokens_entries(conn)) == 1
+    report = dev_spend.daily(conn, after)
+    assert report.totals.total_cents == Decimal("2.8")
+    assert sum(b.after_opening_test_cents for b in report.buckets) == Decimal("1.4")

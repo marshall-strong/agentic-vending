@@ -473,7 +473,9 @@ also counts the test purchases it leaves out from before opening.
 
 Pending purchase requests, catalog requests and approvals, the assignment, and polls still show
 before opening. Unsettled submissions (`sending` and `unknown`) still count as committed spend.
-An opening dated ahead takes effect at that time. The spend tile appears after the opening.
+An opening dated ahead takes effect at that time. Before the real opening, Spendable
+shows recorded development spend against the team cap. After the opening, it shows
+the competition balance. The money panel shows competition AI spend separately.
 
 `action_log` has no run ID. From the opening, calls appear by time. Before the opening, these
 exact `write` tools appear:
@@ -559,7 +561,7 @@ seconds.
   opens. With an opening recorded ahead, both give its date.
 - **The opening is the boundary.** The money chart counts from the opening. The P&L checks the
   opening before it reads any date in the URL, and a start on or before the opening's day counts
-  from the opening itself. Dev spend stops at the opening.
+  from the opening itself. Dev spend stops at the real opening. The 11 Nov test entry does not count.
 - **Only our selections.** A receipt marker on the money chart names its slot and product only for
   a selection in the current assignment.
 - `pages.money_page`, `pages.pnl_page` and `pages.spend_page` render each page from its data alone,

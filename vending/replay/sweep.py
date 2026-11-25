@@ -457,6 +457,13 @@ def main(argv: list[str] | None = None) -> int:
                  "listed as dropped." if left < args.budget else "."))
     if args.dry_run:
         return 0
+    from vending.harness import HarnessError, check_spend_database
+
+    try:
+        check_spend_database()
+    except HarnessError as error:
+        print(error, file=sys.stderr)
+        return 1
     stamp = datetime.now(EASTERN).strftime("%Y%m%d-%H%M%S")
     out = args.out or RESULTS_DIR / stamp
     if (out / "results.jsonl").exists():

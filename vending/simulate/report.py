@@ -397,13 +397,8 @@ def write(conn: psycopg.Connection, st, out: Path, opts: dict | None = None, nam
     (out / "weeks.json").write_text(json.dumps(data["weeks"], indent=1, default=str), encoding="utf-8")
     (out / "runs.json").write_text(json.dumps(data["runs"], indent=1, default=str), encoding="utf-8")
     (out / "requests.json").write_text(json.dumps(data["requests"], indent=1, default=str), encoding="utf-8")
-    with (out / "model_calls.csv").open("w", newline="", encoding="utf-8") as f:
-        cols = ("id", "at", "label", "model", "effort", "status", "stop_reason", "input_tokens", "cache_write_tokens",
-                "cache_read_tokens", "output_tokens", "max_tokens", "worst_case_usd", "cost_usd", "seconds")
-        w = csv.writer(f)
-        w.writerow(cols)
-        for row in conn.execute(f"select {', '.join(cols)} from model_calls order by id"):
-            w.writerow([x.astimezone(EASTERN).isoformat() if isinstance(x, datetime) else x for x in row])
+    from vending.dev_spend import export_calls
+    export_calls(conn, out / "model_calls.csv")
     with (out / "daily_slots.csv").open("w", newline="", encoding="utf-8") as f:
         cols = ("day", "slot", "sku", "price_cents", "start_units", "sold", "revenue_cents", "unmet",
                 "lost_expected", "demand_expected", "empty_class_hours", "end_units")

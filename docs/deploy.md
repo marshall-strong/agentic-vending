@@ -227,6 +227,8 @@ a migration, a person runs it against Azure, from a laptop with `DATABASE_URL` p
 python -m vending.db migrate
 ```
 
+Migration 040 (`model_spend`) must be on the team database before a deploy that includes it: every paid model call reserves its spend there first, and the worker refuses to schedule on a database that is behind.
+
 Apply migrations 025 (`purchase_submissions.purpose`, for `python -m vending.fill`) and 030
 (`purchase_submissions.schedule_due`, #238) while no submit runs: the agent paused (`python -m vending.halt on --by NAME`) and no fill being sent. It waits at
 most 2 seconds for its lock. If a submit holds the table, it fails with "lock timeout" and changes

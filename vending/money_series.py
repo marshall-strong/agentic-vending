@@ -319,7 +319,7 @@ def daily(conn: psycopg.Connection, start: date, end: date, now: datetime | None
         raise ValueError("end must be on or after start")
     now = ledger.db_now(conn) if now is None else now
     dates = [start + timedelta(days=n) for n in range((end - start).days + 1)]
-    opened = ledger.opening(conn)
+    opened = ledger.real_opening(conn)
     until = _midnight(end + timedelta(days=1)) - MICROSECOND
     if opened is None or opened.at > until:
         why = NO_OPENING if opened is None else _before_opening(opened)
@@ -570,7 +570,7 @@ def _day(moment: datetime) -> date:
 
 def weekly(conn: psycopg.Connection, start: date, end: date, now: datetime | None = None) -> list[Week]:
     """The ledger weeks `start` to `end` touches, from `daily`. A week the window cuts is partial."""
-    opened = ledger.opening(conn)
+    opened = ledger.real_opening(conn)
     return by_week(daily(conn, start, end, now), None if opened is None else _day(opened.at))
 
 
@@ -779,7 +779,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         start, end = args.start, args.end
         if start is None:
-            opened = ledger.opening(conn)
+            opened = ledger.real_opening(conn)
             if opened is None:
                 print(ledger.OPEN_HINT + " Or give --start.", file=sys.stderr)
                 return 1

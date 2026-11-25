@@ -1,63 +1,10 @@
-"""What building and testing the agent has cost on our Anthropic keys, week by week, until the competition starts.
-
-    python -m vending.dev_spend                          # one row a week, Saturday to Friday, Eastern
-    python -m vending.dev_spend --daily                  # one row a day
-    python -m vending.dev_spend --json                   # the same, for a page or a script
-    python -m vending.dev_spend --html dev-spend.html    # one page with the data inside it, no server
-    python -m vending.dev_spend --demo --html demo.html  # from the team's run notes, no database
-
-**This is for the team and the teachers.** No agent tool reads it today. The
-agent may know what testing cost, but none of it comes out of the $600, so its
-competition figures (the balance, `get_pnl`) count from the opening on.
-
-**Development ends at the ledger's opening entry** (`python -m vending.ledger
-open`). A model call before it, live or test, is development spend and doesn't
-come out of the $600 (`docs/opening-capital-plan.md`, #104). The opening is
-recorded before the day-one fill is fulfilled, about 30 Nov, not on 3 Dec
-(`docs/planning/2026-11-12-david-answers.md`). Until it exists, every call so
-far is development spend.
-
-Where the figures come from, read only:
-
-- `model_calls`: every request the harness has sent, live or test. A row the
-  harness corrected (`ok`) counts at what the API billed. A row left `pending` or
-  `error` was never corrected, so it counts at its worst case, and is shown
-  apart as **unconfirmed**: it may not have billed at all. So is an `ok` row the
-  harness "kept at worst case" (answered by an unpriced model or capacity, or no
-  usage reported): its real cost isn't known either. A `refused` row cost
-  nothing and is left out.
-- `ledger_entries`: a `tokens` entry with no `model_calls` row, written by code
-  that predates that table, or by a person (`python -m vending.ledger tokens`).
-  Its reference says what it was: the purpose ("live" or "test"), then the run's
-  label, then the message id once corrected, or "pending" / "estimate: ..." when
-  it never was (unconfirmed, as is one "kept at worst case"). Its detail names the model ("model: N tokens in,
-  M out"). An entry whose reference names no purpose is counted as live, since
-  only live calls and people's own records reach the ledger.
-
-Tokens are counted only where they are known: an unconfirmed call's tokens are
-not, and neither are a run note's. Each figure says how many calls it lacks.
-
-A run is one `Harness` (its `run_id`): an agent run, one sweep config, one
-bench. A ledger entry has no run id, so its run is its label (without "turn N")
-on one Eastern day.
-
-After the opening, live calls are the competition's money and are not here.
-**There should be no test calls after the opening:** testing finishes before it
-(Kevin, 15 Nov). If one is recorded anyway, it is kept out of every development
-figure and reported on its own as `after_opening_test`, and the page warns about
-it, so a stray dry run or sweep in December is seen rather than hidden.
-
-Money is exact (`Fraction` cents) until it is shown, to four decimal places,
-since a call can cost a tenth of a cent. `--json` and the page's data give every
-amount as an exact decimal string ("0.1234499"), so it is rounded only once,
-where it is shown. The demo data is the runs the team
-wrote down (`docs/agent.md`, `docs/sample-directive.md`, `docs/benchmark.md`,
-`docs/guardrail-evidence.md`) and says so on every view: it is not the ledger.
-"""
+"""Report and record development API spend before the real ledger opening."""
 
 from __future__ import annotations
 
 import argparse
+import csv
+import hashlib
 import json
 import re
 import sys
@@ -71,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 import psycopg
 
-from vending import db, ledger
+from vending import config, db, harness, ledger
 
 EASTERN = ZoneInfo(ledger.TIMEZONE)
 PURPOSES = ("live", "test")         # the harness's purposes
@@ -82,7 +29,9 @@ UNSETTLED = re.compile(r" (pending|estimate: .*)$")
 SETTLED = re.compile(r"(^| )(msg_\S+( \(.*\))?|refused: .*)$")
 TURN = re.compile(r" turn \d+$")
 DEMO_SOURCE = "from run notes, not the ledger"
-DB_SOURCE = "model_calls and the ledger"
+DB_SOURCE = "database"
+DEFAULT_CAP_CENTS = 8500
+CATEGORIES = ("agent runs", "price search", "simulations/bench", "manual")
 
 
 @dataclass(frozen=True)
@@ -98,6 +47,7 @@ class Call:
     tokens_in: int | None = None    # every input token, cached or not; None: not known
     tokens_out: int | None = None
     count: int | None = 1           # None: the notes don't say how many calls
+    category: str = "agent runs"
 
 
 @dataclass
@@ -116,6 +66,8 @@ class Bucket:
     tokens_unknown: int = 0         # calls whose tokens aren't known
     confirmed_cents: Fraction = Fraction(0)
     unconfirmed_cents: Fraction = Fraction(0)
+    by_category: dict[str, Fraction] = field(default_factory=dict)
+    unconfirmed_by_category: dict[str, Fraction] = field(default_factory=dict)
     by_purpose: dict[str, Fraction] = field(default_factory=dict)
     by_model: dict[str, Fraction] = field(default_factory=dict)
     by_label: dict[str, Fraction] = field(default_factory=dict)
@@ -138,7 +90,10 @@ class Bucket:
         else:
             self.tokens_in += call.tokens_in
             self.tokens_out += call.tokens_out
+        self.by_category[call.category] = self.by_category.get(call.category, Fraction(0)) + call.cost_cents
         if not call.confirmed:
+            self.unconfirmed_by_category[call.category] = (
+                self.unconfirmed_by_category.get(call.category, Fraction(0)) + call.cost_cents)
             self.unconfirmed_cents += call.cost_cents
             return
         self.confirmed_cents += call.cost_cents
@@ -158,6 +113,7 @@ class Run:
     tokens_out: int | None
     confirmed_cents: Fraction
     unconfirmed_cents: Fraction
+    category: str
     after_opening: bool             # a test run after the opening: shouldn't happen, so flagged, not development
 
     @property
@@ -174,6 +130,8 @@ class Report:
     runs: list[Run]                 # newest first
     totals: Bucket                  # development, all of it (start: the first bucket's)
     source: str
+    cap_cents: int = DEFAULT_CAP_CENTS
+    first_spend_date: date | None = None
 
 
 # --- Reading -------------------------------------------------------------------------
@@ -205,19 +163,58 @@ def _has(conn: psycopg.Connection, table: str) -> bool:
     return conn.execute("select to_regclass(%s)", (table,)).fetchone()[0] is not None
 
 
+def _price_calls(conn: psycopg.Connection, has_calls: bool) -> tuple[list[Call], set[int]]:
+    if not _has(conn, "price_lookups"):
+        return [], set()
+    # Price memory stores a rounded copy of the harness charge. Legacy rows
+    # have no call ID. Pair one lookup with one harness row using the writer's
+    # label suffix and cost, at the time the harness settled the call.
+    rows = conn.execute("select id, at, sku, store, model, cost_usd, (to_jsonb(p)->>'model_call_id')::bigint"
+                        " from price_lookups p"
+                        " where cost_usd <> 0 order by at, id").fetchall()
+    candidates = defaultdict(list)
+    if has_calls:
+        for id_, at, finished, label, amount in conn.execute(
+                "select id, at, finished_at, label, round(cost_usd, 6) from model_calls"
+                " where status <> 'refused' and cost_usd <> 0 order by id"):
+            if harness.spend_category(label) == "price search":
+                candidates[amount].append((id_, finished or at, label))
+    used = {linked for *_, linked in rows if linked is not None}
+    out = []
+    for id_, at, sku, store, model, cost, linked in rows:
+        if linked is not None:
+            continue
+        suffix = f" {sku} {store}"
+        matches = [(abs(when - at), key) for key, when, label in candidates[cost]
+                   if key not in used and label.endswith(suffix) and abs(when - at) <= timedelta(seconds=60)]
+        if matches:
+            used.add(min(matches)[1])
+        else:
+            out.append(Call(at, "test", model, "Price search", f"lookup {id_}", Fraction(cost) * 100,
+                            True, category="price search"))
+    return out, used
+
+
 def calls(conn: psycopg.Connection) -> list[Call]:
     """Every model call either table records, each once, oldest first."""
-    out: list[Call] = []
     has_calls = _has(conn, "model_calls")
+    out, linked_price_calls = _price_calls(conn, has_calls)
+    has_spend = _has(conn, "model_spend")
     if has_calls:
+        shadow = (" and not exists (select 1 from model_spend s where s.id::text = to_jsonb(m)->>'spend_id')"
+                  if has_spend else "")
         rows = conn.execute(
-            "select at, purpose, label, run_id, coalesce(answered_by, model), status, cost_usd,"
+            "select id, at, purpose, label, run_id, coalesce(answered_by, model), status, cost_usd,"
             " input_tokens + coalesce(cache_write_tokens, 0) + coalesce(cache_read_tokens, 0), output_tokens, detail"
-            " from model_calls where status <> 'refused' order by at, id").fetchall()
-        for at, purpose, label, run_id, model, status, cost, tokens_in, tokens_out, detail in rows:
+            " from model_calls m where status <> 'refused'"
+            f"{shadow} order by at, id").fetchall()
+        for id_, at, purpose, label, run_id, model, status, cost, tokens_in, tokens_out, detail in rows:
             ok = status == "ok" and "kept at worst case" not in detail
-            out.append(Call(at, purpose, model, TURN.sub("", label.strip()), f"run {run_id}", Fraction(cost) * 100, ok,
-                            tokens_in if ok else None, tokens_out if ok else None))
+            category = "price search" if id_ in linked_price_calls else harness.spend_category(label)
+            # The price-search label may include a product or selection.
+            name = "Price search" if category == "price search" else TURN.sub("", label.strip())
+            out.append(Call(at, purpose, model, name, f"run {run_id}", Fraction(cost) * 100, ok,
+                            tokens_in if ok else None, tokens_out if ok else None, category=category))
     if _has(conn, "ledger_entries"):
         orphan = " and not exists (select 1 from model_calls c where c.ledger_entry = e.id)" if has_calls else ""
         rows = conn.execute("select at, amount_cents, detail, reference from ledger_entries e"
@@ -228,6 +225,18 @@ def calls(conn: psycopg.Connection) -> list[Call]:
             day = at.astimezone(EASTERN).date()
             out.append(Call(at, purpose, model, label, f"ledger {day} {purpose} {label}", -Fraction(amount), ok,
                             tokens_in if ok else None, tokens_out if ok else None))
+    if has_spend:
+        for at, purpose, category, label, run, model, cost, ok, tin, tout in conn.execute(
+                "select at, purpose, category, label, run_id, model, cost_usd, confirmed, tokens_in, tokens_out"
+                " from model_spend where not refused order by at, id"):
+            out.append(Call(at, purpose, model, label, f"run {run}", Fraction(cost) * 100, ok,
+                            tin if ok else None, tout if ok else None, category=category))
+    if _has(conn, "development_spend"):
+        for at, category, model, label, run, cost, ok, tin, tout in conn.execute(
+                "select at, category, model, label, run_id, cost_usd, confirmed, tokens_in, tokens_out"
+                " from development_spend order by at, source_id"):
+            out.append(Call(at, "test", model, label, run, Fraction(cost) * 100, ok, tin, tout,
+                            count=None if category == "manual" else 1, category=category))
     out.sort(key=lambda c: c.at)
     return out
 
@@ -235,7 +244,7 @@ def calls(conn: psycopg.Connection) -> list[Call]:
 def opening_at(conn: psycopg.Connection) -> datetime | None:
     if not _has(conn, "ledger_entries"):
         return None
-    opened = ledger.opening(conn)
+    opened = ledger.real_opening(conn)
     return opened.at if opened else None
 
 
@@ -247,7 +256,7 @@ def _start(moment: datetime, unit: str) -> date:
 
 
 def summarise(recorded: list[Call], opened: datetime | None, unit: str, as_of: datetime,
-              source: str = DB_SOURCE) -> Report:
+              source: str = DB_SOURCE, cap_cents: int = DEFAULT_CAP_CENTS) -> Report:
     """Book each call to its Eastern day or week: development before `opened`, test calls after it apart.
 
     Quiet days and weeks are included, from the first call to the opening (or to
@@ -256,10 +265,11 @@ def summarise(recorded: list[Call], opened: datetime | None, unit: str, as_of: d
     if unit not in ("week", "day"):
         raise ValueError(f"unit must be week or day, not {unit!r}")
     step = timedelta(days=7 if unit == "week" else 1)
-    kept = sorted((c for c in recorded if opened is None or c.at < opened or c.purpose == "test"), key=lambda c: c.at)
+    kept = sorted((c for c in recorded if not ledger.competition_call(c.purpose, c.at, opened)),
+                  key=lambda c: c.at)
     if not kept:
         buckets = [Bucket(_start(opened, unit))] if opened else []
-        return Report(unit, as_of, opened, buckets, [], Bucket(_start(as_of, unit)), source)
+        return Report(unit, as_of, opened, buckets, [], Bucket(_start(as_of, unit)), source, cap_cents)
     end = _start(opened if opened else as_of, unit)
     end = max(end, *(_start(c.at, unit) for c in kept))
     buckets: dict[date, Bucket] = {}
@@ -268,10 +278,10 @@ def summarise(recorded: list[Call], opened: datetime | None, unit: str, as_of: d
         buckets[day] = Bucket(day)
         day += step
     totals = Bucket(next(iter(buckets)))
-    grouped: dict[tuple[str, bool], list[Call]] = defaultdict(list)
+    grouped: dict[tuple[str, str, bool], list[Call]] = defaultdict(list)
     for c in kept:
         bucket = buckets[_start(c.at, unit)]
-        if opened is None or c.at < opened:
+        if ledger.before_opening(c.at, opened):
             bucket.add(c)
             totals.add(c)
         else:
@@ -279,14 +289,16 @@ def summarise(recorded: list[Call], opened: datetime | None, unit: str, as_of: d
             bucket.after_opening_test_calls += c.count or 0
             if not c.confirmed:
                 bucket.after_opening_test_unconfirmed_cents += c.cost_cents
-        grouped[(c.run, opened is not None and c.at >= opened)].append(c)
+        grouped[(c.run, c.category, opened is not None and c.at >= opened)].append(c)
+    first_spend = next((c.at.astimezone(EASTERN).date() for c in kept
+                        if c.cost_cents and ledger.before_opening(c.at, opened)), None)
     running = Fraction(0)
     for bucket in buckets.values():
         running += bucket.total_cents
         bucket.cumulative_cents = running
     runs = [_run(key[0], group, opened) for key, group in grouped.items()]
     runs.sort(key=lambda r: r.first_at, reverse=True)
-    return Report(unit, as_of, opened, list(buckets.values()), runs, totals, source)
+    return Report(unit, as_of, opened, list(buckets.values()), runs, totals, source, cap_cents, first_spend)
 
 
 def _run(key: str, group: list[Call], opened: datetime | None) -> Run:
@@ -298,17 +310,29 @@ def _run(key: str, group: list[Call], opened: datetime | None) -> Run:
         sum(c.tokens_in for c in group) if known else None, sum(c.tokens_out for c in group) if known else None,
         sum((c.cost_cents for c in group if c.confirmed), Fraction(0)),
         sum((c.cost_cents for c in group if not c.confirmed), Fraction(0)),
-        opened is not None and group[0].at >= opened)
+        group[0].category, opened is not None and group[0].at >= opened)
+
+
+def spend_cap(conn: psycopg.Connection) -> int:
+    if not _has(conn, "config"):
+        return DEFAULT_CAP_CENTS
+    return config.get_value(conn, "dev_spend_cap_cents", DEFAULT_CAP_CENTS)
 
 
 def weekly(conn: psycopg.Connection, now: datetime | None = None) -> Report:
-    """Development spend per Eastern week, Saturday to Friday (the ledger's week)."""
-    return summarise(calls(conn), opening_at(conn), "week", now or ledger.db_now(conn))
+    """Development spend per Eastern week, Saturday to Friday."""
+    return summarise(calls(conn), opening_at(conn), "week", now or ledger.db_now(conn), cap_cents=spend_cap(conn))
 
 
 def daily(conn: psycopg.Connection, now: datetime | None = None) -> Report:
     """Development spend per Eastern calendar day."""
-    return summarise(calls(conn), opening_at(conn), "day", now or ledger.db_now(conn))
+    return summarise(calls(conn), opening_at(conn), "day", now or ledger.db_now(conn), cap_cents=spend_cap(conn))
+
+
+def chart_reports(conn: psycopg.Connection, now: datetime) -> tuple[Report, Report]:
+    recorded, opened, cap = calls(conn), opening_at(conn), spend_cap(conn)
+    return (summarise(recorded, opened, "week", now, cap_cents=cap),
+            summarise(recorded, opened, "day", now, cap_cents=cap))
 
 
 # --- Demo: the runs the team wrote down ------------------------------------------------
@@ -338,7 +362,8 @@ def demo_calls() -> list[Call]:
     out = []
     for i, (config, model, per_case) in enumerate(SWEEP):
         out.append(Call(_et("2026-11-11T17:35") + timedelta(minutes=i), "test", model,
-                        f"sweep 20261111-173503 {config}", f"sweep {config}", cents(per_case) * 10, True, count=10))
+                        f"sweep 20261111-173503 {config}", f"sweep {config}", cents(per_case) * 10, True, count=10,
+                        category="simulations/bench"))
     opus = "claude-opus-5-5"
     out += [
         # docs/agent.md: the first runs against the real model, 11 and 12 Nov, Opus at medium.
@@ -394,6 +419,8 @@ def _bucket_json(b: Bucket) -> dict:
         "tokens_in": b.tokens_in, "tokens_out": b.tokens_out, "tokens_unknown": b.tokens_unknown,
         "total_usd": _dollars(b.total_cents), "confirmed_usd": _dollars(b.confirmed_cents),
         "unconfirmed_usd": _dollars(b.unconfirmed_cents),
+        "by_category": {k: _dollars(v) for k, v in b.by_category.items()},
+        "unconfirmed_by_category": {k: _dollars(v) for k, v in b.unconfirmed_by_category.items()},
         "by_purpose": {k: _dollars(v) for k, v in sorted(b.by_purpose.items())},
         "by_model": {k: _dollars(v) for k, v in sorted(b.by_model.items())},
         "by_label": {k: _dollars(v) for k, v in sorted(b.by_label.items())},
@@ -409,12 +436,14 @@ def to_json(report: Report) -> dict:
     return {
         "unit": report.unit,
         "source": report.source,
+        "cap_usd": _dollars(Fraction(report.cap_cents)),
+        "first_spend_date": report.first_spend_date.isoformat() if report.first_spend_date else None,
         "as_of": report.as_of.astimezone(EASTERN).isoformat(timespec="seconds"),
         "opening_at": report.opening_at.astimezone(EASTERN).isoformat(timespec="seconds") if report.opening_at else None,
         "totals": _bucket_json(t) | {"runs": sum(1 for r in report.runs if not r.after_opening)},
         "buckets": [_bucket_json(b) for b in report.buckets],
         "runs": [{"first_at": r.first_at.astimezone(EASTERN).isoformat(timespec="seconds"), "purpose": r.purpose,
-                  "label": r.label, "models": r.models, "calls": r.calls, "tokens_in": r.tokens_in,
+                  "label": r.label, "run_id": r.key, "category": r.category, "models": r.models, "calls": r.calls, "tokens_in": r.tokens_in,
                   "tokens_out": r.tokens_out, "total_usd": _dollars(r.total_cents),
                   "unconfirmed_usd": _dollars(r.unconfirmed_cents), "after_opening": r.after_opening}
                  for r in report.runs],
@@ -441,7 +470,8 @@ def render(report: Report) -> str:
     else:
         out.append("No ledger opening yet, so every call so far is development spend, none of it from the $600.")
     if not report.buckets:
-        return "\n".join(out + ["", "No model calls recorded yet."])
+        return "\n".join(out + ["", "No model calls recorded yet.",
+                                 f"$0.00 / ${ledger.money(report.cap_cents)} development cap"])
     rows = [(f"{b.start:%a %d %b}", _count(b.calls, b.calls_unknown), usd(b.total_cents),
              usd(b.by_purpose.get("live", Fraction(0))), usd(b.by_purpose.get("test", Fraction(0))),
              usd(b.unconfirmed_cents) if b.unconfirmed_cents else "", usd(b.cumulative_cents))
@@ -451,6 +481,8 @@ def render(report: Report) -> str:
                  usd(t.by_purpose.get("live", Fraction(0))), usd(t.by_purpose.get("test", Fraction(0))),
                  usd(t.unconfirmed_cents) if t.unconfirmed_cents else "", ""))
     out += [""] + _table((unit, "Calls", "Spend", "Live", "Test", "Unconfirmed", "So far"), rows)
+    out += [f"${ledger.money(t.total_cents)} / ${ledger.money(report.cap_cents)} development cap",
+            "By category: " + ", ".join(f"{k} {usd(t.by_category.get(k, Fraction(0)))}" for k in CATEGORIES)]
     tokens = f"Tokens: {t.tokens_in:,} in, {t.tokens_out:,} out"
     out += ["", tokens + (f" (not known for {t.tokens_unknown} calls)" if t.tokens_unknown else "") + "."]
     if t.by_model:
@@ -491,8 +523,150 @@ def page(weeks: Report, days: Report) -> str:
     return PAGE.read_text(encoding="utf-8").replace("/*DATA*/null", data.translate(SCRIPT_SAFE), 1)
 
 
+def _source_id(*parts: str) -> str:
+    return hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode()).hexdigest()
+
+
+def _amount(text: str) -> Decimal:
+    amount = Decimal(text)
+    if not amount.is_finite() or amount < 0:
+        raise ValueError("Use a finite, nonnegative dollar amount.")
+    return amount
+
+
+def _input_tokens(row: dict) -> int | None:
+    if not row.get("input_tokens"):
+        return None
+    return sum(int(row.get(key) or 0) for key in ("input_tokens", "cache_write_tokens", "cache_read_tokens"))
+
+
+def _bench_rows(path: Path):
+    """Read legacy sweep/bench answers. Their files hold no judge calls."""
+    with path.open(encoding="utf-8-sig") as stream:
+        for ordinal, line in enumerate(stream, 1):
+            if not line.strip():
+                continue
+            row = json.loads(line, parse_float=Decimal)
+            if row["model"] == "baseline" or _amount(row["cost_usd"]) == 0:
+                continue
+            yield {"id": str(ordinal), "at": "bench answers", "label": row["case"], "model": row["model"],
+                   "status": "ok" if row["status"] in {"scored", "invalid"} else "error",
+                   "cost_usd": row["cost_usd"], "input_tokens": row["input_tokens"],
+                   "output_tokens": row["output_tokens"]}
+
+
+def _export_rows(path: Path):
+    if path.is_dir():
+        path /= "model_calls.csv"
+    if path.name == "results.jsonl":
+        yield from _bench_rows(path)
+        return
+    with path.open(newline="", encoding="utf-8-sig") as stream:
+        rows = csv.DictReader(stream)
+        required = {"id", "at", "label", "model", "status", "cost_usd"}
+        if not required.issubset(rows.fieldnames or ()):
+            raise ValueError("Use a model_calls.csv export.")
+        yield from rows
+
+
+def _import_rows(path: Path, label: str, who: str, at: datetime, unconfirmed: bool):
+    for row in _export_rows(path):
+        status = row["status"]
+        if status not in ("refused", "pending", "ok", "error"):
+            raise ValueError("Invalid call status in CSV.")
+        if status == "refused":
+            continue
+        cost = _amount(row["cost_usd"])
+        ok = status == "ok" and row.get("cost_unconfirmed") != "true" and not unconfirmed
+        # New exports carry harness run IDs. For older exports the supplied label
+        # identifies the run, because scratch databases reuse local row IDs and dates.
+        run = row.get("run_id") or label
+        id_ = str(int(row["id"]))
+        key = _source_id("call", run, id_, row["at"])
+        model = row.get("answered_by") or row["model"]
+        yield ((key, at, "simulations/bench", run, label, model, cost, ok,
+                _input_tokens(row) if ok else None,
+                int(row["output_tokens"]) if ok and row.get("output_tokens") else None, who),
+               row.get("run_id"), int(id_), row["at"], row.get("spend_id"))
+
+
+def export_calls(conn: psycopg.Connection, path: Path, *, bench_id: int | None = None) -> None:
+    """Write spend fields only. Never export call detail or request contents."""
+    where = "" if bench_id is None else " where label like %s"
+    params = () if bench_id is None else (f"bench {bench_id} %",)
+    rows = conn.execute(
+        "select id, at, label, model, effort, status, stop_reason, input_tokens, cache_write_tokens,"
+        " cache_read_tokens, output_tokens, max_tokens, worst_case_usd, cost_usd, seconds, run_id, answered_by,"
+        " case when position('kept at worst case' in detail) > 0 then 'true' else 'false' end as cost_unconfirmed,"
+        " to_jsonb(m)->>'spend_id' as spend_id"
+        f" from model_calls m{where} order by id", params if where else None)
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(column.name for column in rows.description)
+        for row in rows:
+            writer.writerow(value.astimezone(EASTERN).isoformat() if isinstance(value, datetime) else value for value in row)
+
+
+def record_command(path: Path, label: str, who: str, at: datetime) -> str:
+    return (f'python -m vending.dev_spend record --from "{path.resolve()}"'
+            f' --label "{label}" --by "{who}" --at "{at.isoformat(timespec="seconds")}"')
+
+
+def _record(argv: list[str], conn: psycopg.Connection | None, now: datetime | None) -> int:
+    parser = argparse.ArgumentParser(prog="python -m vending.dev_spend record")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--from", dest="path", type=Path, help="a simulation directory, model_calls.csv or bench results.jsonl")
+    source.add_argument("--usd", help="a manual amount in dollars")
+    parser.add_argument("--label", required=True, help="a unique run label or receipt label")
+    parser.add_argument("--by", required=True, help="who recorded the spend")
+    parser.add_argument("--at", help="actual spend time as ISO 8601 with an offset (default now)")
+    parser.add_argument("--unconfirmed", action="store_true")
+    args = parser.parse_args(argv)
+    own = conn is None
+    conn = conn or db.connect()
+    try:
+        at = datetime.fromisoformat(args.at) if args.at else now or ledger.db_now(conn)
+        label, who = args.label.strip(), args.by.strip()
+        if not label or not who or at.utcoffset() is None:
+            raise ValueError("Use a label, a name and a spend time with a UTC offset.")
+        if args.path:
+            rows = list(_import_rows(args.path, label, who, at, args.unconfirmed))
+        else:
+            amount = _amount(args.usd)
+            key = _source_id("manual", label, who)
+            rows = [((key, at, "manual", key, label, "", amount, not args.unconfirmed, None, None, who),
+                     None, None, None, None)]
+        count = 0
+        with conn.transaction():
+            for values, run, id_, source_at, spend_id in rows:
+                if spend_id and conn.execute("select 1 from model_spend where id = %s",
+                                             (spend_id,)).fetchone():
+                    continue
+                if run and conn.execute(
+                        "select 1 from model_calls where id = %s and run_id = %s and at = %s",
+                        (id_, run, source_at)).fetchone():
+                    continue
+                count += conn.execute(
+                    "insert into development_spend (source_id, at, category, run_id, label, model, cost_usd,"
+                    " confirmed, tokens_in, tokens_out, recorded_by) values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+                    " on conflict (source_id) do nothing", values).rowcount
+        if own:
+            conn.commit()
+    except (ValueError, ArithmeticError, OSError, csv.Error, KeyError, TypeError) as error:
+        parser.error(str(error))
+    finally:
+        if own:
+            conn.close()
+    print(f"Recorded {count} new spend rows.")
+    return 0
+
+
 def main(argv: list[str] | None = None, conn: psycopg.Connection | None = None, now: datetime | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m vending.dev_spend", description=__doc__.split("\n")[0])
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["record"]:
+        return _record(argv[1:], conn, now)
+    parser = argparse.ArgumentParser(prog="python -m vending.dev_spend", description=__doc__,
+                                     epilog="Use record --help to import or enter spend.")
     parser.add_argument("--daily", action="store_true", help="one row a day instead of a week")
     parser.add_argument("--json", action="store_true", help="print JSON instead of a table")
     parser.add_argument("--html", type=Path, metavar="PATH", help="write the page, data inside it, to PATH")
@@ -507,7 +681,7 @@ def main(argv: list[str] | None = None, conn: psycopg.Connection | None = None, 
         try:
             conn.execute("set default_transaction_read_only = on")
             now = now or ledger.db_now(conn)     # the clock the ledger's entries are stamped by
-            weeks, days = weekly(conn, now), daily(conn, now)
+            weeks, days = chart_reports(conn, now)
         finally:
             if own:
                 conn.close()

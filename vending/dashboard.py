@@ -84,7 +84,7 @@ from psycopg.types.json import set_json_loads
 
 from vending import (capacity, db, leaderboards, machine_art, midweek_wake, money_panel, plan_rounds, report_card,
                      settings, slot_counts, tracking, visits)
-from vending import agent_runs, agent_schedule, key_dates, price_schedule, pricing_panel, tracking_daily
+from vending import agent_runs, agent_schedule, dev_spend, key_dates, ledger, price_schedule, pricing_panel, tracking_daily
 from vending import plan_history, price_check_panel
 from vending import forecast_panel  # forecast vs actual, beside the report card
 from vending import stock as stock_mod
@@ -1104,6 +1104,21 @@ def _tracking_alert(conn: psycopg.Connection) -> dict | None:
     return None
 
 
+def _development_spend(conn: psycopg.Connection, now: datetime) -> dict | None:
+    opened = dev_spend.opening_at(conn)
+    if opened is not None and opened <= now:
+        return None
+    report = dev_spend.weekly(conn, now)
+    totals = report.totals
+    return {"total": _money(ledger.money(totals.total_cents)),
+            "cap": _money(ledger.money(report.cap_cents)),
+            "categories": {name: dev_spend.usd(totals.by_category.get(name, 0))
+                           for name in dev_spend.CATEGORIES},
+            "unconfirmed": dev_spend.usd(totals.unconfirmed_cents) if totals.unconfirmed_cents else None,
+            "over_cap": totals.total_cents > report.cap_cents,
+            "since": report.first_spend_date.strftime("%d %b %Y").lstrip("0") if report.first_spend_date else None}
+
+
 def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False,
               syncs: dict | None = None) -> tuple[dict, datetime | None]:
     ours = _our_slots(conn)
@@ -1148,6 +1163,7 @@ def _snapshot(conn: psycopg.Connection, now: datetime, public: bool = False,
         "spend": spend,
         "visits": _panel(lambda: _isolated(conn, lambda: visits.counts(conn, now))),
         "money": _panel(lambda: _money_panel(conn, now)),
+        "development_spend": _panel(lambda: _guarded(conn, lambda: _development_spend(conn, now))),
         "leaderboards": _panel(lambda: _isolated(conn, lambda: leaderboards.read(conn, now))),
         "report_cards": cards,
         "incidents": _panel(lambda: _isolated(conn, lambda: report_card.incidents(
@@ -2505,11 +2521,24 @@ def _status_bar(snap: dict, items: list[dict] | None = None, charts: dict[str, s
         cells.append(_cell("Order cutoff", _time(cutoff, "until", now), _time(cutoff, "etday"), "#requests",
                            "warn" if cutoff - now < CUTOFF_SOON else ""))
 
-    # Money: spendable from the ledger once it has opened; before that, only that it is development spend
-    # (the live page shows no test purchases, #192).
+    # Development spend before the real opening, then the competition balance.
     spend, money = snap["spend"], snap.get("money")
     ledgered = money["data"] if money and money["ok"] and money["data"].get("opened") else None
-    if ledgered:
+    dev_panel = snap.get("development_spend")
+    development = dev_panel["data"] if dev_panel and dev_panel["ok"] else None
+    if development is not None:
+        since = development["since"]
+        coverage = f"Recorded spend since {since}" if since else "No recorded spend"
+        split = " &middot; ".join([coverage, *(f"{name.capitalize()} {amount}"
+                                                 for name, amount in development["categories"].items())])
+        if development["unconfirmed"]:
+            split += f' &middot; Unconfirmed {development["unconfirmed"]}'
+        cells.append(_cell("Spendable", f'{development["total"]} / {development["cap"]}',
+                           split, "#money", "bad" if development["over_cap"] else "", link=spend_link))
+    elif dev_panel and not dev_panel["ok"]:
+        cells.append(_cell("Spendable", '<span class="dim">Spend unavailable</span>', "", "#money",
+                           link=spend_link))
+    elif ledgered:
         # The total is summed exact by the panel and rounded once, not added up from the rounded parts.
         spendable = Decimal(ledgered["spendable"])
         cells.append(_cell("Spendable", _money(spendable),

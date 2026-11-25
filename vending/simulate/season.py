@@ -33,7 +33,6 @@ from vending.simulate.world import EASTERN, Calendar, Demand, Machine
 
 # Every sourcing file the team has committed, oldest first, so a later check of a SKU wins.
 SEED_SOURCING = tuple(sorted((world.REPO / "db" / "sourcing").glob("*.csv")))
-LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 BY = "simulation"
 # Who decides each run. Only "model" calls the model; anything else is refused, never sent to it.
 DECIDERS = ("scripted", "scripted-wide", "model")
@@ -104,7 +103,7 @@ def not_fresh(conn: psycopg.Connection, schema: str) -> list[str]:
 SCRATCH_ONLY = "The simulation runs only against a scratch database on 127.0.0.1 or localhost."
 # Settings libpq reads besides the URL that can send a connection elsewhere: a host address it dials instead
 # of the host name, and a service file whose entry names its own host.
-SIDE_DOORS = ("PGHOSTADDR", "PGSERVICE", "PGSERVICEFILE")
+SIDE_DOORS = db.LIBPQ_HOST_OVERRIDES
 
 
 def check_scratch(url: str) -> None:
@@ -128,14 +127,14 @@ def check_scratch(url: str) -> None:
         raise SystemExit(SCRATCH_ONLY + f" Unset {', '.join(found)}: libpq would use it besides the URL.")
     hosts = [h for h in (params.get("host") or "").split(",")] + (params.get("hostaddr") or "").split(",")
     hosts = [h for h in hosts if h]
-    if not hosts or any(h not in LOCAL_HOSTS for h in hosts):
+    if not hosts or any(h not in db.LOCAL_HOSTS for h in hosts):
         raise SystemExit(SCRATCH_ONLY)
 
 
 def check_connected(conn: psycopg.Connection) -> None:
     """Refuse a connection that didn't land on this machine, whatever the URL said."""
     host, address = conn.info.host or "", getattr(conn.info, "hostaddr", "") or ""
-    if host not in LOCAL_HOSTS or (address and address not in LOCAL_HOSTS):
+    if host not in db.LOCAL_HOSTS or (address and address not in db.LOCAL_HOSTS):
         raise SystemExit(SCRATCH_ONLY + " This connection went somewhere else.")
 
 
@@ -459,6 +458,7 @@ def run_agent(conn: psycopg.Connection, st: State, kind: str, budget: Decimal, r
     class TestHarness(Harness):
         """Every call is test spend (purpose `test`), as the brief for this run asks, so none reaches the ledger."""
         def __init__(self, client, connect, *, purpose, **kw):
+            kw["by"] = "simulation"
             super().__init__(client, connect, purpose="test", **kw)
 
     # The MCP server's tools read these module globals. Point them at this season for the run only, and

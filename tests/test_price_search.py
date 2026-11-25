@@ -184,6 +184,9 @@ def test_a_first_price_past_the_per_pack_or_per_unit_limit_is_refused(connect):
 
 
 def test_spend_is_recorded_with_the_searches_in_model_calls_and_the_ledger(connect):
+    from vending import ledger
+    with connect() as conn:
+        ledger.record(conn, "opening", 60000, "real opening", "tester", at=LIVE)
     client = Client(searched(searches=2, input_tokens=30_000, output_tokens=400))
     lookup(searcher(connect, client))
     with connect() as conn:

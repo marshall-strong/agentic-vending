@@ -1209,7 +1209,7 @@ def test_dev_spend_is_served_and_ends_at_the_opening(site, conn):
     _scripts_allowed_by_hash(page, headers["Content-Security-Policy"])
     data = _inlined(page, "DATA")
     weekly = data["weekly"]
-    assert weekly["source"] == "model_calls and the ledger" and weekly["opening_at"].startswith("2026-10-31T20:00")
+    assert weekly["source"] == "database" and weekly["opening_at"].startswith("2026-10-31T20:00")
     # The test call before the opening is development spend; the live call after it is the competition's.
     assert weekly["totals"]["total_usd"] == "0.8" and [r["label"] for r in weekly["runs"]] == ["dry run"]
     assert "live agent run" not in page

@@ -84,3 +84,8 @@ def test_the_deploy_scripts_dirty_check_covers_every_copied_path():
     assert "docs/agent" in sources
     uncovered = [s for s in sources if not any(s == p or s.startswith(p + "/") for p in image_paths)]
     assert uncovered == []
+
+
+def test_container_sets_spend_database_from_the_writer_secret():
+    script = (ROOT / "scripts" / "deploy_container_app.ps1").read_text(encoding="utf-8")
+    assert '"SPEND_DATABASE_URL=secretref:database-url"' in script

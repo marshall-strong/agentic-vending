@@ -97,6 +97,13 @@ def cmd_run(args) -> int:
         print(f"{model.DEFAULT_KEY_ENV} is not set, so nothing was run. scripts/run_bench.ps1 loads it for you.",
               file=sys.stderr)
         return 1
+    from vending.harness import HarnessError, check_spend_database
+
+    try:
+        check_spend_database()
+    except HarnessError as error:
+        print(error, file=sys.stderr)
+        return 1
     try:
         with _connect() as conn:
             if not store.has_tables(conn):
@@ -143,6 +150,14 @@ def cmd_run(args) -> int:
         except Exception as error:
             print(f"Couldn't mark bench run {run_id} {status} ({type(error).__name__}); "
                   f"it spent ${spent:.4f}.", file=sys.stderr)
+    if run is not None:
+        from vending import dev_spend
+
+        path = args.spend_export or run.out / "model_calls.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _connect() as conn:
+            dev_spend.export_calls(conn, path, bench_id=run_id)
+        print(dev_spend.record_command(path, f"Bench {run_id}", "bench", datetime.now(EASTERN)))
     print(f"\nSpent ${spent:.4f} of the run's ${args.budget} budget, answers and judge together.\n")
     shown = show(run_id)
     return shown if status == "done" else 1
@@ -384,6 +399,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--note", default="", help="what changed since the last run, in a few words")
     run.add_argument("--workers", type=int, default=4, help="requests in flight at once (1-8)")
     run.add_argument("--by", default="bench", help="who ran it, for the record")
+    run.add_argument("--spend-export", type=Path, help="write model_calls.csv and print the import command")
     run.add_argument("--dry-run", action="store_true", help="print the plan and its worst case; send nothing")
     imp = sub.add_parser("import", help="store an existing sweep results folder as a bench run")
     imp.add_argument("--dir", required=True, help="the folder holding results.jsonl and plans/")
