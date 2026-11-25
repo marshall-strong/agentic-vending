@@ -497,6 +497,11 @@ async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tool
                                     "is_error": failed})
                     await note(turn + 1, "tool_result", text, tool=block.name, is_error=failed,
                                tool_use_id=block.id)
+                    if failed and _no_credit_reply(text):   # every later call would fail the same way
+                        out.status = "failed"
+                        out.detail = (f"Stopped on turn {turn + 1}: the model API key has no credit, so no more "
+                                      "lookups or turns could run.")
+                        return
             messages.append({"role": "user", "content": results})
             continue
         if response.stop_reason == "refusal":
@@ -532,6 +537,15 @@ async def converse(harness: Harness, call_tool: Callable[[str, dict], Any], tool
             out.status, out.detail = "skipped", reason
         return
     out.status, out.detail = "failed", "Ran out of turns without answering."
+
+
+def _no_credit_reply(text: str) -> bool:
+    """A tool's reply that refused because the model API key has no credit (`price_search` code `no_credit`)."""
+    try:
+        reply = json.loads(text)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(reply, dict) and reply.get("refused") == "no_credit"
 
 
 async def _use(block: Any, call_tool: Callable[[str, dict], Any], schemas: dict, out: Outcome, *, live: bool,

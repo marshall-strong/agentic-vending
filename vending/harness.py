@@ -248,7 +248,7 @@ class PastDeadline(HarnessError):
 
 class NoCredit(HarnessError):
     """Not sent, or refused unbilled: the API says the key's account has no credit left (a 400 that says "credit
-    balance", or a billing error). Every later call will fail the same way until a person adds credit, so callers
+    balance", or an error of type billing_error). Every later call will fail the same way until a person adds credit, so callers
     that loop (the price search) stop at once instead of trying each item. Nothing was spent."""
 
 
@@ -261,9 +261,10 @@ def _no_credit(error: Any) -> bool:
     body = getattr(error, "body", None)
     inner = body.get("error") if isinstance(body, dict) and isinstance(body.get("error"), dict) else body
     if isinstance(inner, dict):
-        parts += [str(inner.get("type") or ""), str(inner.get("message") or "")]
-    words = " ".join(parts).lower()
-    return "credit balance" in words or "billing_error" in words
+        if inner.get("type") == "billing_error":
+            return True
+        parts.append(str(inner.get("message") or ""))
+    return "credit balance" in " ".join(parts).lower()
 
 
 class Abandoned(HarnessError):

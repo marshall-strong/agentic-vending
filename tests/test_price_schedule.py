@@ -305,3 +305,24 @@ def test_a_drink_priced_by_a_recent_receipt_is_not_looked_up(ours):
     result = price_search.check_prices(by=price_schedule.BY, max_age_hours=120, connect=ours, client=client,
                                        now=lambda: LIVE, compare=True, label=price_schedule.LABEL)
     assert client.sent == [] and result.drinks == 0
+
+
+def test_a_key_with_no_credit_fails_the_weekly_check_and_counts_no_drink(ours):
+    """Sol, #261: a compare that stops on no_credit looked nothing up. It is `failed`, not `partial`, so the next
+    weekly run still compares every store, and it says no drink was looked up and why."""
+    from tests.test_price_search import NoCreditClient
+
+    with ours() as conn:
+        set_row(conn, checked=LIVE - timedelta(days=9), price=2599, most=3000)
+    result = price_search.check_prices(by=price_schedule.BY, max_age_hours=120, connect=ours, client=NoCreditClient(),
+                                       now=lambda: LIVE, compare=True, label=price_schedule.LABEL)
+    assert (result.exit_code, result.drinks, result.no_credit) == (2, 0, True)
+
+
+def test_the_weekly_check_says_the_key_had_no_credit(connect):
+    with connect() as conn:
+        on_in_db(conn)
+    checks(connect, Run(Result(2, no_credit=True)), at(TUE, 12, 5)).tick(at(TUE, 12, 5))
+    with connect() as conn:
+        (outcome, detail), = conn.execute("select outcome, detail from price_check_runs").fetchall()
+    assert outcome == "failed" and "no credit" in detail

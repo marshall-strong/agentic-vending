@@ -893,9 +893,9 @@ def test_a_key_with_no_credit_stops_the_compare_at_once_and_leaves_the_rest_untr
     with connect() as conn:
         picked_plan(conn)
     client = NoCreditClient()
-    assert command(connect, client, "--plan", "picked", "--by", "Kevin", when=BEFORE) == 1
+    assert command(connect, client, "--plan", "picked", "--by", "Kevin", when=BEFORE) == 2
     out = capsys.readouterr().out
-    assert client.sent == []
+    assert client.sent == [] and "add credit" in out
     assert "no_credit" in out and "Stopped: no more lookups this run." in out
     assert "Walmart" not in out                     # the first store's refusal ended the drink and the run
     assert "  COKE20 (" in out and "  PICKLE (" not in out    # the second drink was never started

@@ -87,6 +87,7 @@ class Result:
     changed: int = 0
     failures: int = 0
     cost_usd: Decimal = Decimal(0)
+    no_credit: bool = False     # stopped: the model API key has no credit, so nothing more could be looked up
 
 
 def schedule() -> Schedule | None:
@@ -288,6 +289,8 @@ class PriceChecks:
                       f"{' (dry run: nothing searched)' if claim.mode == 'dry-run' else ''}: {result.drinks} drinks "
                       f"looked up, {result.changed} prices changed, {result.failures} without a usable price, "
                       f"${result.cost_usd:.4f}.")
+            if getattr(result, "no_credit", False):
+                detail = "Stopped: the model API key has no credit; add credit. " + detail
         except Exception as error:      # noqa: BLE001 - recorded, and the worker goes on
             result, outcome = Result(2), "failed"
             detail = f"The check stopped: {type(error).__name__}: {error}"[:500]
