@@ -62,6 +62,8 @@ NOT_SIMULATED = (
     "Amazon lines at the Fri 4 Dec visit.",
     "The worker runs in-process: no container, no /health, no restarts, no replicas, no network failures.",
     "Visit-day live polls (vending.visit_polls) aren't simulated: the season polls hourly.",
+    "Catalog requests aren't decided: the round doesn't run sync_product_requests, so a request the agent files "
+    "stays pending.",
 )
 
 
@@ -154,6 +156,10 @@ def day_one(conn: psycopg.Connection, st, data: dict, say=print) -> dict:
     return steps
 
 
+class _Skipped(Exception):
+    """A round's job whose prerequisite didn't finish (`vending.worker.NEEDS`)."""
+
+
 class Driver:
     """The worker's scheduled work in a season: the agent's scheduler, the weekly price check and the round's jobs.
     `run_season` asks `next_due` between the hour's events and calls `tick` then, and `round` after each poll."""
@@ -206,23 +212,35 @@ class Driver:
         if self.prices.next_due(now) <= now:
             self.prices.tick(now)
 
-    def round(self, now: datetime) -> None:
+    def round(self, now: datetime, finished: dict[str, bool] | None = None) -> None:
         """The round's jobs after the syncs, in the worker's order: the midweek wake check, the tracking check,
-        then the scheduler's poke."""
+        then the scheduler's poke. `finished`: which of the round's earlier jobs finished with 0 (`slots_check`,
+        `sync_history`, `sync_requests`); a job whose prerequisite didn't is skipped, as `vending.worker.NEEDS` does."""
+        from vending.worker import NEEDS
+
         st, conn = self.st, self.conn
+        finished = finished or {}
         rounds = st.live.setdefault("rounds", {"count": 0, "failed": []})
         rounds["count"] += 1
+        for job, ok in finished.items():
+            if not ok:
+                rounds["failed"].append({"at": now.isoformat(), "job": job, "exit": 1})
+        ready = {job: all(finished.get(need, True) for need in NEEDS[job]) for job in NEEDS}
         self._books(now)
-        if midweek_wake.enabled():
+        if midweek_wake.enabled() and ready["midweek_wake"]:
             try:
                 if midweek_wake.check(conn, log=self._logger("midweek wake")):
                     st.live.setdefault("wakeups", []).append(now.isoformat())
             except Exception as error:      # noqa: BLE001 - the worker logs a crashed job and goes on
                 rounds["failed"].append({"at": now.isoformat(), "job": "midweek_wake", "error": repr(error)[:300]})
         try:
+            if not ready["tracking_daily"]:
+                raise _Skipped
             rc = tracking_daily.run(conn, bridge=lambda: st.bridge, log=self._logger("tracking"))
             if rc != 0:
                 rounds["failed"].append({"at": now.isoformat(), "job": "tracking_daily", "exit": rc})
+        except _Skipped:
+            rounds.setdefault("skipped", []).append({"at": now.isoformat(), "job": "tracking_daily"})
         except Exception as error:      # noqa: BLE001
             rounds["failed"].append({"at": now.isoformat(), "job": "tracking_daily", "error": repr(error)[:300]})
         if midweek_wake.enabled():
@@ -246,7 +264,8 @@ class Driver:
         from vending.simulate import dashcheck
 
         runs = [r for (r,) in self.conn.execute(
-            "select id from agent_runs order by (status = 'submitted') desc, id desc limit 3").fetchall()]
+            "select id from agent_runs where mode = 'live' order by (status = 'submitted') desc, id desc limit 3"
+        ).fetchall()]      # the run page shows live runs only
         found = dashcheck.check(self.dashboard_url, runs, label=label)
         self.st.live.setdefault("dashboard", []).append(found)
         self.say(f"dashboard check ({label}): snapshot {found.get('snapshot_seconds')} s, "

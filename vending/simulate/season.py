@@ -76,6 +76,31 @@ def restamp_all(conn: psycopg.Connection, at: datetime) -> None:
         conn.execute(f"update {table} set {column} = %s where {column} is not null", (at,))
 
 
+# What a freshly migrated database holds before anything else is written: the migrations' own seed rows.
+SEEDED = {"schema_migrations": None, "agent_run_lease": None, "page_visit_totals": None, "config": ("halted",)}
+
+
+def not_fresh(conn: psycopg.Connection, schema: str) -> list[str]:
+    """The tables of `schema` holding rows a freshly migrated database wouldn't: the simulation's setup (and the
+    season's clock, `dbclock.install`, which repoints the column defaults) touches nothing else's data."""
+    from psycopg import sql
+
+    held = []
+    for (table,) in conn.execute("select tablename from pg_tables where schemaname = %s order by 1", (schema,)):
+        if table in SEEDED and SEEDED[table] is None:
+            continue
+        if table == "config":
+            extra = conn.execute(sql.SQL("select count(*) from {}.config where key <> all(%s)").format(
+                sql.Identifier(schema)), (list(SEEDED["config"]),)).fetchone()[0]
+            if extra:
+                held.append(table)
+            continue
+        if conn.execute(sql.SQL("select exists (select from {}.{})").format(
+                sql.Identifier(schema), sql.Identifier(table))).fetchone()[0]:
+            held.append(table)
+    return held
+
+
 SCRATCH_ONLY = "The simulation runs only against a scratch database on 127.0.0.1 or localhost."
 # Settings libpq reads besides the URL that can send a connection elsewhere: a host address it dials instead
 # of the host name, and a service file whose entry names its own host.
@@ -143,6 +168,8 @@ class State:
     # What starts the agent: "run-day" (one run a week at 19:00, `run_day`) or "live" (the worker's own
     # scheduler, `vending.simulate.live`: AGENT_SCHEDULE, the midweek wake-ups, the run lease).
     schedule: str = "run-day"
+    # Whether the season's database has the season's clock (`dbclock`); a checkpoint from before it has none.
+    db_clock: bool = True
     # Drinks the world added for this season from an export (`vending.simulate.export`): Product fields,
     # registered again on a resume.
     products: list = field(default_factory=list)
@@ -210,9 +237,11 @@ def new_state(seed: int, decider: str, model: str, effort: str, check_ins: bool,
 
 
 def set_clock(conn: psycopg.Connection, st: State, at: datetime) -> None:
-    """Move the season's clock, and the database's with it (`dbclock`)."""
+    """Move the season's clock, and the database's with it when it has one (`dbclock`: a database set up before
+    the clock existed has none, and its run-day season goes on as before)."""
     st.clock.set(at)
-    dbclock.set(conn, st.clock.now())
+    if getattr(st, "db_clock", True):
+        dbclock.set(conn, st.clock.now())
 
 
 # --- setup ---------------------------------------------------------------------------------------------
@@ -227,6 +256,10 @@ def setup(conn: psycopg.Connection, st: State, budget_usd: Decimal, run_cap_usd:
     if conn.execute("select count(*) from agent_runs").fetchone()[0] or ledger.opening(conn) is not None:
         raise SystemExit("this database already holds a run; use a fresh scratch database (or --resume)")
     schema = conn.execute("select current_schema()").fetchone()[0]
+    held = not_fresh(conn, schema)
+    if held:
+        raise SystemExit("the simulation writes only to a freshly migrated scratch database; this one already holds "
+                         f"rows in {', '.join(held)}")
     dbclock.install(conn, schema)
     dbclock.set(conn, now)
     if st.schedule == "live" and not dbclock.reads_season_time(conn):
@@ -503,7 +536,15 @@ def save(st: State, path: Path) -> None:
 
 
 def load(path: Path) -> State:
+    import dataclasses
+
     st = pickle.loads(path.read_bytes())
+    # A checkpoint from before a field existed: the field's default.
+    for f in dataclasses.fields(State):
+        if not hasattr(st, f.name) and f.default_factory is not dataclasses.MISSING:
+            setattr(st, f.name, f.default_factory())
+        elif not hasattr(st, f.name) and f.default is not dataclasses.MISSING:
+            setattr(st, f.name, f.default)
     st.bridge.now = st.clock.now
     world.register(getattr(st, "products", None) or [])
     world.register_prices([tuple(r) for r in (getattr(st, "live", None) or {}).get("unit_prices", [])])
@@ -525,7 +566,11 @@ def run_season(conn: psycopg.Connection, st: State, opts: dict, checkpoint: Path
     with patched(st.clock):
         t = st.poll_at
         cursor = getattr(st, "resume_at", None)       # a checkpoint from before this field has none
-        dbclock.set(conn, st.clock.now())
+        st.db_clock = dbclock.installed(conn)
+        if getattr(st, "schedule", "run-day") == "live" and not st.db_clock:
+            raise SystemExit("this live season's database has no season clock (dbclock); start it again")
+        if st.db_clock:
+            dbclock.set(conn, st.clock.now())
         while t < world.COMPETITION_END:
             if stop_at is not None and t >= stop_at:
                 say(f"stopped at {t.astimezone(EASTERN):%a %d %b %H:%M} ET; resume with --resume")
@@ -536,13 +581,13 @@ def run_season(conn: psycopg.Connection, st: State, opts: dict, checkpoint: Path
             # removed before the checkpoint), so the hour goes on from there.
             a = cursor if cursor is not None and t <= cursor < nxt else t
             cursor = None
-            same, last_tick = 0, None
+            same, last_tick, defer = 0, None, None
             while True:
                 due = sorted((e for e in st.events if t <= e.at < nxt), key=lambda e: (e.at, e.kind))
                 ev = due[0] if due else None
                 tick_at = None
                 if driver is not None:
-                    tick_at = max(driver.next_due(st.clock.now()), st.clock.now(), a)
+                    tick_at = max(driver.next_due(st.clock.now()), st.clock.now(), a, defer or a)
                     if tick_at >= nxt:
                         tick_at = None
                 if ev is None and tick_at is None:
@@ -561,10 +606,11 @@ def run_season(conn: psycopg.Connection, st: State, opts: dict, checkpoint: Path
                     same = same + 1 if tick_at == last_tick else 0
                     last_tick = tick_at
                     if same >= SAME_MOMENT_TICKS:
+                        # The scheduler keeps asking for this moment: hold its ticks back a minute and look again,
+                        # so an event before then still runs first.
                         st.live.setdefault("stuck", []).append(tick_at.isoformat())
-                        tick_at = tick_at + timedelta(minutes=1)
-                        if tick_at >= nxt:
-                            break
+                        defer, same = tick_at + timedelta(minutes=1), 0
+                        continue
                     sell(st, cal, demand, a, tick_at)
                     a = tick_at
                     set_clock(conn, st, tick_at)
@@ -582,12 +628,14 @@ def run_season(conn: psycopg.Connection, st: State, opts: dict, checkpoint: Path
             set_clock(conn, st, nxt)
             since = wall_clock(conn)
             poll(conn, st, nxt)
-            sync_requests.sync(conn, st.bridge, now=nxt, log=lambda *_: None)
+            synced = sync_requests.sync(conn, st.bridge, now=nxt, log=lambda *_: None)
             # The worker confirms the assignment every round (`vending.slots.check`); the first check from
             # the start confirms it for the competition, as live, so the tools go on reading our slots.
             slot_assignment.check(conn, st.bridge.slots(), now=nxt, by=BY)
             if driver is not None:
-                driver.round(nxt)
+                # `sync_requests`' exit code, as the worker's round reads it (`vending.sync_requests.main`).
+                driver.round(nxt, {"slots_check": True, "sync_history": True,
+                                   "sync_requests": not (synced.failed or synced.skipped or synced.price_failures)})
             restamp(conn, nxt, since)
             st.poll_at, st.resume_at = nxt, None
             t = nxt

@@ -30,6 +30,8 @@ from typing import Any
 
 import psycopg
 from psycopg import sql
+
+from vending import slots as slots_mod
 from psycopg.types.json import Jsonb
 
 VERSION = 1
@@ -41,6 +43,12 @@ SOURCING_COLUMNS = ("sku", "rank", "store", "units_per_pack", "expected_cents", 
 LOOKUP_COLUMNS = ("id", "at", "sku", "store", "kind", "asked_min", "asked_max", "units_per_pack", "price_cents",
                   "url", "stock", "outcome", "model", "cost_usd", "searches", "no_store", "by", "detail")
 CATALOG_COLUMNS = ("sku", "name", "line", "flavor", "size", "delisted_at")
+# The team's settings the planner, the fill and the price memory read. Not the switches (the halt switch, the
+# schedule's and price check's modes) or the spend caps, which a season sets itself (`live.configure`, `--run-cap`).
+CONFIG_KEYS = ("capacity_overrides", "product_aliases", "price_ceiling_cents", "wildcard_slot", "wildcard_ceiling_cents",
+               "wildcard_purchase_cap_cents", "tax_percent", "midweek_fee_cents", "spendable_floor_cents",
+               "price_search_searches_per_run", "price_search_model", "price_check_model", "price_check_percent",
+               "price_check_weekly_cap_cents", "price_compare_every_days", "price_dead_end_days")
 NOT_READ_ONLY = "the export's transaction isn't read only, so it stopped before reading anything"
 
 
@@ -65,20 +73,27 @@ def read(conn: psycopg.Connection, plan_id: int) -> dict:
         conn.execute("set transaction isolation level repeatable read, read only")
         if conn.execute("show transaction_read_only").fetchone()[0] != "on":
             raise RuntimeError(NOT_READ_ONLY)
+        # Our slots as every reader gets them (`vending.slots.our_slots`: a well-formed assignment for our team,
+        # confirmed from the lock on); a plan loaded for any other assignment isn't read at all.
+        ours = slots_mod.our_slots(conn)
         slots = _select(conn, "slot_assignment", SLOT_COLUMNS, "where id = 1")
-        plans = _select(conn, "first_fill_plans", PLAN_COLUMNS, "where id = %s", (plan_id,))
-        if not slots:
-            raise LookupError("no slot assignment is stored")
-        if not plans:
+        found = conn.execute("select slots from first_fill_plans where id = %s", (plan_id,)).fetchone()
+        if found is None:
             raise LookupError(f"no first-fill plan #{plan_id}")
+        if set(found[0]) != set(ours):
+            raise LookupError(f"plan #{plan_id} was loaded for another slot assignment than ours now; "
+                              "export a plan loaded for the current one")
+        plans = _select(conn, "first_fill_plans", PLAN_COLUMNS, "where id = %s", (plan_id,))
+        slots[0]["slots"] = list(ours)
         options = _select(conn, "sourcing_options", SOURCING_COLUMNS, "order by sku, rank")
         lookups = _select(conn, "price_lookups", LOOKUP_COLUMNS, "order by id")
         skus = sorted({r["sku"] for r in options} | {s.get("sku") for s in plans[0]["plan"].get("day_one") or []
                                                       if isinstance(s, dict) and s.get("sku")})
         catalog = _select(conn, "catalog_products", CATALOG_COLUMNS, "where sku = any(%s) order by sku", (skus,))
+        settings = _select(conn, "config", ("key", "value"), "where key = any(%s) order by key", (list(CONFIG_KEYS),))
         at = conn.execute("select pg_catalog.now()").fetchone()[0]
     return {"version": VERSION, "exported_at": at.isoformat(), "assignment": slots[0], "plan": plans[0],
-            "sourcing": options, "price_lookups": lookups, "catalog": catalog}
+            "sourcing": options, "price_lookups": lookups, "catalog": catalog, "config": settings}
 
 
 def read_only_connection(url: str) -> psycopg.Connection:
@@ -102,14 +117,17 @@ def assignment(export: dict) -> tuple[str, ...]:
 
 
 def catalog(export: dict) -> list[dict]:
-    """The simulated bridge's product list: the world's drinks, and each exported drink it lacks."""
+    """The simulated bridge's product list: the world's drinks, with each exported drink as the team's catalog has
+    it (a delisted one left out, so our catalog copy marks it delisted, as the live planner sees it)."""
     from vending.simulate import world
 
     out = {p.sku: p.catalog_entry() for p in world.PRODUCTS}
-    for c in export["catalog"]:
-        if c["sku"] not in out and not c.get("delisted_at"):
-            out[c["sku"]] = {"sku": c["sku"], "name": c["name"], "line": c["line"], "flavor": c["flavor"],
-                             "size": c["size"], "active": True}
+    for c in export["catalog"]:      # the team's catalog wins for its drinks: their fields, and a delisted one is
+        if c.get("delisted_at"):     # left out of the answer, which is how `sync_catalog` delists it
+            out.pop(c["sku"], None)
+            continue
+        out[c["sku"]] = {"sku": c["sku"], "name": c["name"], "line": c["line"], "flavor": c["flavor"],
+                         "size": c["size"], "active": True}
     return list(out.values())
 
 
@@ -119,6 +137,7 @@ def products(export: dict) -> tuple[list[dict], list[str]]:
     from vending.simulate import world
 
     prices = {p["sku"]: p["price_cents"] for p in export["plan"]["plan"].get("day_one") or [] if isinstance(p, dict)}
+    overrides = next((r["value"] for r in export.get("config") or [] if r["key"] == "capacity_overrides"), None) or {}
     primary = {o["sku"]: o for o in export["sourcing"] if o["rank"] == "primary" and o.get("expected_cents")}
     out, left = [], []
     for c in export["catalog"]:
@@ -128,9 +147,10 @@ def products(export: dict) -> tuple[list[dict], list[str]]:
         if o is None:
             left.append(f"{c['sku']}: no primary row with a price")
             continue
-        p = world.product_for(c, o["units_per_pack"], o["expected_cents"], prices.get(c["sku"]))
+        p = world.product_for(c, o["units_per_pack"], o["expected_cents"], prices.get(c["sku"]),
+                              column=overrides.get(c["sku"]))
         if p is None:
-            left.append(f"{c['sku']}: the loading chart can't size {c['size']!r}")
+            left.append(f"{c['sku']}: the loading chart can't size {c['size']!r} and no person counted it")
             continue
         out.append(dataclasses.asdict(p))
     return out, left
@@ -153,6 +173,18 @@ def _insert(conn: psycopg.Connection, table: str, rows: list[dict]) -> int:
     return len(rows)
 
 
+def load_settings(conn: psycopg.Connection, export: dict, by: str) -> list[str]:
+    """The team's settings (`CONFIG_KEYS`), through `vending.config.set_value`, so each is checked as a person's is."""
+    from vending import config
+
+    done = []
+    for row in export.get("config") or []:
+        if row["key"] in CONFIG_KEYS:
+            config.set_value(conn, row["key"], row["value"], by)
+            done.append(row["key"])
+    return done
+
+
 def load_prices(conn: psycopg.Connection, export: dict) -> dict:
     """The sourcing table and the price memory, as the team database holds them."""
     n = _insert(conn, "sourcing_options", export["sourcing"])
@@ -160,6 +192,11 @@ def load_prices(conn: psycopg.Connection, export: dict) -> dict:
     if m:
         conn.execute("select setval(pg_get_serial_sequence('price_lookups', 'id'), (select max(id) from price_lookups))")
     return {"sourcing_rows": n, "price_lookups": m}
+
+
+def load(conn: psycopg.Connection, export: dict, by: str) -> dict:
+    """Everything but the plan: the team's settings, the sourcing table and the price memory."""
+    return {**load_prices(conn, export), "settings": load_settings(conn, export, by)}
 
 
 def load_plan(conn: psycopg.Connection, export: dict, by: str) -> int:
@@ -186,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with read_only_connection(url) as conn:
             data = read(conn, args.plan)
-    except (LookupError, RuntimeError) as error:
+    except (LookupError, RuntimeError, slots_mod.SlotsNotRecorded) as error:
         print(error, file=sys.stderr)
         return 2
     except psycopg.Error as error:

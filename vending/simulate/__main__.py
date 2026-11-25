@@ -74,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from vending.simulate import dbclock, export, live, season
     season.check_scratch(args.database_url)
-    if args.schedule == "live" and not (args.resume or args.from_export):
+    if args.schedule == "live" and not args.resume and not args.from_export:
         parser.error("--schedule live needs --from-export: the day-one fill is the team's picked plan")
     if not args.resume and args.assignment is None and args.from_export is None:
         parser.error("--assignment (or --from-export) is needed for a new season")
@@ -101,15 +101,16 @@ def main(argv: list[str] | None = None) -> int:
     opts = {"budget": args.budget, "run_cap": args.run_cap, "min_run": args.min_run,
             "elasticity": args.elasticity, "facing_exponent": args.facing_exponent, "interloper": args.interloper}
     from vending.simulate.clock import patched
-    with db.connect() as conn, (live.environment() if args.schedule == "live" else contextlib.nullcontext()):
+    # A resumed season keeps the schedule it started with: the checkpoint says which, whatever --schedule says.
+    st = season.load(checkpoint) if args.resume else None
+    schedule = getattr(st, "schedule", "run-day") if st is not None else args.schedule
+    with db.connect() as conn, (live.environment() if schedule == "live" else contextlib.nullcontext()):
         conn.autocommit = True
-        if args.resume:
-            st = season.load(checkpoint)
-        else:
+        if st is None:
             catalog = export.catalog(data) if data is not None else None
             st = season.new_state(args.seed, args.decider, args.model or agent.DEFAULT_MODEL,
                                   args.effort or agent.DEFAULT_EFFORT, args.check_ins,
-                                  {"wed": 2, "thu": 3}[args.run_day], assignment, schedule=args.schedule,
+                                  {"wed": 2, "thu": 3}[args.run_day], assignment, schedule=schedule,
                                   catalog=catalog)
             if data is not None:
                 st.products, left = export.products(data)
@@ -119,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
                 world.register_prices(st.live["unit_prices"])
             with patched(st.clock):
                 season.setup(conn, st, args.budget, args.run_cap,
-                             prices=(lambda c, _now: st.live.__setitem__("seeded", export.load_prices(c, data)))
+                             prices=(lambda c, _now: st.live.__setitem__("seeded", export.load(c, data, season.BY)))
                              if data is not None else None)
                 if st.schedule == "live":
                     live.configure(conn)

@@ -24,18 +24,7 @@ def _connection(url: str) -> psycopg.Connection:
     from vending.simulate import dbclock
 
     return psycopg.connect(url, autocommit=True, connect_timeout=db.CONNECT_TIMEOUT,
-                           options=db.session_options(url, pages.OPTIONS, dbclock.search_path(_schema(url))))
-
-
-def _schema(url: str) -> str:
-    """The schema a scratch URL's own options name (`-c search_path=...`), else public."""
-    from psycopg.conninfo import conninfo_to_dict
-
-    for part in (conninfo_to_dict(url).get("options") or "").split("-c "):
-        key, _, value = part.strip().partition("=")
-        if key == "search_path" and value:
-            return value.split(",")[0].strip()
-    return "public"
+                           options=db.session_options(url, pages.OPTIONS, dbclock.search_path(dbclock.schema_of(url))))
 
 
 def timed_snapshot(conn: psycopg.Connection) -> tuple[dict, list[dict], float]:
@@ -116,7 +105,9 @@ def check(url: str, run_ids: list[int], *, label: str = "") -> dict:
                     html = run_page.html(data)
                     row["render_seconds"] = round(time.perf_counter() - start, 3)
                     row["page_bytes"] = len(html.encode())
-                    row["found"] = bool(data.get("found"))
+                    row["found"], row["shown"] = bool(data.get("found")), bool(data.get("shown"))
+                    # What the deployed route answers (`vending.pages._run`): 404 unless found and shown.
+                    row["status"] = 200 if row["found"] and row["shown"] else 404
                     row["steps"] = (data.get("counts") or {}).get("steps")
                 except Exception as error:      # noqa: BLE001 - recorded, the check goes on
                     row["error"] = f"{type(error).__name__}: {str(error).splitlines()[0][:160] if str(error) else ''}"
@@ -135,7 +126,7 @@ def table(found: dict) -> str:
         lines.append(f"| {p['panel']} | {p['seconds']:.3f} | {'ok' if p['ok'] else 'unavailable: ' + str(p['why'])} |")
     for r in found.get("runs") or []:
         lines.append(f"| run page {r['run_id']} | {r.get('read_seconds', '-')} + {r.get('render_seconds', '-')} | "
-                     f"{r.get('error') or str(r.get('steps')) + ' steps'} |")
+                     f"{r.get('error') or str(r.get('status')) + ', ' + str(r.get('steps')) + ' steps'} |")
     for e in found.get("errors") or []:
         lines.append(f"| (error) | | {e} |")
     return "\n".join(lines)

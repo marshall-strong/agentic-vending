@@ -51,10 +51,23 @@ def search_path(schema: str = "public") -> str:
     return f"-c search_path={schema},pg_catalog"
 
 
-def with_clock(url: str, schema: str = "public") -> str:
-    """`url` with `search_path` added to its startup options (kept after any it already has)."""
+def schema_of(url: str) -> str:
+    """The schema a URL's own options put first (`-c search_path=...`), else public."""
+    from psycopg.conninfo import conninfo_to_dict
+
+    for part in (conninfo_to_dict(url).get("options") or "").split("-c"):
+        key, _, value = part.strip().partition("=")
+        if key == "search_path" and value:
+            return value.split(",")[0].strip()
+    return "public"
+
+
+def with_clock(url: str, schema: str | None = None) -> str:
+    """`url` with `search_path` added to its startup options (kept after any it already has). `schema`: the one
+    the URL's options name, else public."""
     from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
+    schema = schema or schema_of(url)
     params = conninfo_to_dict(url)
     params["options"] = " ".join(o for o in (params.get("options") or "", search_path(schema)) if o)
     return make_conninfo(**params)
@@ -64,6 +77,11 @@ def set(conn: psycopg.Connection, at: datetime) -> None:  # noqa: A001 - the mod
     """Move the database's clock to `at`."""
     conn.execute(sql.SQL("insert into {} (one, at) values (true, %s) on conflict (one) do update set at = excluded.at")
                  .format(sql.Identifier(TABLE)), (at,))
+
+
+def installed(conn: psycopg.Connection) -> bool:
+    """Whether the connection's schema has the season's clock (`install`)."""
+    return conn.execute("select to_regclass(%s) is not null", (TABLE,)).fetchone()[0]
 
 
 def reads_season_time(conn: psycopg.Connection) -> bool:

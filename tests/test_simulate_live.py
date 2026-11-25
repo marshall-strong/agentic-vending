@@ -117,6 +117,14 @@ def test_the_export_reads_only_our_rows_in_a_read_only_transaction(schema_url):
     assert data["catalog"] == [{"sku": "COCA-ORIGINAL-20BOT", "name": "Coke", "line": "Coca-Cola",
                                 "flavor": "Original", "size": "20 oz bottle", "delisted_at": None}]
     json.dumps(data)        # it is written as JSON
+    # Sol, #253 finding 4: a plan loaded for another assignment is refused before its slots are read.
+    with open_in(url, schema) as conn:
+        other = conn.execute("insert into first_fill_plans (loaded_by, label, source_note, plan, projection, slots)"
+                             " values ('t', '6', 's', %s, %s, %s) returning id",
+                             (Jsonb(plan), Jsonb(projection), list(TEST_SLOTS[:10]))).fetchone()[0]
+    with export.read_only_connection(url + f"?options=-csearch_path%3D{schema}") as ro:
+        with pytest.raises(LookupError, match="another slot assignment"):
+            export.read(ro, other)
 
 
 def test_an_exported_drink_the_world_lacks_gets_its_lines_rate_or_the_default():
@@ -126,6 +134,11 @@ def test_an_exported_drink_the_world_lacks_gets_its_lines_rate_or_the_default():
     [new] = [p for p in products if p["sku"] == NEW]
     assert new["rate"] == world.UNKNOWN_LINE_RATE and new["reference_cents"] == 300 and left == []
     assert {c["sku"] for c in export.catalog(data)} >= {NEW, "REDBULL-ORIGINAL-8_4CAN"}
+    # Sol, #253 finding 5: a drink the team's catalog has delisted is left out of the bridge's answer, a world one too.
+    for c in data["catalog"]:
+        if c["sku"] in (NEW, "REDBULL-ORIGINAL-8_4CAN"):
+            c["delisted_at"] = CHECKED.isoformat()
+    assert not {NEW, "REDBULL-ORIGINAL-8_4CAN"} & {c["sku"] for c in export.catalog(data)}
 
 
 # --- a first week on the live schedule ------------------------------------------------------------------------
@@ -154,7 +167,7 @@ def test_the_first_week_runs_from_the_picked_plan_and_the_workers_scheduler(sche
             assert not [e for e in st.events if e.kind in ("agent_run", "check_in", "ledger_open")]
             with patched(st.clock):
                 season.setup(conn, st, opts["budget"], opts["run_cap"],
-                             prices=lambda c, _now: export.load_prices(c, data))
+                             prices=lambda c, _now: export.load(c, data, season.BY))
                 live.configure(conn)
                 steps = live.day_one(conn, st, data, say=lambda *_: None)
             assert steps["ledger_open"]["exit"] == 0 and steps["submit"]["exit"] == 0, steps
@@ -164,7 +177,7 @@ def test_the_first_week_runs_from_the_picked_plan_and_the_workers_scheduler(sche
             opts["driver"] = live.Driver(conn, st, opts, say=lambda *_: None,
                                          dashboard_url=dbclock.with_clock(url, schema))
             stop = datetime(2026, 12, 5, tzinfo=EASTERN)
-            st = season.run_season(conn, st, opts, tmp_path / "c.pickle", stop, say=lambda *_: None)
+            st = season.run_season(conn, st, opts, tmp_path / "checkpoint.pickle", stop, say=lambda *_: None)
             rows = conn.execute("select due_at, kind, mode, outcome from agent_schedule order by due_at").fetchall()
             got = [(d.astimezone(EASTERN).strftime("%a %H:%M"), k, m, o) for d, k, m, o in rows]
             # Wed 2 Dec 14:00 is before the start: claimed live, run as a dry run. Thu 3 Dec noon is the first live.
@@ -182,13 +195,22 @@ def test_the_first_week_runs_from_the_picked_plan_and_the_workers_scheduler(sche
             assert conn.execute("select due_at, mode from price_check_runs").fetchall() == [
                 (datetime(2026, 12, 1, 12, tzinfo=EASTERN), "dry-run")]
             # The dashboard, as /dashboard and /dashboard/run/<id> read it, on the season's clock.
-            run_ids = [r for (r,) in conn.execute("select id from agent_runs order by id")]
-            found = dashcheck.check(dbclock.with_clock(url, schema), run_ids, label="test")
+            runs = conn.execute("select id, mode from agent_runs order by id").fetchall()
+            found = dashcheck.check(dbclock.with_clock(url, schema), [r for r, _ in runs], label="test")
             assert found["errors"] == [] and found["panels"] and found["snapshot_seconds"] >= 0
             assert found["as_of"].startswith("2026-12-05")
-            assert all("error" not in r for r in found["runs"]) and len(found["runs"]) == len(run_ids)
+            assert all("error" not in r for r in found["runs"]) and len(found["runs"]) == len(runs)
+            # Sol, #253 finding 8: a dry run's page is a 404 on the deployed route, and says so here.
+            assert [r["status"] for r in found["runs"]] == [200 if m == "live" else 404 for _, m in runs]
             summary = live.summary(conn, st)
             assert summary["counts"]["weekly"] == 2 and summary["day_one"]["plan_id"] == 8
+        # Sol, #253 finding 2: a plain --resume takes the live schedule from the checkpoint, not --schedule's default.
+        from vending.simulate import __main__ as cli
+        for name in ("DATABASE_URL", "DEX_BASE_URL", "DEX_API_KEY"):
+            monkeypatch.setenv(name, "unset-by-the-test")
+        assert cli.main(["--database-url", f"{url}?options=-csearch_path%3D{schema}", "--resume",
+                         "--out", str(tmp_path), "--stop-at", "2026-12-07"]) == 0
+        assert json.loads((tmp_path / "season.json").read_text(encoding="utf-8"))["run_day"] == "live schedule"
     finally:
         for sku in added:
             world.BY_SKU.pop(sku, None)
@@ -236,8 +258,114 @@ def test_the_live_settings_last_only_as_long_as_the_season(monkeypatch):
 def test_the_clock_option_goes_after_the_urls_own():
     from psycopg.conninfo import conninfo_to_dict
 
-    from vending.simulate import dashcheck, dbclock
+    from vending.simulate import dbclock
 
     url = dbclock.with_clock("postgresql://u:p@127.0.0.1:5432/sim?options=-c%20statement_timeout%3D5000", "s1")
     assert conninfo_to_dict(url)["options"] == "-c statement_timeout=5000 -c search_path=s1,pg_catalog"
-    assert dashcheck._schema(url) == "s1" and dashcheck._schema("postgresql://u@127.0.0.1/sim") == "public"
+    assert dbclock.schema_of(url) == "s1" and dbclock.schema_of("postgresql://u@127.0.0.1/sim") == "public"
+
+
+def test_a_setup_refuses_a_database_that_already_holds_data(schema_url):
+    """Sol, #253 finding 1: the season's clock repoints every column default, so setup writes nothing anywhere but a
+    freshly migrated database."""
+    from tests.conftest import open_in
+    from vending.simulate import dbclock, season
+
+    url, schema = schema_url
+    with open_clock(url, schema) as conn:
+        conn.execute("delete from slot_assignment")
+        conn.execute("insert into catalog_products (sku, name, line, flavor, size, last_response) values"
+                     " ('X-1', 'x', 'x', 'x', '12 oz can', '{}')")
+        st = season.new_state(11, "scripted", "m", "medium", False, 3, EXAMPLE)
+        with pytest.raises(SystemExit, match="catalog_products"):
+            season.setup(conn, st, Decimal(1), Decimal(1))
+        assert not dbclock.installed(conn)
+    with open_in(url, schema) as conn:
+        assert season.not_fresh(conn, schema) == ["catalog_products"]
+
+
+def test_a_season_from_before_the_clock_goes_on_as_before(schema_url, monkeypatch, tmp_path):
+    """Sol, #253 finding 3: a run-day season whose database was set up before the season's clock existed resumes."""
+    from datetime import timedelta
+
+    from tests.conftest import open_in
+    from vending import db
+    from vending.simulate import dbclock, season
+    from vending.simulate.clock import patched
+
+    url, schema = schema_url
+    monkeypatch.setattr(db, "connect", lambda **_: open_in(url, schema))
+    with open_in(url, schema) as conn:
+        conn.execute("delete from slot_assignment")
+        st = season.new_state(11, "scripted", "m", "medium", False, 3, EXAMPLE)
+        with monkeypatch.context() as m, patched(st.clock):
+            m.setattr(dbclock, "install", lambda *_a, **_k: None)      # as setup was before this PR
+            m.setattr(dbclock, "set", lambda *_a, **_k: None)
+            season.setup(conn, st, Decimal(1), Decimal(1))
+        assert not dbclock.installed(conn)
+        season.run_season(conn, st, {"budget": 1, "run_cap": 1, "min_run": 0}, tmp_path / "c.pickle",
+                          st.poll_at + timedelta(hours=2), say=lambda *_: None)
+        assert st.db_clock is False and st.poll_at == world.SIM_START + timedelta(hours=2, minutes=5)
+
+
+def test_a_stuck_scheduler_never_strands_an_event_late_in_the_hour(schema_url, monkeypatch, tmp_path):
+    """Sol, #253 finding 7: a scheduler that keeps asking for the same moment is held back a minute at a time, and
+    an event in the hour's last seconds still runs."""
+    from datetime import timedelta
+
+    from vending import db
+    from vending.simulate import season
+    from vending.simulate.clock import patched
+
+    url, schema = schema_url
+    monkeypatch.setattr(db, "connect", lambda **_: open_clock(url, schema))
+    with open_clock(url, schema) as conn:
+        conn.execute("delete from slot_assignment")
+        st = season.new_state(11, "scripted", "m", "medium", False, 3, EXAMPLE)
+        with patched(st.clock):
+            season.setup(conn, st, Decimal(1), Decimal(1))
+        late = st.poll_at + timedelta(minutes=59, seconds=40)
+        st.events = [season.Event(late, "catalog_sync")]
+        st.schedule = "live"
+
+        class Stuck:
+            ticks: list = []
+
+            def next_due(self, now):
+                return now
+
+            def tick(self, now):
+                self.ticks.append(now)
+
+            def round(self, now, finished=None):
+                pass
+
+        driver = Stuck()
+        season.run_season(conn, st, {"budget": 1, "run_cap": 1, "min_run": 0, "driver": driver},
+                          tmp_path / "c.pickle", st.poll_at + timedelta(hours=1), say=lambda *_: None)
+        assert st.events == [] and st.live["stuck"]
+        assert len(driver.ticks) < 200          # held back a minute at a time, never a spin
+
+
+def test_a_round_whose_receipt_sync_failed_sends_no_tracking_check(monkeypatch):
+    """Sol, #253 finding 6: as the worker's NEEDS, a receipt sync that didn't finish with 0 holds the day's tracking
+    check back; the midweek check needs only the slot check."""
+    from types import SimpleNamespace
+
+    from vending import midweek_wake, tracking_daily
+    from vending.simulate import live
+
+    sent, woke = [], []
+    monkeypatch.setattr(tracking_daily, "run", lambda *a, **k: sent.append(1) or 0)
+    monkeypatch.setattr(midweek_wake, "enabled", lambda: True)
+    monkeypatch.setattr(midweek_wake, "check", lambda *a, **k: woke.append(1) and False)
+    driver = object.__new__(live.Driver)
+    driver.st = SimpleNamespace(live={}, clock=SimpleNamespace(now=lambda: live.FILL_AT))
+    driver.conn, driver.dashboard_url = None, None
+    driver.agents = SimpleNamespace(poke=lambda: None)
+    driver._books = lambda now: None
+    driver.round(live.FILL_AT, {"slots_check": True, "sync_history": True, "sync_requests": False})
+    assert sent == [] and woke == [1]
+    assert driver.st.live["rounds"]["skipped"][0]["job"] == "tracking_daily"
+    driver.round(live.FILL_AT, {"slots_check": True, "sync_history": True, "sync_requests": True})
+    assert sent == [1]
