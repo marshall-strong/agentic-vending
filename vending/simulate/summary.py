@@ -128,7 +128,11 @@ def rehearsal(r: dict) -> dict:
         dash.append({"label": d.get("label"), "snapshot_seconds": d.get("snapshot_seconds"),
                      "render_seconds": d.get("render_seconds"), "unavailable": d.get("unavailable") or [],
                      "errors": d.get("errors") or [],
-                     "panels": {p["panel"]: p["seconds"] for p in d.get("panels") or []},
+                     # The slowest panels, and what the rest took together: the file stays short.
+                     "panels": {p["panel"]: p["seconds"] for p in sorted(d.get("panels") or [],
+                                                                       key=lambda p: -p["seconds"])[:6]},
+                     "other_panels_seconds": round(sum(p["seconds"] for p in sorted(
+                         d.get("panels") or [], key=lambda p: -p["seconds"])[6:]), 3),
                      "run_pages": [{k: v for k, v in run.items() if k in ("run_id", "read_seconds", "render_seconds",
                                                                           "error")} for run in d.get("runs") or []]})
     day_one = r.get("day_one") or {}
@@ -273,6 +277,44 @@ def check(summary: Any) -> None:
             raise bad("a sweep needs its knob and, per row, a value and profit_after_model")
 
 
+# A selection named in prose: "slot 56", "slots 12, 14 and 16", "(38 and 43 had run out)". A two-digit number counts
+# only when it isn't money, a decimal, a percent, a date ("25 Dec", "Fri 11") or a count of things ("20 slots").
+_MONTHS = "jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec"
+_DAYS = "mon|tue|wed|thu|fri|sat|sun"
+REDACTED = "[slot]"
+
+
+def redact(value: Any, slots: list[str] | tuple[str, ...]) -> Any:
+    """`value` with every selection of `slots` named in its text replaced by `REDACTED`. The repository is public, and
+    David's honor rule (20 Nov) is that nobody is told which selections are ours, so a summary committed while the
+    assignment is current carries no assignment and names no selection (`--redact-slots`)."""
+    ours = sorted({str(x) for x in slots}, key=len, reverse=True)
+    if not ours:
+        return value
+    pattern = re.compile(
+        rf"(?<![$\d.,:/-])\b({'|'.join(map(re.escape, ours))})\b(?![\d%:/]|\.\d|\s*(?:{_MONTHS})\b|\s+of\b"
+        rf"|\s+(?:slots?|lines?|units?|drinks?|days?|weeks?|minutes?|cans?|bottles?|packs?)\b)", re.IGNORECASE)
+    # Just before it: a weekday or month ("Fri 25", "Dec 14"), or a pack's "x" ("1 x 12").
+    day_before = re.compile(rf"(?:\b(?:{_DAYS}|{_MONTHS})[a-z]*\.?|\bx)\s*$", re.IGNORECASE)
+
+    def text(t: str) -> str:
+        out, last = [], 0
+        for m in pattern.finditer(t):
+            if day_before.search(t[max(0, m.start() - 12):m.start()]):
+                continue
+            out.append(t[last:m.start()] + REDACTED)
+            last = m.end()
+        return "".join(out) + t[last:]
+
+    if isinstance(value, str):
+        return text(value)
+    if isinstance(value, list):
+        return [redact(v, ours) for v in value]
+    if isinstance(value, dict):
+        return {k: redact(v, ours) for k, v in value.items()}
+    return value
+
+
 def load(path: Path) -> Season:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -300,6 +342,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--note", action="append", default=[], help="a line for the season's notes (repeatable)")
     parser.add_argument("--out", type=Path, help="default DIR/summary.json")
     parser.add_argument("--check", action="store_true", help=f"load every summary in {SEASONS}")
+    parser.add_argument("--redact-slots", action="store_true",
+                        help="leave out the assignment and replace every selection named in the text (`redact`): for a "
+                             "season on the current assignment, since the repository is public")
     args = parser.parse_args(argv)
     if args.check:
         try:
@@ -313,7 +358,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.detail is None or not args.id:
         parser.error("give a season's directory and --id (or --check)")
     out = args.out or args.detail / "summary.json"
-    write(build(args.detail, args.id, args.name, args.strategy, args.source, args.note), out)
+    built = build(args.detail, args.id, args.name, args.strategy, args.source, args.note)
+    if args.redact_slots:
+        slots = built.get("assignment") or []
+        built = redact(dict(built, assignment=None), slots)
+        built["notes"] = list(built["notes"]) + ["Selections redacted: the season ran on the current assignment."]
+        check(built)
+    write(built, out)
     print(f"wrote {out}")
     return 0
 

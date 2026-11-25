@@ -441,3 +441,21 @@ def test_a_late_amazon_line_goes_to_back_stock_and_its_slot_waits():
     assert by_slot["18"]["outcome"] == "alternate" and by_slot["18"]["store"] == "Walmart" and m.slots["18"].units > 0
     receipt = bridge.requests["r1"].lines[0]["receipt"]
     assert receipt["units_loaded"] == 0 and receipt["units_to_back_stock"] == receipt["units_bought"] - receipt["units_lost"]
+
+
+def test_a_redacted_summary_names_no_selection_but_keeps_money_dates_and_counts():
+    """The repository is public and David's honor rule (20 Nov) says nobody is told which selections are ours."""
+    from vending.simulate.summary import REDACTED, redact
+
+    ours = ("12", "14", "20", "25", "38", "43", "56")
+    text = ("Slot 56 was never loaded, so I sent pr_sim_002 (most it can cost: $37.00). Eighteen of our 20 slots were "
+            "low (38 and 43 had run out); slots 12, 14 and 25 get 2 units at $2.25 for Fri 25 Dec, 14 Jan, 12:00.")
+    got = redact({"reason": text, "n": 56, "list": ["slot 38"]}, ours)
+    assert got["n"] == 56 and got["list"] == [f"slot {REDACTED}"]
+    out = got["reason"]
+    assert out.startswith("Slot [slot] was never loaded") and "([slot] and [slot] had run out)" in out
+    assert "slots [slot], [slot] and [slot] get" in out
+    assert "$37.00" in out and "our 20 slots" in out and "Fri 25 Dec" in out and "14 Jan" in out and "12:00" in out
+    assert "$2.25" in out and "2 units" in out
+    tail = redact("It fills all 20 slots and puts cans in slot 56. 31 of 127 units; the pick buys 1 x 12.", ours)
+    assert tail == "It fills all 20 slots and puts cans in slot [slot]. 31 of 127 units; the pick buys 1 x 12."

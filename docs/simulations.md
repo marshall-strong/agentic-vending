@@ -22,10 +22,12 @@ cash and stock-outs, the report card, and each run's decision with its reason. T
 (every run's tool calls, every request and receipt, every slot on every day) stays on the machine
 that ran the season.
 
-Five seasons are kept, about 800 lines in all:
+Seven seasons are kept, about 1,400 lines in all:
 
 | Season | Why it is kept | Profit after AI cost |
 |---|---|---:|
+| `2026-11-25-live-rehearsal-opus-medium` | The dress rehearsal: plan #8, the live schedule, Opus 5.5 medium on current main | $1,445.27 |
+| `2026-11-25-live-rehearsal-scripted` | The same rehearsal with the simple rule deciding | $1,292.45 |
 | `2026-11-16-opus-medium-round3` | The best: Opus 5.5 after round 3's changes, 15 drinks, a top-up rule | $963.69 |
 | `2026-11-16-baseline-wednesday` | Slide 13: the simple rule, Wednesday runs, the bar for the fixed agent | $443.09 |
 | `2026-11-16-opus-medium-fixed` | Slide 13: the agent after the first fixes | $385.97 |
@@ -108,6 +110,9 @@ To get the full detail of the seven seasons above, check out
 
 ## Integrity
 
+- The repository is public. A season on the current assignment is committed with `--redact-slots`: no `assignment`,
+  and every selection named in its text replaced by `[slot]` (`summary.redact`), so the file never says which
+  selections are ours (David's honor rule, 20 Nov).
 - A season's slots are the assignment it was given (`--assignment`), stored and confirmed through
   `vending.slots` as live. The summary records them as `assignment`. Nothing names them as columns.
 - Demand comes from fall data, before the fall cut, when no selection was either team's
