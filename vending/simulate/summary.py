@@ -132,12 +132,15 @@ def rehearsal(r: dict) -> dict:
                      "run_pages": [{k: v for k, v in run.items() if k in ("run_id", "read_seconds", "render_seconds",
                                                                           "error")} for run in d.get("runs") or []]})
     day_one = r.get("day_one") or {}
+    first = day_one.get("refused_first") or {}
     return {"schedule": r.get("schedule"), "counts": r.get("counts"),
             "scheduled": [{k: row.get(k) for k in ("due", "kind", "mode", "outcome", "run_id")}
                           for row in r.get("scheduled_rows") or []],
             "day_one": {"plan_id": day_one.get("plan_id"), "submit_exit": (day_one.get("submit") or {}).get("exit"),
                         "warnings": len((day_one.get("preview") or {}).get("warnings") or []),
-                        "deviations": (day_one.get("preview") or {}).get("deviations") or []},
+                        "deviations": (day_one.get("preview") or {}).get("deviations") or [],
+                        "refused_first": first.get("codes") or [],
+                        "flags": [a for a in (day_one.get("submit") or {}).get("argv") or [] if a.startswith("--a")]},
             "tracking_checks": r.get("tracking_checks"), "price_checks": len(r.get("price_checks") or []),
             "refusals": r.get("refusals"), "round_failures": len(r.get("round_failures") or []),
             "dashboard": dash, "not_simulated": r.get("not_simulated") or []}

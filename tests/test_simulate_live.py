@@ -77,6 +77,11 @@ def _export() -> dict:
                      "expected_cents": p["expected_cents"], "max_cents": sourcing.default_max(p["expected_cents"]),
                      "url": f"https://www.amazon.com/dp/B0TEST{i:04d}", "pack_description": None, "checked_at": CHECKED.isoformat(),
                      "checked_by": "Test Checker", "note": None, "updated_at": CHECKED.isoformat(), "stock": None})
+    # Plan #8's case on 25 Nov: an alternate whose most-we-pay is 2 cents over the pick's, so the fill's first
+    # submit is refused (pick_deviation) and a person sends it with --accept-deviations.
+    coke = rows[1]
+    rows.append(dict(coke, rank="alternate", store="Walmart", url="https://www.walmart.com/ip/coke/123",
+                     max_cents=coke["max_cents"] + 2))
     catalog = [{"sku": p.sku, "name": p.name, "line": p.line, "flavor": p.flavor, "size": p.size, "delisted_at": None}
                for p in world.PRODUCTS if p.sku in {r["sku"] for r in rows}]
     catalog.append({"sku": NEW, "name": "Olipop Vintage Cola 12 oz can", "line": "Olipop", "flavor": "Vintage Cola",
@@ -171,6 +176,7 @@ def test_the_first_week_runs_from_the_picked_plan_and_the_workers_scheduler(sche
                 live.configure(conn)
                 steps = live.day_one(conn, st, data, say=lambda *_: None)
             assert steps["ledger_open"]["exit"] == 0 and steps["submit"]["exit"] == 0, steps
+            assert steps["refused_first"]["codes"] == ["pick_deviation"] and "--accept-deviations" in steps["submit"]["argv"]
             [filed] = st.bridge.requests.values()
             assert filed.submitted_at == live.FILL_AT
             assert conn.execute("select purpose from purchase_submissions").fetchall() == [("fill",)]

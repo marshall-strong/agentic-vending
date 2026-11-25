@@ -144,6 +144,15 @@ def day_one(conn: psycopg.Connection, st, data: dict, say=print) -> dict:
     before = set(st.bridge.requests)
     rc, text = _quiet(fill.main, argv, bridge=lambda: st.bridge, connect=db.connect)
     steps["submit"] = {"argv": argv[:1] + ["--hash", "(the preview's)"] + argv[3:], "exit": rc, "said": text.strip()[:600]}
+    refused = [line[2:].split(":", 1)[0] for line in text.splitlines() if line.startswith("- ")]
+    if rc != 0 and refused and set(refused) == {fill.DEVIATION} and preview.deviations:
+        # What a person does on Sunday when the only refusal is a pack or cost that differs from the pick: the
+        # preview listed it, and the documented flag sends it anyway (the log records the flag and the list).
+        argv.append("--accept-deviations")
+        steps["refused_first"] = {"codes": refused, "said": text.strip()[:600]}
+        rc, text = _quiet(fill.main, argv, bridge=lambda: st.bridge, connect=db.connect)
+        steps["submit"] = {"argv": argv[:1] + ["--hash", "(the preview's)"] + argv[3:], "exit": rc,
+                           "said": text.strip()[:600]}
     st.live["day_one"] = steps
     if rc != 0:
         raise SystemExit(f"the fill's submit was refused: {text.strip()}")
