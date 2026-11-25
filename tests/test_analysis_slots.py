@@ -548,6 +548,22 @@ def test_the_fall_cut_defaults_to_18_november_and_is_never_after_the_start(monke
             slots_config.fall_end()
 
 
+def test_the_vending_side_fall_cut_reads_the_setting_as_the_analysis_does(monkeypatch):
+    """`vending.slots.fall_cut` (the image ships `vending/` only) and `fall_end` must agree on every setting."""
+    from vending import settings, slots
+
+    monkeypatch.setattr(settings, "_FILE", {})
+    monkeypatch.delenv(slots_config.FALL_CUTOFF_SETTING, raising=False)
+    assert slots.FALL_CUT_SETTING == slots_config.FALL_CUTOFF_SETTING
+    assert slots.fall_cut() == slots_config.fall_end() == CUT
+    for value in ("2026-11-30T08:00:00-05:00", "2026-12-20T00:00:00-05:00"):
+        monkeypatch.setenv(slots_config.FALL_CUTOFF_SETTING, value)
+        assert slots.fall_cut() == slots_config.fall_end()
+    monkeypatch.setenv(slots_config.FALL_CUTOFF_SETTING, "18 Nov")
+    with pytest.raises(settings.SettingsError, match="FALL_CUTOFF"):
+        slots.fall_cut()
+
+
 def test_the_guard_refuses_a_poll_between_the_cut_and_the_start(monkeypatch):
     """The review's case on #146: the day-one fill goes in before the start, so its prices are the teams' own."""
     monkeypatch.delenv(slots_config.FALL_CUTOFF_SETTING)

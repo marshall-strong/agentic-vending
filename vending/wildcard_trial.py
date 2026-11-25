@@ -313,6 +313,15 @@ def _last_friday(conn: psycopg.Connection, now: datetime) -> tuple[datetime | No
     return start, tuple(sorted(r for r, at in rows if start <= at <= now)), None
 
 
+def requests_without_lines(conn: psycopg.Connection, now: datetime) -> tuple[datetime, ...]:
+    """When each fulfilled request with no lines was fulfilled, up to `now`: visits nothing says what they loaded
+    or pulled. The slow-seller clock (`machine_state._since_sale`) reads it too."""
+    return tuple(at for (at,) in conn.execute(
+        "select r.fulfilled_at from purchase_requests r where r.status = 'fulfilled' and r.fulfilled_at <= %s"
+        " and not exists (select 1 from purchase_lines l where l.request_id = r.request_id)"
+        " order by r.fulfilled_at", (now,)))
+
+
 def _requests_without_lines(conn: psycopg.Connection, start: datetime, now: datetime) -> list[str]:
     """Fulfilled requests, off-cycle ones too, with no lines and a `fulfilled_at` from `start` to `now`."""
     return [r for (r,) in conn.execute(
@@ -517,17 +526,15 @@ def _measure(count: stock.SlotCount, start: datetime, now: datetime, loads: list
              losses: list[tuple[datetime, str, int]] = ()) -> Measured:
     """One slot's intervals from `start`, with when its current product held stock.
 
-    `losses` are the slot's recorded coil losses (`coil_losses`): units of its product lost since it went in
-    leave the slot like sales, so a slot emptied by a loss isn't counted in stock until a load refills it."""
-    mine = [s for s in sales if s.slot == count.slot and s.at > count.since]
-    # At or after the load that put it in: a loss recorded at the load's own time comes after it, as in the stock
-    # replay (`demand.in_stock_spans` applies a load before a decrease at the same moment).
-    gone = [(at, units) for at, sku, units in losses if at >= count.since and sku == count.product]
-    # Only its own product's sales leave its stock: the outgoing product's share of a window split at the swap
-    # (`stock._split_at_changes`) is booked by the first poll after it, but came out of the old count.
-    spans = demand.in_stock_spans([(at, u) for at, u in loads if at >= count.since],
-                                  [(s.at, s.units) for s in mine if s.product == count.product] + gone,
-                                  now, count.units)
+    When it held stock comes from the stock replay's own history of the run (`stock.SlotCount.history`,
+    `demand.in_stock_spans`), as in the machine state's demand: every load, sale (attributed or not), pull and
+    coil loss the replay applied to it, in its order, and nothing it ignored, as known at `now`
+    (`stock.run_history`: nothing a later poll booked). So a sale booked at the run's first load empties the slot
+    as it did in the replay, and a loss counts once. `loads` and `losses` are no longer read; the callers still
+    pass them. The intervals still reconcile the sales the replay booked at their polls (`SaleCost.at`), from the
+    run's first moment on."""
+    mine = [s for s in sales if s.slot == count.slot and s.at >= count.since]
+    spans = demand.in_stock_spans(stock.run_history(count, until=now), now)
     return Measured(count.slot, count.product, start,
                     intervals(readings, start, count.product, mine, spans, ceiling_cents))
 
@@ -736,7 +743,11 @@ def silent_slots(conn: psycopg.Connection, now: datetime, counts: dict[str, stoc
             not_silent.append(NotSilent(slot, f"{days} of {SILENT_DAYS} in-stock class days seen since the window "
                                               "began; not silent yet"))
             continue
-        last_sale = max((s.at for s in sales if s.slot == slot), default=None)
+        # Only sales of its current product since it went in, at the moment they left the count: the old
+        # product's share of a window split at the swap is booked at the poll after it (`taken_at`). An
+        # unattributed sale (no product) may have been this one's, so it counts.
+        last_sale = max((s.taken_at or s.at for s in sales if s.slot == slot and s.product in (c.product, None)
+                         and (s.taken_at or s.at) > c.since), default=None)
         last_load = max((at for at, _ in loads.get(slot, [])), default=None)
         quiet = max(at for at in (last_sale, last_load, c.since) if at is not None)
         price = next((p for _, _, _, p in reversed(mine) if p is not None), None)

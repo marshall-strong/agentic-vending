@@ -3,8 +3,9 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from vending.demand import (OWN_RATE_AFTER, class_days_in_stock, class_days_left, estimate, in_stock_spans,
-                            segment_for)
+from vending.demand import (OWN_RATE_AFTER, class_days_in_stock, class_days_left, estimate, in_stock_since,
+                            in_stock_spans, segment_for)
+from vending.stock import Applied
 
 UTC = timezone.utc
 FRI = datetime(2026, 12, 4, 20, tzinfo=UTC)        # first Friday visit, 3 PM Eastern
@@ -15,11 +16,18 @@ def day(n, hour=16):
     return (FRI + timedelta(days=n)).replace(hour=hour)
 
 
+def history(loads, sales, *more):
+    """A run's history as the stock replay applies it (`stock.SlotCount.history`): `loads` and `sales` as
+    `(at, units)`, plus any other `Applied`, in time order, a load first at one moment."""
+    applied = [Applied(at, "load", units) for at, units in loads] + [Applied(at, "sale", units) for at, units in sales]
+    return sorted(applied + list(more), key=lambda a: (a.at, a.kind != "load"))
+
+
 def test_a_slot_that_sells_out_counts_only_the_days_it_held_stock():
     # 8 in on Friday; 3 sold Monday, 3 Tuesday, 2 Wednesday: empty from Wednesday on.
     loads = [(FRI, 8)]
     sales = [(day(3), 3), (day(4), 3), (day(5), 2)]
-    spans = in_stock_spans(loads, sales, now=day(7))
+    spans = in_stock_spans(history(loads, sales), now=day(7))
     assert spans == [(FRI, day(5))]
     days = class_days_in_stock(spans)
     assert len(days) == 3                                           # Mon, Tue, Wed; not Thu or Fri
@@ -32,7 +40,7 @@ def test_a_slot_that_sells_out_counts_only_the_days_it_held_stock():
 def test_a_top_up_after_selling_out_starts_a_new_span():
     loads = [(FRI, 8), (day(7), 8)]                                  # sold out Wednesday, topped up next Friday
     sales = [(day(3), 4), (day(5), 4), (day(10), 2)]
-    spans = in_stock_spans(loads, sales, now=day(11))
+    spans = in_stock_spans(history(loads, sales), now=day(11))
     assert spans == [(FRI, day(5)), (day(7), day(11))]
     days = class_days_in_stock(spans)
     assert len(days) == 3 + 2                                        # Mon-Wed, then Mon-Tue of the next week
@@ -42,20 +50,59 @@ def test_a_top_up_after_selling_out_starts_a_new_span():
 
 
 def test_a_slot_still_holding_stock_runs_to_now():
-    spans = in_stock_spans([(FRI, 11)], [(day(3), 2)], now=day(6))
+    spans = in_stock_spans(history([(FRI, 11)], [(day(3), 2)]), now=day(6))
     assert spans == [(FRI, day(6))]
     assert len(class_days_in_stock(spans)) == 4                      # Mon to Thu
+    assert in_stock_since(history([(FRI, 11)], [(day(3), 2)])) == FRI
 
 
-def test_losses_that_empty_the_slot_end_the_span_at_the_last_sale():
-    # The replay says 0 left (2 lost), though loads minus sales leave 2.
-    spans = in_stock_spans([(FRI, 8)], [(day(3), 6)], now=day(7), units_now=0)
-    assert spans == [(FRI, day(3))]
+def test_a_loss_that_empties_the_slot_ends_the_span_when_the_replay_applied_it():
+    # 6 sold Monday, the last 2 lost Tuesday. The replay's history has the loss itself, so the span ends there,
+    # not at the last sale as when only the count left at the end said the slot was empty.
+    run = history([(FRI, 8)], [(day(3), 6)], Applied(day(4), "loss", 2))
+    assert in_stock_spans(run, now=day(7)) == [(FRI, day(4))]
+    assert in_stock_since(run) is None
+    # A pull empties it the same way; a loss at the last moment still leaves no stretch running.
+    assert in_stock_spans(history([(FRI, 8)], [], Applied(day(7), "pull", 8)), now=day(7)) == [(FRI, day(7))]
+    assert in_stock_since(history([(FRI, 8)], [], Applied(day(7), "pull", 8))) is None
+
+
+def test_a_count_lowers_the_stock_and_an_empty_one_ends_the_span():
+    # A person counts 3 on Monday where the replay says 8: the 3 sold on Tuesday empty it. One that finds it
+    # empty ends the span then, and a refill starts a new one.
+    assert in_stock_spans(history([(FRI, 8)], [(day(4), 3)], Applied(day(3), "count", 3)), now=day(6)) == [
+        (FRI, day(4))]
+    run = history([(FRI, 8), (day(6), 4)], [], Applied(day(3), "count", 0))
+    assert in_stock_spans(run, now=day(10)) == [(FRI, day(3)), (day(6), day(10))]
+    assert in_stock_since(run) == day(6)
 
 
 def test_overselling_does_not_open_a_span():
-    spans = in_stock_spans([(FRI, 2)], [(day(3), 2), (day(4), 1)], now=day(6))
+    spans = in_stock_spans(history([(FRI, 2)], [(day(3), 2), (day(4), 1)]), now=day(6))
     assert spans == [(FRI, day(3))]
+
+
+def test_a_day_is_in_stock_when_its_midnight_falls_in_a_span_end_excluded():
+    # Review round 2, item 7. Midnight Eastern on Monday 7 Dec is 05:00 UTC.
+    monday, wednesday = datetime(2026, 12, 7, 5, tzinfo=UTC), datetime(2026, 12, 9, 5, tzinfo=UTC)
+    assert class_days_in_stock([(monday, wednesday)]) == [datetime(2026, 12, d).date() for d in (7, 8)]
+    assert class_days_in_stock([(FRI, monday)]) == []                       # emptied as Monday began
+    assert class_days_in_stock([(FRI, monday + timedelta(minutes=1))]) == [monday.date()]
+
+
+def test_sales_in_a_window_holding_a_count_may_have_come_after_it():
+    # PR #256 review, item 5 (it reverses review round 2, item 4, which credited them to before the count). 5 in; a
+    # window from Friday evening to Monday evening books 3, and an exact count of 2 on Monday afternoon falls
+    # inside it. The sales may all have come after the count, so the sure stock is 2 - 3, never below 0: the span
+    # ends at the poll. A count of 4 leaves 1. Seeing 0 ends the span at the count.
+    def run(seen):
+        return history([(FRI, 5)], [], Applied(day(3, 22), "sale", 3, since=FRI + timedelta(hours=2)),
+                       Applied(day(3, 18), "count", seen))
+
+    assert in_stock_spans(run(2), now=day(6)) == [(FRI, day(3, 22))]
+    assert in_stock_spans(run(4), now=day(6)) == [(FRI, day(6))]
+    assert in_stock_spans(run(0), now=day(6)) == [(FRI, day(3, 18))]
+    assert in_stock_since(run(2)) is None
 
 
 def test_the_prior_is_the_segment_priced_nearest():
