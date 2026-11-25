@@ -1019,3 +1019,78 @@ def test_a_loss_at_midnight_leaves_that_day_out_of_stock(conn):
     five_coke(conn, days=(2,))
     lose(conn, 5, datetime(2026, 11, 2, 5, tzinfo=UTC))
     assert slot_15(conn, datetime(2026, 11, 2, 23, tzinfo=UTC)).class_days_in_stock == 0
+
+
+# --- Kevin's decisions, 25 Nov (#172 item 3) ---------------------------------------------------------------
+# Nobody counts slots or confirms a swap after go-live, so the clock must not advance on unclear evidence.
+
+def hourly_coke(conn, until, skip=(), step=timedelta(hours=1), units=100):
+    """Slot 15: 5 Coke in on Fri 30 Oct (3:30 PM Eastern), and a poll every `step` from 2 PM that day to `until`,
+    reading its units counter at `units` (no sale), except in each `(begin, end)` of `skip`."""
+    fulfilled(conn, "r1", datetime(2026, 10, 30, 19, 30, tzinfo=UTC), ("15", "COKE20", "primary", "5.00", 5, 0, 0))
+    at, n = datetime(2026, 10, 30, 18, tzinfo=UTC), 0
+    while at <= until:
+        if not any(begin <= at < end for begin, end in skip):
+            store_poll(conn, f"h{n}", at.isoformat(), {"15": (250, units)})
+        at, n = at + step, n + 1
+
+
+def test_hourly_readings_watch_every_class_day(conn):
+    # The base case for the tests below: read every hour, Mon 2 to Mon 9 Nov are six silent class days.
+    hourly_coke(conn, datetime(2026, 11, 10, 6, tzinfo=UTC))
+    s = slot_15(conn, TUESDAY)
+    assert (s.class_days_in_stock, s.class_days_since_sale) == (7, 6)
+
+
+def test_a_gap_of_more_than_six_hours_between_readings_starts_the_clock_again(conn):
+    # Decision 2. No reading of slot 15 from 8 AM to 3 PM Eastern on Wednesday 4 Nov: 7 hours. The counter is flat
+    # on both sides, but a restart and a sale inside the gap can't be ruled out. Only Thu 5, Fri 6 and Mon 9 count.
+    gap = (datetime(2026, 11, 4, 13, tzinfo=UTC), datetime(2026, 11, 4, 20, tzinfo=UTC))
+    hourly_coke(conn, datetime(2026, 11, 10, 6, tzinfo=UTC), skip=(gap,))
+    assert slot_15(conn, TUESDAY).class_days_since_sale == 3
+
+
+def test_a_gap_of_six_hours_is_not_a_break(conn):
+    # Decision 2. Readings every 6 hours, exactly: no gap of more than 6 hours, so all six days count.
+    hourly_coke(conn, datetime(2026, 11, 10, 6, tzinfo=UTC), step=timedelta(hours=6))
+    assert slot_15(conn, TUESDAY).class_days_since_sale == 6
+
+
+def test_a_gap_on_the_takings_counter_alone_starts_the_clock_again(conn):
+    # Decision 2: both counters. The units counter is read every hour, but the takings counter is missing from
+    # 8 AM to 3 PM Eastern on Wednesday (a reading with no PA2 cents is stored as null).
+    hourly_coke(conn, datetime(2026, 11, 10, 6, tzinfo=UTC))
+    conn.execute("update poll_selections set lifetime_sales_cents = null from polls p"
+                 " where p.session_id = poll_selections.session_id and selection = '15'"
+                 " and p.started_at >= %s and p.started_at < %s",
+                 (datetime(2026, 11, 4, 13, tzinfo=UTC), datetime(2026, 11, 4, 20, tzinfo=UTC)))
+    assert slot_15(conn, TUESDAY).class_days_since_sale == 3
+
+
+def test_a_count_whose_name_matches_no_sku_says_nothing_about_the_product(conn):
+    # Decision 1. A door count on Wednesday writes "Coca-Cola 20oz bottle", 5 units. That text is no SKU we know,
+    # so it says nothing about which product is there: the run isn't broken (the clock still needs the counters).
+    hourly_coke(conn, datetime(2026, 11, 10, 6, tzinfo=UTC))
+    count_15(conn, datetime(2026, 11, 4, 15, tzinfo=UTC), "Coca-Cola 20oz bottle", 5)
+    s = slot_15(conn, TUESDAY)
+    assert (s.class_days_in_stock, s.class_days_since_sale) == (7, 6)
+
+
+def test_a_count_with_no_known_sku_that_found_the_slot_empty_still_empties_it(conn):
+    # Decision 1. Whatever its name, a count of 0 found the slot empty: no stock from then, so no clock.
+    hourly_coke(conn, datetime(2026, 11, 10, 6, tzinfo=UTC))
+    count_15(conn, datetime(2026, 11, 4, 15, tzinfo=UTC), "Coca-Cola 20oz bottle", 0)
+    s = slot_15(conn, TUESDAY)
+    assert (s.class_days_in_stock, s.class_days_since_sale) == (3, 0)
+
+
+def test_the_day_one_fill_starts_the_clock_even_after_a_test_load_of_the_same_drink(conn):
+    # A test purchase put 5 Coke in slot 15 on Fri 30 Oct. The ledger opens on Fri 6 Nov, and the first fill after it
+    # (the day-one fill's place here) loads Coke again on Mon 9 Nov at 3 PM Eastern. The test load is left out of
+    # the stock, so the run and its clock start at the fill: Tue 10 to Fri 13 are four silent class days, not ten.
+    hourly_coke(conn, datetime(2026, 11, 14, 6, tzinfo=UTC), step=timedelta(hours=3))
+    conn.execute("insert into ledger_entries (id, at, kind, amount_cents, detail, recorded_by)"
+                 " values (1, %s, 'opening', 60000, 'opening', 'kevin')", (datetime(2026, 11, 6, 20, tzinfo=UTC),))
+    fulfilled(conn, "fill", datetime(2026, 11, 9, 20, tzinfo=UTC), ("15", "COKE20", "primary", "5.00", 5, 0, 0))
+    s = slot_15(conn, datetime(2026, 11, 14, 6, 30, tzinfo=UTC))
+    assert (s.stock_on_hand, s.class_days_since_sale) == (5, 4)
