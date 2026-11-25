@@ -415,6 +415,9 @@ A check with an `outside` verdict is also a row in the incident log and a **Prob
 and the agent's next briefing has it (`books_outside_<figure>`). The worker sends one check a day only when
 `TRACKING_DAILY=on` ([`deploy.md`](deploy.md)); off, a person sends with `python -m vending.tracking check --send`.
 
+A round the worker skipped because a slot has no counted receipt (#254) is a **Check** in Needs attention and a
+line in the panel: which slots, since when, and the latest round. It goes once a check is sent after it.
+
 ## Catalog requests
 
 The instructors must approve every product for the first fill by Wed 25 Nov 2026, so the panel lists all of

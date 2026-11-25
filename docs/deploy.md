@@ -64,6 +64,11 @@ round, so it never reads books the round's syncs never brought in. With no ledge
 opening yet it logs a line and skips. The verdicts show on the dashboard (Tracking check), an `outside` one
 in the incident log and the agent's briefing.
 
+A slot with no counted receipt (a day-one line that came back unavailable) is a skip, not a failed job (#254),
+when it is the only reason the figures can't be worked out. Nothing is sent and nothing is guessed. Each skipped
+round is counted in `tracking_skips` (migration 038), and the dashboard shows a **Check** line until a check is
+sent after it. Any other reason still fails the job.
+
 **Friday reads around our visit** (`vending/visit_polls.py`, #172). Besides the hourly rounds, the
 worker asks the bridge to read the machine live (`POST /api/v1/poll`, about 8.5 s) on Fridays, once a
 minute from 2:45 PM to 7 PM Eastern. Why: the machine's counters are cumulative and are read only when

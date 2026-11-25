@@ -44,8 +44,12 @@ all counted under the send's lock, so two replicas cannot together exceed them o
 wait. However it retries, one successful send a day is the most there ever is.
 
 **Skips.** No ledger opening yet, or no poll of ours since it: the job logs a line and exits 0. The
-manual command refuses the same way (`tracking.CantCompute`). After the opening, figures that can't be
-worked out, a refusal or a send with no usable answer fail the job, so /health shows it.
+manual command refuses the same way (`tracking.CantCompute`). A slot no counted receipt has loaded, when
+that is the only reason the figures can't be worked out (`tracking.NotLoaded`, #254): the round is a skip.
+It sends nothing and guesses nothing, records the skip in `tracking_skips` (one row a day, with its slots
+and rounds), logs a line and exits 0. The dashboard shows a Check line until a check is sent after it
+(`attention`). After the opening, any other figures that can't be worked out, a refusal or a send with no
+usable answer fail the job, so /health shows it.
 
 Its log lines are our own words: the verdicts, `tracking.said` for a refusal, never the bridge's text.
 """
@@ -79,6 +83,8 @@ WORKER = "worker (daily)"        # `sent_by` on the worker's sends
 STALE_POLL = timedelta(hours=6)  # an older newest poll means the history sync has stopped
 DAILY_TRIES = tracking.DailyTries(WORKER, MAX_TRIES, MAX_TRANSIENT, BACKOFF, BACKOFF_CAP)
 CHECKS_SHOWN = 7
+NOT_LOADED = "not_loaded"           # `tracking_skips.reason`: a slot no counted receipt has loaded (#254)
+SKIP_SHOWN = timedelta(hours=26)    # a skip older than this is not shown: the job is off, or the day moved on
 
 # Where the agent looks next for each figure.
 LOOKUPS = {"cash": "get_account_balance", "sales_tax_owed": "get_account_balance",
@@ -198,6 +204,15 @@ def run(conn: psycopg.Connection, bridge: Callable[[], Any] | None = None,
     try:
         outcome = tracking.send(conn, (bridge or _bridge)(), prepare, WORKER, now=stamp, once_a_day=True,
                                 window=(start, LAST_SEND), daily_tries=DAILY_TRIES, stale=STALE_POLL)
+    except tracking.NotLoaded as error:
+        # No guess about an unloaded slot (#254): a skip with its reason, not a failed job, until it is loaded.
+        try:
+            record_skip(conn, stamp(), error.slots)
+        except psycopg.Error as failure:
+            log(f"tracking_daily: not sent. {error} Recording the skip failed ({type(failure).__name__}).")
+            return 1
+        log(f"tracking_daily: skipped, nothing sent until the slot is loaded. {error}")
+        return 0
     except (tracking.CantCompute, SlotsNotRecorded) as error:
         log(f"tracking_daily: not sent. {error}")
         return 1
@@ -244,6 +259,44 @@ def run(conn: psycopg.Connection, bridge: Callable[[], Any] | None = None,
     log(f"tracking_daily: check #{outcome.id}: {outcome.status or 'no answer'}: {words}. "
         "It may have used today's check, so none is sent again today.")
     return 3 if outcome.status is None or outcome.error_type == "malformed_answer" else 1
+
+
+def record_skip(conn: psycopg.Connection, at: datetime, slots: tuple[str, ...],
+                reason: str = NOT_LOADED) -> None:
+    """Count one skipped round in `tracking_skips`: one row per Eastern day and reason, with the latest slots."""
+    conn.execute(
+        "insert into tracking_skips (eastern_day, reason, slots, first_at, last_at) values (%s, %s, %s, %s, %s)"
+        " on conflict (eastern_day, reason) do update set slots = excluded.slots,"
+        " last_at = greatest(tracking_skips.last_at, excluded.last_at), rounds = tracking_skips.rounds + 1",
+        (at.astimezone(EASTERN).date(), reason, list(slots), at, at))
+
+
+def latest_skip(conn: psycopg.Connection, now: datetime) -> dict | None:
+    """The newest skip up to `now`, from the last `SKIP_SHOWN`, with no check sent at or after its latest round;
+    else None. A check sent after it means the slots were loaded, so the skip is over."""
+    row = conn.execute(
+        "select s.reason, s.slots, s.first_at, s.last_at, s.rounds from tracking_skips s"
+        " where s.last_at <= %s and s.last_at > %s"
+        " and not exists (select 1 from tracking_checks c where c.sent_at >= s.last_at and c.sent_at <= %s)"
+        " order by s.last_at desc, s.id desc limit 1", (now, now - SKIP_SHOWN, now)).fetchone()
+    if row is None:
+        return None
+    reason, slots, first_at, last_at, rounds = row
+    # Since the first skip after the last check sent before this one: the skip may run over several days.
+    since = conn.execute(
+        "select min(first_at) from tracking_skips where reason = %s and last_at <= %s and first_at >"
+        " coalesce((select max(sent_at) from tracking_checks where sent_at < %s), '-infinity')",
+        (reason, last_at, first_at)).fetchone()[0]
+    return {"reason": reason, "slots": list(slots), "since": since or first_at, "last_at": last_at,
+            "rounds": rounds}
+
+
+def _skip_text(skip: dict) -> str:
+    slots = skip["slots"]
+    named = f"slot{'s' if len(slots) > 1 else ''} {', '.join(slots)}"
+    return (f"No tracking check sent since {_when(skip['since'])}: no counted receipt has loaded {named}, so "
+            f"{'their' if len(slots) > 1 else 'its'} count isn't known and nothing is guessed. Each round is "
+            f"skipped until {'they are' if len(slots) > 1 else 'it is'} loaded (last {_when(skip['last_at'])}).")
 
 
 def _bridge():
@@ -313,7 +366,7 @@ def panel(conn: psycopg.Connection, now: datetime) -> dict:
     except settings.SettingsError:
         on, at, wrong = False, None, True
     return {"on": on, "at": None if at is None else at.strftime("%H:%M"), "wrong_setting": bool(wrong),
-            "checks": latest(conn, now), "answered": latest_answered(conn, now)}
+            "checks": latest(conn, now), "answered": latest_answered(conn, now), "skip": latest_skip(conn, now)}
 
 
 def newest_answered(checks: list[dict]) -> dict | None:
@@ -324,12 +377,15 @@ def attention(data: dict) -> list[tuple[str, str]]:
     """(level, text) for the dashboard's Needs attention: the latest answered check read outside.
     The panel carries it as `answered` (`latest_answered`), not the newest answered one among the
     last `CHECKS_SHOWN` sends, so refusals after an `outside` check cannot hide it."""
+    out = []
+    if skip := data.get("skip"):
+        out.append(("warn", _skip_text(skip)))
     found = data.get("answered") or newest_answered(data["checks"])
     if found is None or not found["outside"]:
-        return []
+        return out
     names = ", ".join(NAMES[k] for k in found["outside"])
     return [("bad", f"The bridge's tracking check #{found['id']}, as of the poll at {_when(found['as_of_time'])}, "
-                    f"says our books are outside its tolerance on: {names}. See Tracking check below.")]
+                    f"says our books are outside its tolerance on: {names}. See Tracking check below."), *out]
 
 
 def _when(at: datetime | None) -> str:
@@ -376,6 +432,8 @@ def panel_html(panel_: dict) -> str:
                 f"NAME</code>, or the team sets <code>{MODE_SETTING}=on</code>.")
     lede = (f'<p class="sub lede">The bridge compares our books with its own, as of one poll: within $1 for money, '
             f'2 units for counts. It never says by how much or which slot. {mode}</p>')
+    if skip := data.get("skip"):
+        lede += f'<p class="sub">{escape(_skip_text(skip))}</p>'
     checks = data["checks"]
     if not checks:
         return lede + '<p class="empty">No checks sent yet.</p>'
