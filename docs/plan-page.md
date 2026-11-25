@@ -65,13 +65,25 @@ python -m vending.fill --submit --hash HASH --accept-deviations --by NAME   # se
    primary, so each is compared on its own. Each one that differs is listed, with what the pick buys
    and what that choice buys. The send refuses with `pick_deviation` unless you add
    `--accept-deviations`, and `action_log` records the flag and the list. Or load and pick a revised plan.
+   A substitute (below) is compared on its cost only: listed when its packs cost more than the pick's.
 4. Send it with the hash from step 1. The hash covers the request (its lines, the worst-case cost
    and the visit fee), the picked plan's ID and our slots (the server's assignment). If any of those
    changed since the preview, the command refuses with `plan_changed`; run the preview again. A hash
    from another plan or assignment never sends this one. The hash does not cover spendable cash or
    the price ceiling. Those are checked again at the send, right before the POST (below).
 
-While the send runs, it holds the pick, the slot assignment, the sourcing table, our catalog copy,
+**Substitutes.** A line with no same-drink alternate may buy another drink instead, stored for the picked plan in
+`fill_substitutes` (migration 039) by `python -m vending.alternates` ([`sourcing.md`](sourcing.md)).
+
+- The request's alternate names the substitute's `sku`, at its own primary sourcing row, with its own
+  `change_product`. The bridge takes that (`docs/dex-bridge.md`).
+- Its max per pack is the lower of its row's and the one stored.
+- Refused: on a pooled line, a drink not active in the catalog, one that doesn't fit the column, units staying in
+  the slot (`bad_sourcing`); a row with no checked price (`no_checked_price`) or one over a week old
+  (`stale_price`).
+- A line with a same-drink alternate never uses one. Without a stored substitute, the request is as before.
+
+While the send runs, it holds the pick, the slot assignment, the sourcing table, the substitutes, our catalog copy,
 the ledger, `config` and the receipt sync's lock. A `plan_store pick`, a new slot assignment, a
 `sourcing set`, a change to the ledger's opening, a `config set` (such as a price ceiling) or the
 receipt sync waits until the send is over. That is a few seconds, plus the POST. The checks also run

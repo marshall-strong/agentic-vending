@@ -25,6 +25,14 @@ The cheapest per unit wins (then in stock, then Amazon, Walmart, Costco, BJs). A
 alone is over the pick's, with a price under it, gets its max lowered to the pick's (C4 on 25 Nov). An alternate
 that differs from the pick in packs or units is replaced when a price fits, else left and listed.
 
+A line still without one gets a substitute: another drink of the plan (Kevin, 25 Nov: "double stock two slots
+if needed"), at its own fresh primary row, stored in `fill_substitutes` for the picked plan. The fill sends it as
+the line's alternate, with its own `sku` (`vending.fill.with_substitutes`). Its row must be checked within
+`--max-age`, at a store whose cutoff hasn't passed. Its max per pack is held so its packs cost at most the pick's
+most-we-pay for the line. The cheapest per unit is tried first. The planner refuses one on a pooled line, one that
+isn't active in the catalog and one that doesn't fit the column, so those lines are listed without one. A
+same-drink alternate always wins: the fill uses a substitute only for a line with none.
+
 Each new alternate is tried on the fill's own planner first (`planning.plan_gathered`, pure): it is kept only if
 the fill gains no refusal and no deviation, and its most-we-pay (each line at its dearer choice) stays within the
 $400 day-one cap (`plan_rounds.FILL_CAP_CENTS`) and leaves the spendable floor out of the $600 opening. Lines are
@@ -40,7 +48,7 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from fractions import Fraction
 
@@ -86,12 +94,17 @@ class Line:
     primary: sourcing.Option | None
     before: sourcing.Option | None      # the alternate as stored
     after: sourcing.Option | None       # the alternate this step would store; `before` when it changes nothing
-    action: str                         # kept, set, replaced, lowered, none
+    action: str                         # kept, set, replaced, lowered, substitute, none
     why: str                            # what changed, or why there is none
 
     @property
     def changed(self) -> bool:
-        return self.action in ("set", "replaced", "lowered")
+        return self.action in ("set", "replaced", "lowered", "substitute")
+
+    @property
+    def substitutes(self) -> bool:
+        """The backup is another drink (`after.sku` differs), stored in `fill_substitutes`."""
+        return self.after is not None and self.after.sku != self.sku
 
 
 @dataclass(frozen=True)
@@ -112,6 +125,8 @@ class Result:
     after: Trial
     floor_cents: int
     read: dict                          # (sku, rank) -> the row as read, for the write's check
+    subs_read: dict = field(default_factory=dict)   # the picked plan's substitutes as read (`fill.substitutes`)
+    pooled: tuple[str, ...] = ()        # the plan's drinks in more than one slot
 
     def with_backup(self, when: str) -> int:
         """Lines whose alternate the fill takes without a `pick_deviation`: now (`before`) or `after`."""
@@ -119,7 +134,7 @@ class Result:
         count = 0
         for ln in self.lines:
             alt = ln.before if when == "now" else ln.after
-            if alt is not None and not _alternate_deviates(trial, ln.sku):
+            if alt is not None and not _alternate_deviates(trial, ln.sku) and ln.action != "none":
                 count += 1
         return count
 
@@ -210,13 +225,16 @@ def _ordered(rows: dict) -> tuple[sourcing.Option, ...]:
     return tuple(sorted(rows.values(), key=lambda o: (o.sku, sourcing.RANKS.index(o.rank))))
 
 
-def trial(gathered: planning.Gathered, checked: plan_rounds.Round, rows: dict) -> Trial:
-    """The fill planned on `rows` instead of the table: its deviations, refusals and most-we-pay. Pure."""
+def trial(gathered: planning.Gathered, checked: plan_rounds.Round, rows: dict,
+          subs: dict | None = None) -> Trial:
+    """The fill planned on `rows` instead of the table, with `subs` as the fill applies them
+    (`fill.with_substitutes`): its deviations, refusals and most-we-pay. Pure."""
     table = _ordered(rows)
     given = replace(gathered, sourcing_rows=table, current=replace(gathered.current,
                                                                     sourcing_table=sourcing.to_planner(list(table))))
+    given, swapped = fill.with_substitutes(given, checked, subs or {})
     planned = planning.plan_gathered(given, fill.desired_state(checked), pool=True)
-    refusals = frozenset(_key(r) for r in (*planned.refusals, *fill.input_refusals(checked, given)))
+    refusals = frozenset(_key(r) for r in (*swapped, *planned.refusals, *fill.input_refusals(checked, given)))
     cost = planned.cost
     most = 0 if cost is None else cost.max_cents - cost.visit_fee_cents
     return Trial(planned, frozenset(fill.deviations(planned, checked)), refusals, most)
@@ -233,7 +251,7 @@ def _key(r: Refusal) -> tuple[str, str | None, str | None]:
 
 
 def _alternate_deviates(t: Trial, sku: str) -> bool:
-    return any(d.startswith(f"{sku} (alternate") for d in t.deviations)
+    return any(d.startswith((f"{sku} (alternate", f"{sku} (substitute")) for d in t.deviations)
 
 
 def _worse(now: Trial, then: Trial, floor_cents: int) -> str | None:
@@ -274,7 +292,14 @@ def backups(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = Non
     check = price_search.Memory.read(conn).check_model
     trusted = lambda model: not price_search.needs_check(table, model, check)  # noqa: E731
     floor_cents = gathered.config.spendable_floor_cents
-    first = current = trial(gathered, pick.round, rows)
+    subs = fill.substitutes(conn, pick.id)
+    subs_read = dict(subs)
+    first = current = trial(gathered, pick.round, rows, subs)
+    in_slots: dict[str, int] = {}
+    for s in pick.round.slots.values():
+        if s.sku:
+            in_slots[s.sku] = in_slots.get(s.sku, 0) + 1
+    pooled = tuple(sorted(sku for sku, n in in_slots.items() if n > 1))
     lines = []
     for p in sorted(pick.round.purchases, key=lambda p: p.sku):
         primary, alt = rows.get((p.sku, "primary")), rows.get((p.sku, "alternate"))
@@ -284,6 +309,10 @@ def backups(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = Non
         deviates = _alternate_deviates(current, p.sku)
         if alt is not None and alt.expected_cents is not None and not deviates:
             lines.append(Line(p.sku, primary, alt, alt, "kept", "already has one the fill takes"))
+            continue
+        stored = _substitute_row(rows, subs.get(p.sku)) if alt is None else None
+        if stored is not None and not deviates and not (current.refusals - trial(gathered, pick.round, rows).refusals):
+            lines.append(Line(p.sku, primary, stored, stored, "kept", f"its stored substitute {stored.sku}"))
             continue
         fit = min(p.most_cents // max(p.packs, 1), planner.MAX_PRICE_PER_PACK_CENTS)
         tries: list[tuple[str, sourcing.Option, str]] = []
@@ -307,21 +336,76 @@ def backups(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = Non
             tries.append(("set" if alt is None else "replaced", new,
                           f"{price.store} {price.units}-pack {_usd(price.cents)} (max {_usd(new.max_cents)}), "
                           f"looked up {_when(price.at)}"))
+        done = False
         for action, new, said in tries:
             attempt = {**rows, (p.sku, "alternate"): new}
-            tried = trial(gathered, pick.round, attempt)
+            tried = trial(gathered, pick.round, attempt, subs)
             problem = _worse(current, tried, floor_cents)
             if problem is None:
                 rows, current = attempt, tried
                 lines.append(Line(p.sku, primary, alt, new, action, said))
+                done = True
                 break
             why[new.store] = f"{said.split(' (')[0].split(':')[0]}: {problem}" if action != "lowered" else problem
-        else:
-            reasons = "; ".join(f"{store}: {text}" for store, text in why.items()) or "no other store"
-            if alt is not None:
-                reasons = f"the stored {alt.store} alternate differs from the pick and nothing fits. {reasons}"
-            lines.append(Line(p.sku, primary, alt, alt, "none", reasons))
-    return Result(pick, since, visit, tuple(lines), first, current, floor_cents, read)
+        if done:
+            continue
+        # No same-drink backup: another drink of the plan, unless the line keeps a stored same-drink alternate.
+        if alt is None:
+            picked_sub = None
+            for option, most in _substitute_candidates(p, rows, pick.round, now, since, visit):
+                if option.expected_cents > most:
+                    why[option.sku] = (f"{option.sku} {_usd(option.expected_cents)} a pack, above the {_usd(most)} "
+                                       "the pick allows")
+                    continue
+                attempt_subs = {**subs, p.sku: fill.Substitute(p.sku, option.sku, most)}
+                tried = trial(gathered, pick.round, rows, attempt_subs)
+                problem = _worse(current, tried, floor_cents)
+                if problem is None:
+                    subs, current = attempt_subs, tried
+                    picked_sub = replace(option, sku=option.sku, rank="alternate", max_cents=min(option.max_cents, most))
+                    break
+                why[option.sku] = f"{option.sku}: {problem}"
+            if picked_sub is not None:
+                lines.append(Line(p.sku, primary, None, picked_sub, "substitute",
+                                  f"{picked_sub.sku} {_option(picked_sub)}, another drink of the plan"))
+                continue
+        reasons = "; ".join(f"{store}: {text}" for store, text in why.items()) or "no other store"
+        if alt is not None:
+            reasons = f"the stored {alt.store} alternate differs from the pick and nothing fits. {reasons}"
+        if p.sku in pooled:
+            reasons = f"pooled over {in_slots[p.sku]} slots, so no substitute. {reasons}"
+        lines.append(Line(p.sku, primary, alt, alt, "none", reasons))
+    return Result(pick, since, visit, tuple(lines), first, current, floor_cents, read, subs_read, pooled)
+
+
+def _substitute_row(rows: dict, sub: fill.Substitute | None) -> sourcing.Option | None:
+    """A stored substitute as the row it buys from: its drink's primary, held to its max."""
+    row = rows.get((sub.substitute, "primary")) if sub is not None else None
+    if row is None or row.expected_cents is None:
+        return None
+    return replace(row, rank="alternate", max_cents=min(row.max_cents, sub.max_cents))
+
+
+def _substitute_candidates(p: plan_rounds.Purchase, rows: dict, checked: plan_rounds.Round, now: datetime,
+                           since: datetime, visit: date) -> list[tuple[sourcing.Option, int]]:
+    """The plan's other drinks that could stand in for `p`: a checked primary row looked up since `since`, at a
+    store whose cutoff for `visit` hasn't passed. Each with the most per pack that keeps its packs within the pick's
+    most-we-pay for `p`. Cheapest per unit first."""
+    found = []
+    for other in sorted({s.sku for s in checked.slots.values() if s.sku and s.sku != p.sku}):
+        row = rows.get((other, "primary"))
+        if row is None or row.expected_cents is None or row.checked_at <= since or row.stock == "out_of_stock":
+            continue
+        if price_search.past_cutoff(row.store, visit, now):
+            continue
+        packs = planner.packs_for(max(p.units_loaded, 1), row.units_per_pack)
+        if packs > planner.MAX_PACKS:
+            continue
+        most = min(row.max_cents, p.most_cents // packs, planner.MAX_PRICE_PER_PACK_CENTS)
+        found.append((row, most))
+    found.sort(key=lambda f: (Fraction(f[0].expected_cents, f[0].units_per_pack),
+                              price_search.STORE_ORDER.index(f[0].store), f[0].sku))
+    return found
 
 
 def write(conn: psycopg.Connection, result: Result, by: str, now: datetime | None = None) -> list[str]:
@@ -341,7 +425,7 @@ def write(conn: psycopg.Connection, result: Result, by: str, now: datetime | Non
     if over and changed:
         raise Refused([Refusal(OVER_LIMIT, why) for why in over])
     arguments = {"by": by.strip(), "plan_id": result.picked.id, "label": result.picked.label,
-                 "alternates": [{"sku": ln.sku, "action": ln.action, "store": ln.after.store,
+                 "alternates": [{"sku": ln.sku, "action": ln.action, "buys": ln.after.sku, "store": ln.after.store,
                                  "units_per_pack": ln.after.units_per_pack, "price_cents": ln.after.expected_cents,
                                  "max_cents": ln.after.max_cents} for ln in changed]}
     said: list[str] = []
@@ -352,6 +436,9 @@ def write(conn: psycopg.Connection, result: Result, by: str, now: datetime | Non
         conn.execute("lock table first_fill_plans in share mode")
         if fill._picked_row(conn) != result.picked.row:
             raise Refused([Refusal(CHANGED, "the picked plan changed since it was read; run it again")])
+        conn.execute("lock table fill_substitutes in share row exclusive mode")
+        if fill.substitutes(conn, result.picked.id) != result.subs_read:
+            raise Refused([Refusal(CHANGED, "the plan's substitutes changed since they were read; run it again")])
         skus = {p.sku for p in result.picked.round.purchases}
         sourcing.lock_skus(conn, skus)
         for sku in sorted(skus):
@@ -361,6 +448,15 @@ def write(conn: psycopg.Connection, result: Result, by: str, now: datetime | Non
         at = now or conn.execute("select now()").fetchone()[0]
         for ln in changed:
             row = ln.after
+            if ln.substitutes:
+                conn.execute(
+                    "insert into fill_substitutes (plan_id, sku, substitute_sku, max_cents, set_by, set_at)"
+                    " values (%s, %s, %s, %s, %s, %s) on conflict (plan_id, sku) do update set"
+                    " substitute_sku = excluded.substitute_sku, max_cents = excluded.max_cents,"
+                    " set_by = excluded.set_by, set_at = excluded.set_at",
+                    (result.picked.id, ln.sku, row.sku, row.max_cents, by.strip(), at))
+                said.append(f"{ln.sku}: substitute {row.sku}, {sourcing.describe(row)}")
+                continue
             if ln.action != "lowered":
                 row = replace(row, note=(f"backup set by {by.strip()} (python -m vending.alternates) from the "
                                          f"{row.store} price looked up {sourcing.day(row.checked_at)}: "
@@ -385,9 +481,9 @@ def render(r: Result, wrote: bool) -> str:
     header = ("SKU", "Primary", "Alternate now", "After")
     rows = [header]
     for ln in r.lines:
-        rows.append((ln.sku, _option(ln.primary), _option(ln.before),
+        rows.append((ln.sku, _option(ln.primary), _option(ln.before, ln.sku),
                      "same" if not ln.changed and ln.after is ln.before else
-                     f"{ln.action}: {_option(ln.after)}" if ln.changed else "none"))
+                     f"{ln.action}: {_option(ln.after, ln.sku)}" if ln.changed else "none"))
     widths = [max(len(row[i]) for row in rows) for i in range(len(header))]
     out += ["", *("  ".join(c.ljust(w) for c, w in zip(row, widths)).rstrip() for row in rows)]
     changes = [ln for ln in r.lines if ln.changed]
@@ -396,6 +492,11 @@ def render(r: Result, wrote: bool) -> str:
     left = [ln for ln in r.lines if ln.action == "none"]
     if left:
         out += ["", f"Left without a backup ({len(left)}):", *(f"- {ln.sku}: {ln.why}" for ln in left)]
+    if pooled_left := [ln.sku for ln in left if ln.sku in r.pooled]:
+        out += ["", f"Pooled lines left without a backup ({len(pooled_left)}): {', '.join(pooled_left)}"]
+    same = sum(1 for ln in r.lines if ln.after is not None and ln.action != "none" and not ln.substitutes)
+    other = sum(1 for ln in r.lines if ln.action != "none" and ln.substitutes)
+    out += ["", f"Backups after: {same} the same drink at another store, {other} a substitute drink."]
     n = len(r.lines)
     out += ["", f"Lines with a backup: {r.with_backup('now')} of {n} now, {r.with_backup('after')} of {n} after "
                 "(alternates the fill takes without pick_deviation).",
@@ -404,11 +505,13 @@ def render(r: Result, wrote: bool) -> str:
     return "\n".join(out)
 
 
-def _option(o: sourcing.Option | None) -> str:
+def _option(o: sourcing.Option | None, line: str | None = None) -> str:
+    """A row as text; prefixed with its drink when it is a substitute for `line`."""
     if o is None:
         return "none"
     price = _usd(o.expected_cents) if o.expected_cents is not None else "no price"
-    return f"{o.store} {o.units_per_pack}-pack {price} (max {_usd(o.max_cents)})"
+    named = f"{o.sku} " if line is not None and o.sku != line else ""
+    return f"{named}{o.store} {o.units_per_pack}-pack {price} (max {_usd(o.max_cents)})"
 
 
 def _usd(cents: int) -> str:
