@@ -179,7 +179,7 @@ not started yet.
 sends a purchase request nobody looks at before it goes. Agree as a team, on GitHub, before anyone sets
 `live`. Do it before the team stops on Sun 29 Nov: from Thu 3 Dec nobody watches the runs. In this order:
 
-1. Migrations 029, 030 and 035 on the team database: `python -m vending.db migrate`, then again: it must say nothing
+1. Migrations 029, 030 and 037 on the team database: `python -m vending.db migrate`, then again: it must say nothing
    is pending. The worker refuses to schedule on a database that is behind, and the dashboard says so. Apply
    030 while no submit runs, as 025 below: it waits at most 2 seconds for its lock.
 2. The container, with the mode, the times and the first day together, so nothing left from a test week stays

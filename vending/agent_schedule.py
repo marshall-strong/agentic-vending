@@ -99,7 +99,7 @@ keyed by the time, so it runs at most once whatever restarts or replicas there a
 `midweek_wakeups.requested_at`) is one more time to run, with kind `midweek`: due at the request, latest start
 the end of that Eastern day (`midweek_latest`). The scheduler claims it as it claims a weekly time, under the same
 lock, switches, checks before a send, run lease and caps, and records it in `agent_schedule` with `kind` midweek and
-its `wakeup_id` (migration 035). One row per wake-up, and the wake-ups' own index holds one a week. The agent's
+its `wakeup_id` (migration 037). One row per wake-up, and the wake-ups' own index holds one a week. The agent's
 opening says why it was woken (`midweek_occasion`). A midweek run buys only an off-cycle visit
 (`midweek_on_cycle`), and a weekly run never does (`scheduled_off_cycle`). Each kind sends at most one submission a
 week (`ALREADY_SENT`, `MIDWEEK_ALREADY_SENT`). A weekly time due at the same moment goes first. The worker calls
@@ -128,7 +128,7 @@ EASTERN = ZoneInfo("America/New_York")
 MODE_SETTING, TIMES_SETTING, FROM_SETTING = "AGENT_SCHEDULE_MODE", "AGENT_SCHEDULE", "AGENT_SCHEDULE_FROM"
 # The `config` key that must also turn the runs on (`vending.config.KNOWN`).
 DB_MODE_KEY = "agent_schedule_mode"
-# What a row in `agent_schedule` is for: a time in AGENT_SCHEDULE, or a midweek wake-up's request (migration 035).
+# What a row in `agent_schedule` is for: a time in AGENT_SCHEDULE, or a midweek wake-up's request (migration 037).
 WEEKLY, MIDWEEK = "weekly", "midweek"
 # Kevin, 23 Nov: Wednesday 2 PM Eastern, so a run's order beats Amazon's Wed 23:59 cutoff (#188), late until 10 PM;
 # and Thursday noon, late until 8 PM, for a week whose Wednesday didn't send. Thu 3 Dec 12:00 is the first live order.

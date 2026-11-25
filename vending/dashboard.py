@@ -404,8 +404,8 @@ def _runs(conn: psycopg.Connection, now: datetime, tags: dict | None = None,
     rows = _rows(conn, sql.SQL("""
         select r.id, r.started_at, r.finished_at, r.mode, r.model, r.status, {detail}, r.cost_usd,
                r.request_id, r.team_update, r.notes, r.plan,
-               -- The scheduled time that started it: weekly or midweek (`agent_schedule.kind`, migration 035;
-               -- read through jsonb so a database without 035 still reads, as weekly), or none for a run by hand.
+               -- The scheduled time that started it: weekly or midweek (`agent_schedule.kind`, migration 037;
+               -- read through jsonb so a database without 037 still reads, as weekly), or none for a run by hand.
                (select coalesce(to_jsonb(s) ->> 'kind', 'weekly') from agent_schedule s
                  where s.run_id = r.id limit 1) as scheduled,
                (select p.plan from agent_runs p
