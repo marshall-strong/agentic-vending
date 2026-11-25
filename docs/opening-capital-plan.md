@@ -23,7 +23,7 @@ This plan owns the Summative 2 money numbers; the restock policy (`docs/restock-
 
 | Line | Amount | Basis |
 |---|---|---|
-| Day-one fill, all 20 slots (most) | **$400.00** | Decided (Kevin, 22 Nov, #230; #233). Covers the wildcard slot's day-one units too. The picked plan, round 7b, costs $399.00 most |
+| Day-one fill, all 20 slots (most) | **$400.00** | Decided (Kevin, 22 Nov, #230; #233). Covers the wildcard slot's day-one units too. The picked plan, round 7b, costs $399.00 most. `python -m vending.fill` refuses a request over it (`over_fill_cap`), whatever the flags |
 | Midweek visit fees | $50.00 | 2 × $25 (`docs/agent/restocking.md`) |
 | Model spend | $9.00 | 9 run weeks × 1 run × $1.00 run cap (#51) |
 | Product-switch reserve | $68.00 | Proposed. One pack of the dearest listed drink at the worker's maximum (section 2) |

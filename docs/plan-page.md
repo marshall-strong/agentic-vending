@@ -66,6 +66,9 @@ python -m vending.fill --submit --hash HASH --accept-deviations --by NAME   # se
    and what that choice buys. The send refuses with `pick_deviation` unless you add
    `--accept-deviations`, and `action_log` records the flag and the list. Or load and pick a revised plan.
    A substitute (below) is compared on its cost only: listed when its packs cost more than the pick's.
+   Two limits no flag lifts. `over_fill_cap`: the request's most-we-pay (each line at its dearer choice) is over
+   the $400 day-one cap. `fill_incomplete`: a slot of ours has no product in the plan, or no line in the request
+   while nothing else refuses it.
 4. Send it with the hash from step 1. The hash covers the request (its lines, the worst-case cost
    and the visit fee), the picked plan's ID and our slots (the server's assignment). If any of those
    changed since the preview, the command refuses with `plan_changed`; run the preview again. A hash

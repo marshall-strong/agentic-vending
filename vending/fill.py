@@ -43,6 +43,11 @@ and nothing sent:
   packs, units or a higher most-we-pay cost than the pick (`deviations`), for example a checked 16-pack where
   the pick bought 12-packs. The preview lists each one. `--accept-deviations` sends it anyway, and the log
   records the flag and the list;
+- `over_fill_cap`: the request's most-we-pay (each line at its dearer choice, the planner's cost, without the visit
+  fee) is over the day-one fill cap, $400 (`plan_rounds.FILL_CAP_CENTS`, docs/opening-capital-plan.md). The
+  spendable floor alone would allow up to the opening less $53. `--accept-deviations` doesn't lift it;
+- `fill_incomplete`: a slot of ours that the picked plan gives no product, or that the request would leave without a
+  line while nothing else refuses it. So the fill never sends 17 of 20 slots by accident. There is no override;
 - `inputs_changed` (submit only): the sourcing rows or the opening stored now are not the ones the planner
   was given. The submit holds those tables, so this is a second line.
 
@@ -149,6 +154,8 @@ PLAN_CHANGED = "plan_changed"
 PAST_DEADLINE = "fill_deadline"
 INPUTS_CHANGED = "inputs_changed"
 DEVIATION = "pick_deviation"
+OVER_FILL_CAP = "over_fill_cap"
+FILL_INCOMPLETE = "fill_incomplete"
 REQUEST_CHANGED = "request_changed"
 CANNOT_PLAN = "cannot_plan"
 SETTINGS_BUSY = "settings_busy"
@@ -560,10 +567,10 @@ def preview(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = Non
                                        adjust=_substituting(conn, pick, swapped))
     except planning.NotReady as blocked:
         return Preview(pick, None, None, tuple(own), tuple(deadline), blocked=str(blocked), ours=ours, late=late)
-    own = _unique([*own, *swapped.get("refusals", ()), *input_refusals(pick.round, gathered)])
+    own = _unique([*own, *swapped.get("refusals", ()), *input_refusals(pick.round, gathered),
+                   *limits(plan, pick.round, ours)])
     return Preview(pick, plan, gathered, _merge(own, plan.refusals),
-                   (*deadline, *plan.warnings, *day_one_warnings(plan, gathered.now, visit),
-                    *_plan_warnings(pick.round)), ours=ours, late=late,
+                   (*deadline, *plan.warnings, *day_one_warnings(plan, gathered.now, visit)), ours=ours, late=late,
                    deviations=tuple(deviations(plan, pick.round)))
 
 
@@ -609,12 +616,13 @@ def submit(conn: psycopg.Connection, bridge: Callable[[], Bridge], connect: Call
                 plan, _ = planning.plan(conn, desired, bridge(), now, pool=True, count_takings=False, adjust=adjust)
             except planning.NotReady:
                 raise Refused([*own, *_deadline(conn, now, late)]) from None
-            raise Refused([*_merge(own, plan.refusals), *_deadline(conn, now, late)])
+            raise Refused(_unique([*_merge(own, plan.refusals), *limits(plan, pick.round, ours),
+                                   *_deadline(conn, now, late)]))
 
         def before_send(conn: psycopg.Connection, plan: planner.Plan,
                         gathered: planning.Gathered) -> list[Refusal]:
             found = [*swapped.get("refusals", ()), *input_refusals(pick.round, gathered),
-                     *_inputs_changed(conn, gathered),
+                     *limits(plan, pick.round, ours), *_inputs_changed(conn, gathered),
                      *_before_send(conn, plan, pick, ours, expected, now, late)]
             if devs := deviations(plan, pick.round):
                 if accept_deviations:
@@ -817,9 +825,34 @@ def _merge(own: list[Refusal], planned: tuple[Refusal, ...]) -> tuple[Refusal, .
     return (*own, *(r for r in planned if not (r.code == "no_sourcing" and r.slot in named)))
 
 
-def _plan_warnings(checked: plan_rounds.Round) -> list[str]:
-    missing = [s for s in checked.ours if s not in checked.slots]
-    return [f"the plan has no product for slot{'s' if len(missing) > 1 else ''} {', '.join(missing)}"] if missing else []
+def limits(plan: planner.Plan, checked: plan_rounds.Round, ours: Sequence[str]) -> list[Refusal]:
+    """The day-one fill's own limits, which no flag lifts: `over_fill_cap` and `fill_incomplete`.
+
+    The cap is read when the check runs (`plan_rounds.FILL_CAP_CENTS`). A slot the plan names but the request has no
+    line for is listed only when the planner refused nothing: a refused plan already says why a slot has none."""
+    found = []
+    cost = plan.cost
+    if cost is not None and (most := cost.max_cents - cost.visit_fee_cents) > plan_rounds.FILL_CAP_CENTS:
+        found.append(Refusal(OVER_FILL_CAP, (
+            f"the request's most-we-pay is {_usd(most)}, over the day-one fill cap of "
+            f"{_usd(plan_rounds.FILL_CAP_CENTS)} (each line at its dearer choice, as the worker may buy either). "
+            "Lower a line's max or buy a cheaper pack (python -m vending.alternates shows the fill's most-we-pay), "
+            "or load and pick a revised plan. --accept-deviations doesn't lift this.")))
+    lined = {ln.slot for ln in plan.lines}
+    unnamed = sorted(s for s in ours if s not in checked.slots or not checked.slots[s].sku)
+    if unnamed:
+        found.append(Refusal(FILL_INCOMPLETE, (
+            f"the picked plan gives slot{'s' if len(unnamed) > 1 else ''} {', '.join(unnamed)} no product, so this "
+            "request would buy and load nothing for it at this visit; load and pick a plan with a product for every "
+            "slot of ours. Nothing was sent.")))
+    if not plan.refusals:
+        unlined = sorted(s for s in ours if s not in unnamed and s not in lined)
+        if unlined:
+            found.append(Refusal(FILL_INCOMPLETE, (
+                f"slot{'s' if len(unlined) > 1 else ''} {', '.join(unlined)} {'have' if len(unlined) > 1 else 'has'} "
+                "a product in the plan but no line in this request (nothing bought or loaded for it); check its "
+                "fill_to against what it holds, or load and pick a revised plan. Nothing was sent.")))
+    return found
 
 
 def _price(cents: int) -> str:
