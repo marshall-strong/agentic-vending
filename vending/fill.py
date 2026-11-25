@@ -616,7 +616,8 @@ def submit(conn: psycopg.Connection, bridge: Callable[[], Bridge], connect: Call
                 plan, _ = planning.plan(conn, desired, bridge(), now, pool=True, count_takings=False, adjust=adjust)
             except planning.NotReady:
                 raise Refused([*own, *_deadline(conn, now, late)]) from None
-            raise Refused([*_merge(own, plan.refusals), *_deadline(conn, now, late)])
+            raise Refused(_unique([*_merge(own, plan.refusals), *limits(plan, pick.round, ours),
+                                   *_deadline(conn, now, late)]))
 
         def before_send(conn: psycopg.Connection, plan: planner.Plan,
                         gathered: planning.Gathered) -> list[Refusal]:
@@ -838,16 +839,19 @@ def limits(plan: planner.Plan, checked: plan_rounds.Round, ours: Sequence[str]) 
             "Lower a line's max or buy a cheaper pack (python -m vending.alternates shows the fill's most-we-pay), "
             "or load and pick a revised plan. --accept-deviations doesn't lift this.")))
     lined = {ln.slot for ln in plan.lines}
-    missing = [s for s in ours if s not in checked.slots]
-    if not plan.refusals:
-        missing += [s for s in ours if s in checked.slots and s not in lined]
-    if missing:
-        named = ", ".join(sorted(set(missing)))
+    unnamed = sorted(s for s in ours if s not in checked.slots or not checked.slots[s].sku)
+    if unnamed:
         found.append(Refusal(FILL_INCOMPLETE, (
-            f"slot{'s' if len(set(missing)) > 1 else ''} {named} would get no line in this request, so "
-            f"{'they' if len(set(missing)) > 1 else 'it'} would stay empty until the next visit; give "
-            f"{'each' if len(set(missing)) > 1 else 'it'} a product in the plan (load and pick a revised plan). "
-            "Nothing was sent.")))
+            f"the picked plan gives slot{'s' if len(unnamed) > 1 else ''} {', '.join(unnamed)} no product, so this "
+            "request would buy and load nothing for it at this visit; load and pick a plan with a product for every "
+            "slot of ours. Nothing was sent.")))
+    if not plan.refusals:
+        unlined = sorted(s for s in ours if s not in unnamed and s not in lined)
+        if unlined:
+            found.append(Refusal(FILL_INCOMPLETE, (
+                f"slot{'s' if len(unlined) > 1 else ''} {', '.join(unlined)} {'have' if len(unlined) > 1 else 'has'} "
+                "a product in the plan but no line in this request (nothing bought or loaded for it); check its "
+                "fill_to against what it holds, or load and pick a revised plan. Nothing was sent.")))
     return found
 
 
