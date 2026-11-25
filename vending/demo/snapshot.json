@@ -3278,6 +3278,7 @@
   "data": {
    "latest": null,
    "incidents": [],
+   "last_ran": null,
    "setting_ok": true,
    "setting_live": false
   }
