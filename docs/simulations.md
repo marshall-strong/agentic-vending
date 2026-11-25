@@ -84,7 +84,7 @@ have. They show that agent, not main's.
 | The worker's scheduler: `AGENT_SCHEDULE` `wed 14:00-22:00,thu 12:00-20:00` from 2 Dec, both switches `live` | `vending.agent_schedule.Scheduler` itself, with those settings, on the season's clock |
 | Midweek wake-ups (`MIDWEEK_WAKE=on`), the run lease, `model_run_cap_cents` | The same code |
 | The daily tracking check (`TRACKING_DAILY=on`) | `tracking_daily.run` against the simulated bridge's books |
-| The weekly price check (`PRICE_CHECK_MODE`) | `price_schedule.PriceChecks` as a dry run; the world re-prices on Tuesday noon |
+| The weekly price check (`PRICE_CHECK_MODE`) | `price_schedule.PriceChecks` as a dry run; the world re-prices on Tuesday at 12:30 |
 | Sourcing and prices: the team database's four-store rows | `--from-export`: the same rows, exported read-only |
 
 The real scheduler, the run lease and the submit's checks read the database's clock, so the scratch database gets

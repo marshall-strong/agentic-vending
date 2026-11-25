@@ -14,7 +14,7 @@
   check (`MIDWEEK_WAKE=on`, `midweek_wake.check`), then the daily tracking check (`TRACKING_DAILY=on`,
   `tracking_daily.run`) against the simulated bridge's books, then `Scheduler.poke`, as `vending.worker` does.
 - **The weekly price check** (`vending.price_schedule.PriceChecks`) runs on its times as a dry run: it lists what it
-  would look up and spends nothing. The world re-prices the sourcing table on Tuesdays at noon instead, before
+  would look up and spends nothing. The world re-prices the sourcing table on Tuesdays at 12:30 instead, before
   Wednesday's run (`season.handle`, "sourcing_check").
 
 What it can't run is listed in `NOT_SIMULATED`, and each season's report repeats it.
@@ -46,11 +46,13 @@ DB_SETTINGS = {"agent_schedule_mode": "live", "price_check_mode": "dry-run"}
 DAILY_CAP_CENTS = 400
 # The mid-season dashboard check, after the round at this time.
 MID_SEASON = datetime(2027, 1, 6, 12, 0, tzinfo=EASTERN)
-TUESDAY, NOON = 1, time(12)
+# The world re-prices after the weekly price check's time (Tue 12:00), so the dry-run check sees the week-old
+# prices a live check would look up, and lists them.
+TUESDAY, REPRICE_AT = 1, time(12, 30)
 NOT_SIMULATED = (
     "Customers, the machine, the bridge and the student worker are made up (vending/simulate/world.py, bridge.py).",
     "The agent's find_pack_price and the weekly price check's lookups make no web search: the tool isn't offered, "
-    "the check runs as a dry run, and the world re-prices the sourcing table each Tuesday noon.",
+    "the check runs as a dry run, and the world re-prices the sourcing table each Tuesday at 12:30.",
     "Each agent run happens at one instant of the season's clock: a run that takes minutes live takes none here, so "
     "the run lease never expires mid-run and no deadline (60 min) is ever reached.",
     "Model spend is test spend (purpose test) under a $4 daily cap, not the ledger's live spend.",
@@ -75,7 +77,7 @@ def events() -> list:
         if at > world.SIM_START:
             out.append(Event(at, "catalog_sync"))
         if day.weekday() == TUESDAY:
-            out.append(Event(datetime.combine(day, NOON, EASTERN), "sourcing_check"))
+            out.append(Event(datetime.combine(day, REPRICE_AT, EASTERN), "sourcing_check"))
         day += timedelta(days=1)
     return out
 
