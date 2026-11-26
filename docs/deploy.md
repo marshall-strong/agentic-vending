@@ -518,7 +518,8 @@ worked from a laptop on 2 Nov, over a direct local path.
 ## Swap the model key
 
 Use this when the team gets a new model key, for example when the old key has no credit (#262). It
-changes only the `vending-anthropic-api-key` secret. It changes no code, image or setting.
+changes only the secret the container's `VENDING_ANTHROPIC_API_KEY` reads, which the script looks up
+(on 25 Nov: `anthropic-api-key`). It changes no code, image or setting.
 
 1. Save the new key in a file, alone, on one line. Keep the file out of the repo.
 2. Sign in: `az login --tenant golisanoinstitute.org`. Make sure `.env` has `DATABASE_URL`.

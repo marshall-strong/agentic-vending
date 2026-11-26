@@ -62,9 +62,10 @@ def test_an_unreadable_key_file_or_env_stops_at_once(tmp_path, capsys):
 
 def test_the_script_sets_the_secret_the_container_reads_from_a_file():
     text = SCRIPT.read_text(encoding="utf-8")
-    deploy = (ROOT / "scripts" / "deploy_container_app.ps1").read_text(encoding="utf-8")
-    secret = re.search(r'"VENDING_ANTHROPIC_API_KEY" = "([a-z-]+)"', deploy).group(1)
-    assert f'[string]$SecretName = "{secret}"' in text
+    # No hard-coded secret name: the live app reads `anthropic-api-key`, a -SetSecrets deploy maps
+    # `vending-anthropic-api-key`, so the script reads the name from the app's own mapping (#262).
+    assert "[string]$SecretName," in text and "vending-anthropic-api-key\"" not in text
+    assert "env[?name=='$KeyEnv'].secretRef" in text and "$SecretName = $reads[0]" in text
     assert '--secrets "$SecretName=@$keyCopy"' in text          # az reads the value from the file
     assert "Remove-Item -Recurse -Force $dir" in text            # in a finally: the copy never stays
     assert "check_model_key.py" in text and "revision restart" in text and "model_key" in text
