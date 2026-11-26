@@ -1025,11 +1025,14 @@ def only_ours(snap: dict, assignment_at: datetime | None = None) -> None:
 # `sending` or `unknown`: so a run whose ending was lost still says what it sent, or may have sent.
 # A run meant to be live that didn't run live (a check made it a dry run, or it never started: stopped at the
 # lease, or the lease busy) carries why (`cause`: the scheduler's own sentence, never an error), and stays until a
-# later live run has started. So does a live time that waited all its window and was missed (`LIVE_MISSED`).
+# later live run has started. So does a live time that waited all its window and was missed (`LIVE_MISSED`), and a
+# dry run's (`DRY_MISSED`, waiting on model credit). A time failed for a key the API refused (`MODEL_KEY_REFUSED`)
+# carries its cause too: the scheduler's own sentence, with the error's class and status only.
 # And the database's `agent_schedule_mode`, to say when it isn't a mode, or says `live`.
 MEANT_LIVE_SKIP = ("s.outcome = 'skipped' and (s.detail like 'Run as a dry run, not live:%%'"
                    " or (s.mode = 'live' and s.started_at is null))")
-LIVE_MISSED_ROW = "s.outcome = 'missed' and s.detail like 'LIVE RUN MISSED:%%'"
+LIVE_MISSED_ROW = ("(s.outcome = 'missed' and (s.detail like 'LIVE RUN MISSED:%%' or s.detail like 'DRY RUN MISSED:%%'))"
+                   " or (s.outcome = 'failed' and s.detail like 'MODEL KEY REFUSED:%%')")
 SCHEDULED_COLUMNS = ("s.due_at, s.latest_at, s.kind, s.mode, s.claimed_at, s.outcome, s.run_id,"
                      " r.status as agent_status,"
                      " coalesce(r.request_id, (select p.request_id from purchase_submissions p"
@@ -1614,6 +1617,8 @@ def _scheduled_line(row: dict, now: datetime) -> tuple[str, str] | None:
         level, what = "warn", f"didn't run live: {cause.rstrip('.')}"
     if outcome == "missed" and isinstance(cause, str) and cause:
         what = f"was missed: {cause.rstrip('.')}"
+    if outcome == "failed" and isinstance(cause, str) and cause:
+        what = f"failed: {cause.rstrip('.')}"
     if outcome != "running" and row.get("agent_status") == "running":
         level, what = "bad", (f"ended {outcome}, but its agent run still says running in agent_runs: its ending "
                               "couldn't be recorded there. Record it by hand once you know how it ended")

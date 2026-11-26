@@ -232,9 +232,26 @@ MIDWEEK_OCCASION = ("This run was started by the midweek wake check (docs/restoc
                     "is worth the fee, submit nothing and say why: that is a valid outcome.")
 # A live time held back by a passing blocker: tried again this often until its latest start.
 LIVE_RETRY = timedelta(minutes=5)
-WAITING = ("The scheduled live run due {due} is waiting: {why} The worker tries again every {every} until its "
+WAITING = ("The scheduled {kind} due {due} is waiting: {why} The worker tries again every {every} until its "
            "latest start ({latest}); if it still can't send then, it is recorded as missed.")
 LIVE_MISSED = "LIVE RUN MISSED: it waited from its time to its latest start ({latest}) and couldn't send: {why}"
+# The model credit check before a claim (#262), for live and dry runs alike: one free count_tokens call with the
+# run's own key and model (`vending.harness.check_credit`). No credit, or no answer, waits like a passing blocker.
+CREDIT_WAITING = ("The scheduled {kind} due {due} is waiting on model credit since {since}: {why} The worker checks "
+                  "again every {every} until its latest start ({latest}); if there is still none then, it is recorded "
+                  "as missed.")
+NO_MODEL_CREDIT = ("no model credit: the API says the team's model key has no credit left, so no model request can "
+                   "run. The teachers add credit, or a person swaps in a funded key with scripts/swap_model_key.ps1 "
+                   "(docs/deploy.md).")
+CREDIT_UNCHECKED = ("the model API couldn't be reached to check the key's credit ({error}), so the run's first "
+                    "request would fail the same way.")
+DRY_MISSED = "DRY RUN MISSED: it waited from its time to its latest start ({latest}) and couldn't start: {why}"
+WAITED_FOR_CREDIT = "Started {late} late: it waited on model credit from {since}. "
+# A key the API refuses (401 or 403) fails the time at once, as a missing key does: no wait fixes it.
+MODEL_KEY_REFUSED_TAG = "MODEL KEY REFUSED: "
+MODEL_KEY_REFUSED = (MODEL_KEY_REFUSED_TAG + "{error} when the worker checked its credit, so the run didn't start and "
+                     "no model request was made. A person swaps in a working key with scripts/swap_model_key.ps1 "
+                     "(docs/deploy.md).")
 LEASE_BUSY = "another agent run{run} holds the run lease, so this live run waits for it to end."
 # The checks again in the submit tool, just before the POST (`send_blocker`).
 SEND_CONTAINER = "the container's AGENT_SCHEDULE_MODE says {mode}, not live."
@@ -536,6 +553,48 @@ def send_blocker(conn, due: datetime, now: datetime, row: int) -> str | None:
     return live_blocker(conn, now, due=due, except_row=row, kind=state[2])
 
 
+def credit_state(client: Callable[[], Any] | None = None, model: str | None = None) -> tuple[str, str] | None:
+    """Whether the run's own key can pay now, from one free `messages.count_tokens` call (`harness.check_credit`),
+    never a paid request. `client` builds the client (`vending.agent.model_client` by default, what the run pays
+    with) and `model` is the run's (`vending.agent.DEFAULT_MODEL`).
+
+    None: go on and claim. ("wait", why): no credit (`NO_MODEL_CREDIT`), or no answer that could be read (a
+    timeout, a dropped connection, a 429 or 5xx: the run's first request would hit the same), so the time waits.
+    ("refused", why): the API refused the key (401 or 403), so the time fails at once (`MODEL_KEY_REFUSED`), as a
+    missing key does. Without the key there is no check: the entry point records `MODEL_KEY_MISSING` as before.
+    Any other refusal is left to the run, whose own request records it."""
+    from vending import harness
+
+    if not model_key_present():
+        return None
+    if client is None or model is None:
+        from vending import agent
+
+        client, model = client or agent.model_client, model or agent.DEFAULT_MODEL
+    try:
+        harness.check_credit(client(), model)
+    except harness.NoCredit:
+        return "wait", NO_MODEL_CREDIT
+    except harness.KeyRefused as error:
+        said = str(error)
+        return "refused", MODEL_KEY_REFUSED.format(error=said[:1].upper() + said[1:])
+    except harness.Unreachable as error:
+        return "wait", CREDIT_UNCHECKED.format(error=str(error))
+    except harness.HarnessError:
+        return None
+    return None
+
+
+@dataclass(frozen=True)
+class Wait:
+    """A time held back before its claim: tried again every `LIVE_RETRY` until `latest`."""
+    latest: datetime
+    why: str
+    mode: str = "live"          # what would run: `live`, or `dry-run` (the credit check holds dry runs too)
+    since: datetime | None = None   # when the wait for model credit began (the database's clock)
+    credit: bool = False        # the credit check holds it (`credit_state`), not a check before a send
+
+
 def default_run_agent(live: bool, authorize: Callable[[Any], str | None] | None = None,
                       occasion: str | None = None) -> tuple[int | None, Any]:
     """The agent's own entry point, as `python -m vending.agent [--live]` runs it: (run id, outcome). `occasion`
@@ -560,6 +619,12 @@ def default_run_agent(live: bool, authorize: Callable[[Any], str | None] | None 
 def _eastern(moment: datetime) -> str:
     local = moment.astimezone(EASTERN)
     return f"{local:%a %d %b} {local.hour % 12 or 12}:{local:%M %p} ET"
+
+
+def _clock(moment: datetime) -> str:
+    """The Eastern time of day: "12:00 PM ET"."""
+    local = moment.astimezone(EASTERN)
+    return f"{local.hour % 12 or 12}:{local:%M %p} ET"
 
 
 def _span(delta: timedelta) -> str:
@@ -706,8 +771,12 @@ class Scheduler:
     def __init__(self, sched: Schedule, run_agent: Callable[..., tuple[int | None, Any]] = default_run_agent,
                  connect: Callable[[], Any] | None = None, log: Callable[[str], None] = print,
                  background: bool = True, clock: Callable[[], datetime] | None = None,
-                 db_clock: Callable[[Any], datetime] | None = None, bridge: Callable[[], Any] | None = None):
+                 db_clock: Callable[[Any], datetime] | None = None, bridge: Callable[[], Any] | None = None,
+                 credit_check: Callable[[], tuple[str, str] | None] | None = credit_state):
         self.sched, self.run_agent, self.log, self.background = sched, run_agent, log, background
+        # Asked before each claim (`credit_state`): whether the run's key can pay. None: no check.
+        self.credit_check = credit_check
+        self._credit: tuple[str, str] | None | bool = False     # this tick's answer (False: not asked yet)
         # The bridge client the reconciliation of open submissions reads with (`vending.bridge.Bridge` by default).
         self.bridge = bridge
         self._connect = connect
@@ -733,9 +802,10 @@ class Scheduler:
         # Why the last tick couldn't do its work (the database is down or behind), or None: /health shows it, and
         # the dashboard makes it a Problem.
         self.problem: str | None = None
-        # A live time held back by a passing blocker, and why (the newest words): it has no row yet, and is tried
-        # again every `LIVE_RETRY` until its latest start (`WAITING`).
-        self.waiting: dict[datetime, tuple[datetime, str]] = {}
+        # A time held back before its claim (a live time by a passing blocker, any time by the credit check), and
+        # why (the newest words): it has no row yet, and is tried again every `LIVE_RETRY` until its latest start
+        # (`WAITING`, `CREDIT_WAITING`).
+        self.waiting: dict[datetime, Wait] = {}
         # Set by `poke` after a worker round: a midweek wake-up may have asked for a run, so look now.
         self.check_now = False
 
@@ -779,8 +849,14 @@ class Scheduler:
         """What `/health` shows: the most this worker runs, its setting, whether it has the model key (never the
         key), the next time, and the last scheduled run without its detail."""
         waiting = None
-        for due, (latest, why) in sorted(self.waiting.items()):
-            waiting = WAITING.format(due=_eastern(due), why=why, every=_span(LIVE_RETRY), latest=_eastern(latest))
+        for due, wait in sorted(self.waiting.items()):
+            kind = "live run" if wait.mode == "live" else "dry run"
+            if wait.credit:
+                waiting = CREDIT_WAITING.format(kind=kind, due=_eastern(due), since=_clock(wait.since or due),
+                                                why=wait.why, every=_span(LIVE_RETRY), latest=_eastern(wait.latest))
+            else:
+                waiting = WAITING.format(kind=kind, due=_eastern(due), why=wait.why, every=_span(LIVE_RETRY),
+                                         latest=_eastern(wait.latest))
         return {"mode": self.mode, "setting": self.sched.mode, "model_key": model_key_present(),
                 "next_at": next_time(self.sched, self.clock()).isoformat(), "last": self.last,
                 "problem": self.sched.problem or self.problem, "waiting": waiting}
@@ -879,6 +955,7 @@ class Scheduler:
 
     def _locked(self, conn) -> Claim | None:
         """The work under the lock: the time to run now, or None."""
+        self._credit = False        # the credit check is asked at most once a tick
         # Only once no agent run holds the run lease: a run whose worker's connection dropped may still be going.
         swept = conn.execute("update agent_schedule set outcome = 'failed', finished_at = now(), detail = %s"
                              " where outcome = 'running' and not exists (select from agent_run_lease"
@@ -936,30 +1013,49 @@ class Scheduler:
             detail = CLOCKS_SKIP.format(day=f"{due.astimezone(EASTERN):%a %d %b}")
         else:
             detail = MISSED.format(latest=_eastern(latest)) if now >= latest else SUPERSEDED
-        if due in self.waiting:     # a live time that waited: say what held it back
-            why = self.waiting.pop(due)[1]
-            detail = (LIVE_MISSED.format(latest=_eastern(latest), why=why) if now >= latest
-                      else f"{SUPERSEDED} It had been waiting: {why}")
-        if record(conn, due, latest, self.mode, "missed", detail, kind=kind, wakeup=wakeup):
+        mode, wait = self.mode, self.waiting.get(due)
+        if wait is not None:        # a time that waited: say what held it back
+            missed = LIVE_MISSED if wait.mode == "live" else DRY_MISSED
+            detail = (missed.format(latest=_eastern(latest), why=wait.why) if now >= latest
+                      else f"{SUPERSEDED} It had been waiting: {wait.why}")
+            mode = lower(mode, wait.mode)
+        stored = record(conn, due, latest, mode, "missed", detail, kind=kind, wakeup=wakeup)
+        self.waiting.pop(due, None)     # only once the row is written: a failed insert keeps why it waited
+        if stored:
             self.log(f"agent schedule: the {_name(kind)} {_eastern(due)} was missed")
 
     def _claim(self, conn, due: datetime, latest: datetime, *, kind: str = WEEKLY, wakeup: int | None = None,
-               reason: str | None = None) -> Claim | None:
+               reason: str | None = None, again: bool = False) -> Claim | None:
         """Take the time `due` for this worker, or None when it doesn't run now. The insert itself reads the
         database's mode and checks the latest start (`record`). A midweek run (`kind` MIDWEEK) names its wake-up
-        and carries its reason."""
+        and carries its reason. The credit check is a call to the API, so the database's mode is read again after
+        it: one that changed meanwhile decides again, once (`again`), with this tick's answer to the check."""
         name = _name(kind)
         if latest <= due:
             self._miss(conn, due, latest, self.db_clock(conn), kind=kind, wakeup=wakeup)
             return None
-        if lower(self.mode, database_mode(conn)) == "live" \
-                and (why := self._live_wait(conn, due, self.db_clock(conn), kind)) is not None:
-            if self.waiting.get(due, (None, None))[1] != why:
-                self.log(f"agent schedule: the live {name} {_eastern(due)} waits: {why}")
-            self.waiting[due] = (latest, why)
-            self.not_before = self.clock() + LIVE_RETRY
+        effective = lower(self.mode, database_mode(conn))
+        if effective == "live" and (why := self._live_wait(conn, due, self.db_clock(conn), kind)) is not None:
+            self._hold(due, Wait(latest, why), name)
             return None
-        self.waiting.pop(due, None)
+        checked = self._credit_now() if effective != "off" else None
+        if not again and lower(self.mode, database_mode(conn)) != effective:
+            return self._claim(conn, due, latest, kind=kind, wakeup=wakeup, reason=reason, again=True)
+        if checked is not None:
+            state, why = checked
+            now = self.db_clock(conn)
+            meant = ("live" if effective == "live" and lasting_blocker(conn, now, due=due, kind=kind) is None
+                     else "dry-run")
+            if state == "refused":      # no wait fixes a key the API refuses: the time fails, as a missing key does
+                self.waiting.pop(due, None)
+                if record(conn, due, latest, meant, "failed", why, kind=kind, wakeup=wakeup):
+                    self.log(f"agent schedule: the {name} {_eastern(due)} failed: the API refused the model key")
+                return None
+            before = self.waiting.get(due)
+            since = before.since if before is not None and before.credit else now
+            self._hold(due, Wait(latest, why, meant, since, credit=True), name)
+            return None
+        waited = self.waiting.pop(due, None)
         stored = record(conn, due, latest, self.mode, "running", clock=lambda: self.db_clock(conn), kind=kind,
                         wakeup=wakeup)
         if stored is None:
@@ -974,6 +1070,8 @@ class Scheduler:
         now = self.db_clock(conn)
         late = now - due
         note = f"Started {_span(late)} late. " if late >= LATE_AFTER else ""
+        if waited is not None and waited.credit:    # how late, and why, however short the wait
+            note = WAITED_FOR_CREDIT.format(late=_span(max(late, timedelta(0))), since=_clock(waited.since or due))
         # The lasting reason first: a run held back for the whole window (one per visit) says so, not a passing
         # reason that happens to hold too (Wednesday's request still pending on Thursday), which reads as a wait.
         if mode == "live" and (why := lasting_blocker(conn, now, due=due, kind=kind)
@@ -985,6 +1083,27 @@ class Scheduler:
         self.log(f"agent schedule: starting the {mode} {name} {_eastern(due)}"
                  + (f", {_span(late)} late" if late >= LATE_AFTER else ""))
         return Claim(due, latest, mode, note, kind, reason)
+
+    def _hold(self, due: datetime, wait: Wait, name: str) -> None:
+        """Keep the time `due` waiting, with the newest words, and come back in `LIVE_RETRY`."""
+        if self.waiting.get(due, Wait(wait.latest, "")).why != wait.why:
+            self.log(f"agent schedule: the {'live' if wait.mode == 'live' else 'dry-run'} {name} {_eastern(due)} "
+                     f"waits: {wait.why}")
+        self.waiting[due] = wait
+        self.not_before = self.clock() + LIVE_RETRY
+
+    def _credit_now(self) -> tuple[str, str] | None:
+        """This tick's credit check (`credit_state`), asked once a tick. A check that breaks holds nothing back:
+        the run's own requests record what is wrong."""
+        if self._credit is False:
+            try:
+                self._credit = self.credit_check() if self.credit_check is not None else None
+            except Exception as error:      # noqa: BLE001 - the check is a guard, never a reason to stop the worker
+                from vending.worker import _describe
+
+                self.log(f"agent schedule: the model credit check broke ({_describe(error)}); going on without it")
+                self._credit = None
+        return self._credit
 
     def _live_wait(self, conn, due: datetime, now: datetime, kind: str = WEEKLY) -> str | None:
         """Why a time that would run live must wait, or None to claim it now. A lasting blocker doesn't wait: the
@@ -1027,7 +1146,7 @@ class Scheduler:
             return False
         if gone is None:
             return False
-        self.waiting[claim.due] = (claim.latest, LEASE_BUSY.format(run="") + f" ({detail.rstrip('.')})")
+        self.waiting[claim.due] = Wait(claim.latest, LEASE_BUSY.format(run="") + f" ({detail.rstrip('.')})")
         self.not_before = self.clock() + LIVE_RETRY
         self.log(f"agent schedule: the live {claim.name} {_eastern(claim.due)} found the run lease taken; it waits")
         return True

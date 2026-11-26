@@ -477,8 +477,9 @@ def test_no_anthropic_send_outside_harness():
             if isinstance(node, ast.Call):
                 parts = ast.unparse(node.func).split(".")
                 assert parts[-1] not in CLIENT_NAMES, path
-                assert not ("messages" in parts[:-1] and parts[-1] in {"create", "stream"}), path
-            if isinstance(node, ast.Attribute) and node.attr in {"create", "stream", "batches"}:
+                assert not ("messages" in parts[:-1] and parts[-1] in {"create", "stream", "count_tokens"}), path
+            # count_tokens too: it is free, but it still uses the key, so only `check_credit` and `Harness` ask it.
+            if isinstance(node, ast.Attribute) and node.attr in {"create", "stream", "batches", "count_tokens"}:
                 chain = ast.unparse(node).split(".")
                 assert "messages" not in chain[:-1], path
 

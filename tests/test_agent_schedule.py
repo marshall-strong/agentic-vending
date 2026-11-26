@@ -289,11 +289,12 @@ class FakeAgent:
 
 def scheduler(schema_url, agent, sched=DRY, clock=None, **kw):
     """A scheduler on the test schema. The fake clock stands in for the database's clock too, unless a test
-    passes its own `db_clock`."""
+    passes its own `db_clock`. No model credit check unless a test passes one (`tests/test_credit_wait.py`)."""
     clock = clock or Clock(at(WED, 0))
     return Scheduler(sched, run_agent=agent, connect=kw.pop("connect", lambda: open_in(*schema_url)),
                      log=kw.pop("log", lambda _: None), background=kw.pop("background", False),
-                     clock=clock, db_clock=kw.pop("db_clock", lambda c: clock()), **kw)
+                     clock=clock, db_clock=kw.pop("db_clock", lambda c: clock()),
+                     credit_check=kw.pop("credit_check", None), **kw)
 
 
 def tick(sched, when):
@@ -964,7 +965,7 @@ def test_a_worker_clock_that_runs_slow_never_starts_a_run_past_its_cutoff(schema
     window = datetime.combine(day, time(), ET)
     slow = Clock(at(window, 9, 5))      # two days slow: inside the window by its own reading
     sched = Scheduler(past, run_agent=agent, connect=lambda: open_in(*schema_url), log=lambda _: None,
-                      background=False, clock=slow)          # the database's own clock: no db_clock given
+                      background=False, clock=slow, credit_check=None)     # the database's own clock
     sched.tick(slow())
     assert agent.calls == []
     [(due, _, outcome, run_id, _)] = rows(conn)

@@ -514,6 +514,42 @@ The log shows `tailscale:` with the node's status, then each sync's output. The 
 tells you whether Azure can reach the bridge at all, which has never been tested: the auth key
 worked from a laptop on 2 Nov, over a direct local path.
 
+<a id="swap-the-model-key"></a>
+## Swap the model key
+
+Use this when the team gets a new model key, for example when the old key has no credit (#262). It
+changes only the `vending-anthropic-api-key` secret. It changes no code, image or setting.
+
+1. Save the new key in a file, alone, on one line. Keep the file out of the repo.
+2. Sign in: `az login --tenant golisanoinstitute.org`. Make sure `.env` has `DATABASE_URL`.
+3. Run:
+
+   ```
+   .\scripts\swap_model_key.ps1 -KeyFile C:\path\to\new-key.txt
+   ```
+
+4. Delete the key file.
+
+The script stops before it changes anything in Azure if an agent run is going (the run lease is held,
+or a scheduled time says `running`), if the new key has no credit, or if the API refuses it. It checks
+the key with one free `count_tokens` call, never a paid request. Then it sets the secret from a
+temporary file (`name=@file`; `az` reads the file itself), restarts the latest revision, waits until the
+revision is running and `/health` answers from a worker started after the restart, and checks that
+`/health` shows `model_key: true`. It never prints the key.
+
+The script holds the agent run lease from its first check until the end, as an agent run does, so no
+run can start and be cut off by the restart. A live scheduled time that comes due meanwhile waits for
+the lease and starts afterwards. The script gives the lease back when it ends, even when it fails. If
+the script is killed, the lease expires by itself within 10 minutes.
+
+A scheduled time that is waiting on model credit has no row yet, so the restarted worker claims it.
+The run starts late, inside its window. Don't swap while a run is going: the script refuses, so try
+again when the run has ended.
+
+Exit codes: 0 swapped and checked; 2 to 8 stopped before any change in Azure (the script prints why);
+1 an `az` step failed, or the worker wasn't ready in time; 9 swapped and restarted, but `/health`
+can't show the model key (scheduled runs are off on the revision) or says it is missing.
+
 ## Rolling back
 
 Container Apps keeps earlier revisions. List them and activate the previous one:
