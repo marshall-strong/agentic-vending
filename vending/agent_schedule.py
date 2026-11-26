@@ -1013,21 +1013,23 @@ class Scheduler:
             detail = CLOCKS_SKIP.format(day=f"{due.astimezone(EASTERN):%a %d %b}")
         else:
             detail = MISSED.format(latest=_eastern(latest)) if now >= latest else SUPERSEDED
-        mode = self.mode
-        if due in self.waiting:     # a time that waited: say what held it back
-            wait = self.waiting.pop(due)
+        mode, wait = self.mode, self.waiting.get(due)
+        if wait is not None:        # a time that waited: say what held it back
             missed = LIVE_MISSED if wait.mode == "live" else DRY_MISSED
             detail = (missed.format(latest=_eastern(latest), why=wait.why) if now >= latest
                       else f"{SUPERSEDED} It had been waiting: {wait.why}")
             mode = lower(mode, wait.mode)
-        if record(conn, due, latest, mode, "missed", detail, kind=kind, wakeup=wakeup):
+        stored = record(conn, due, latest, mode, "missed", detail, kind=kind, wakeup=wakeup)
+        self.waiting.pop(due, None)     # only once the row is written: a failed insert keeps why it waited
+        if stored:
             self.log(f"agent schedule: the {_name(kind)} {_eastern(due)} was missed")
 
     def _claim(self, conn, due: datetime, latest: datetime, *, kind: str = WEEKLY, wakeup: int | None = None,
-               reason: str | None = None) -> Claim | None:
+               reason: str | None = None, again: bool = False) -> Claim | None:
         """Take the time `due` for this worker, or None when it doesn't run now. The insert itself reads the
         database's mode and checks the latest start (`record`). A midweek run (`kind` MIDWEEK) names its wake-up
-        and carries its reason."""
+        and carries its reason. The credit check is a call to the API, so the database's mode is read again after
+        it: one that changed meanwhile decides again, once (`again`), with this tick's answer to the check."""
         name = _name(kind)
         if latest <= due:
             self._miss(conn, due, latest, self.db_clock(conn), kind=kind, wakeup=wakeup)
@@ -1036,7 +1038,10 @@ class Scheduler:
         if effective == "live" and (why := self._live_wait(conn, due, self.db_clock(conn), kind)) is not None:
             self._hold(due, Wait(latest, why), name)
             return None
-        if effective != "off" and (checked := self._credit_now()) is not None:
+        checked = self._credit_now() if effective != "off" else None
+        if not again and lower(self.mode, database_mode(conn)) != effective:
+            return self._claim(conn, due, latest, kind=kind, wakeup=wakeup, reason=reason, again=True)
+        if checked is not None:
             state, why = checked
             now = self.db_clock(conn)
             meant = ("live" if effective == "live" and lasting_blocker(conn, now, due=due, kind=kind) is None

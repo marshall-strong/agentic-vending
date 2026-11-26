@@ -42,46 +42,20 @@ def test_the_key_file_holds_the_key_alone(tmp_path, text, read):
     assert check.read_key(path) == read
 
 
-def _ready(tmp_path, monkeypatch, client):
-    key_file, env_file, out = tmp_path / "key.txt", tmp_path / ".env", tmp_path / "out"
+def _paths(tmp_path):
+    key_file = tmp_path / "key.txt"
     key_file.write_text(KEY + "\n", encoding="utf-8")
-    env_file.write_text("DATABASE_URL=postgresql://nobody@127.0.0.1:1/none\n", encoding="utf-8")
-    monkeypatch.setattr(check, "check_database", lambda url: (check.READY, "no agent run is going"))
-    return [str(key_file), str(env_file), str(out)], out
-
-
-@pytest.mark.parametrize("error, code", [(no_credit, 5), (bad_key, 6), (unreachable, 7)])
-def test_a_key_without_credit_or_refused_is_never_written(tmp_path, monkeypatch, capsys, error, code):
-    args, out = _ready(tmp_path, monkeypatch, None)
-    assert check.main(args, client=CreditClient(error())) == code
-    assert not out.exists()
-    said = capsys.readouterr().out
-    assert "STOP" in said and KEY not in said and "Not swapped" in said
-
-
-def test_a_key_with_credit_is_written_for_az_without_a_newline(tmp_path, monkeypatch, capsys):
-    args, out = _ready(tmp_path, monkeypatch, None)
-    client = CreditClient()
-    assert check.main(args, client=client) == 0
-    assert out.read_bytes() == KEY.encode()
-    assert len(client.counted) == 1 and set(client.counted[0]) == {"model", "messages"}
-    assert KEY not in capsys.readouterr().out
-
-
-def test_a_busy_database_stops_before_the_key_is_checked(tmp_path, monkeypatch):
-    args, out = _ready(tmp_path, monkeypatch, None)
-    monkeypatch.setattr(check, "check_database", lambda url: (check.BUSY, "not now: agent run 4 holds the lease"))
-    client = CreditClient()
-    assert check.main(args, client=client) == check.BUSY
-    assert client.counted == [] and not out.exists()
+    return key_file, tmp_path / ".env", tmp_path / "out", tmp_path / "token"
 
 
 def test_an_unreadable_key_file_or_env_stops_at_once(tmp_path, capsys):
-    (tmp_path / "key.txt").write_text("two\nlines", encoding="utf-8")
-    assert check.main([str(tmp_path / "key.txt"), str(tmp_path / ".env"), str(tmp_path / "out")]) == check.USAGE
-    (tmp_path / "key.txt").write_text(KEY, encoding="utf-8")
-    assert check.main([str(tmp_path / "key.txt"), str(tmp_path / ".env"), str(tmp_path / "out")]) == check.USAGE
-    assert KEY not in capsys.readouterr().out
+    key_file, env, out, token = _paths(tmp_path)
+    key_file.write_text("two\nlines", encoding="utf-8")
+    assert check.main(["take", str(key_file), str(env), str(out), str(token)]) == check.USAGE
+    key_file.write_text(KEY, encoding="utf-8")
+    assert check.main(["take", str(key_file), str(env), str(out), str(token)]) == check.USAGE     # no .env
+    assert check.main(["take", str(key_file)]) == check.USAGE
+    assert KEY not in capsys.readouterr().out and not out.exists()
 
 
 # --- The script itself (read, not run) ----------------------------------------------------------------------
@@ -108,16 +82,63 @@ def test_the_deploy_doc_says_how_to_swap_the_key():
 
 psycopg = pytest.importorskip("psycopg")
 
-LEASE = ("update agent_run_lease set token = gen_random_uuid(), run_id = null,"
+from tests.conftest import open_in  # noqa: E402
+
+LEASE = ("update agent_run_lease set token = gen_random_uuid(), run_id = 7,"
          " expires_at = clock_timestamp() + interval '1 hour' where one")
 
 
-def test_a_held_lease_or_a_running_time_is_busy(conn):
-    assert check.busy(conn) is None
+@pytest.fixture
+def connect(schema_url):
+    return lambda: open_in(*schema_url)
+
+
+def _take(tmp_path, connect, client):
+    key_file, env, out, token = _paths(tmp_path)
+    code = check.main(["take", str(key_file), str(env), str(out), str(token)], client=client, connect=connect)
+    return code, out, token
+
+
+def held(conn):
+    return conn.execute("select token is not null and expires_at > clock_timestamp() from agent_run_lease").fetchone()[0]
+
+
+def test_the_swap_holds_the_run_lease_until_it_gives_it_back(tmp_path, connect, conn, capsys):
+    """While the swap holds the lease no run starts; a live scheduled time waits for it (`lease_busy`)."""
+    from vending import agent_schedule, run_lease
+
+    code, out, token = _take(tmp_path, connect, CreditClient())
+    assert code == 0 and out.read_bytes() == KEY.encode() and held(conn)
+    assert agent_schedule.lease_busy(conn) is not None
+    assert isinstance(run_lease.take(conn, deadline=60), run_lease.Busy)
+    assert check.main(["renew", "unused", str(token)], connect=connect) == 0
+    assert check.main(["give-back", "unused", str(token)], connect=connect) == 0
+    assert not held(conn) and agent_schedule.lease_busy(conn) is None
+    assert check.main(["renew", "unused", str(token)], connect=connect) == check.BUSY     # gone: renew says so
+    assert KEY not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("error, code", [(no_credit, 5), (bad_key, 6), (unreachable, 7)])
+def test_a_key_without_credit_or_refused_gives_the_lease_back_and_writes_nothing(tmp_path, connect, conn, capsys,
+                                                                                error, code):
+    got, out, token = _take(tmp_path, connect, CreditClient(error()))
+    assert got == code and not out.exists() and not token.exists() and not held(conn)
+    said = capsys.readouterr().out
+    assert "STOP" in said and KEY not in said and "Not swapped" in said
+
+
+def test_a_held_lease_stops_before_the_key_is_checked(tmp_path, connect, conn):
     conn.execute(LEASE)
-    assert "holds the run lease" in check.busy(conn)
-    conn.execute("update agent_run_lease set expires_at = clock_timestamp() - interval '1 second' where one")
-    assert check.busy(conn) is None
+    client = CreditClient()
+    code, out, _ = _take(tmp_path, connect, client)
+    assert code == check.BUSY and client.counted == [] and not out.exists()
+    assert conn.execute("select run_id from agent_run_lease").fetchone()[0] == 7      # the run's lease is untouched
+
+
+def test_a_running_scheduled_time_stops_the_swap(tmp_path, connect, conn, capsys):
     conn.execute("insert into agent_schedule (due_at, latest_at, mode, outcome) values"
                  " ('2026-12-03T17:00Z', '2026-12-04T01:00Z', 'live', 'running')")
-    assert "says running" in check.busy(conn)
+    client = CreditClient()
+    code, out, _ = _take(tmp_path, connect, client)
+    assert code == check.BUSY and client.counted == [] and not held(conn)
+    assert "Thu 03 Dec 12:00 PM ET says running" in capsys.readouterr().out

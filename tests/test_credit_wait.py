@@ -294,3 +294,46 @@ def test_a_midweek_run_waits_for_credit_the_same_way(schema_url, conn):
     assert live is False and REASON in occasion
     [(_, kind, _, _, _, _, detail)] = schedule_rows(conn)
     assert kind == "midweek" and "waited on model credit from 9:10 AM ET" in detail
+
+
+def _turning_off(schema_url, answer):
+    """A credit check during which a person turns the database's mode off (on another connection)."""
+    from tests.conftest import open_in
+
+    def check():
+        with open_in(*schema_url) as c:
+            db_mode(c, "off")
+        return answer
+    return check
+
+
+@pytest.mark.parametrize("answer", [("refused", agent_schedule.MODEL_KEY_REFUSED.format(error="X")),
+                                    ("wait", agent_schedule.NO_MODEL_CREDIT)])
+def test_a_mode_turned_off_during_the_check_is_skipped_not_failed_or_waiting(schema_url, conn, live_ready, answer):
+    """Sol's review of #263: the check is a call to the API, so the mode is read again after it."""
+    agent = FakeAgent(schema_url)
+    s = scheduler(schema_url, agent, LIVE3, clock=Clock(at(THU, 11)), credit_check=_turning_off(schema_url, answer))
+    tick(s, at(THU, 12))
+    [(_, mode, outcome, _, detail)] = rows(conn)
+    assert (mode, outcome, detail) == ("off", "skipped", agent_schedule.OFF_IN_DB)
+    assert agent.calls == [] and s.public()["waiting"] is None
+
+
+def test_a_missed_row_that_fails_to_insert_keeps_why_it_waited(schema_url, conn, live_ready, monkeypatch):
+    agent = FakeAgent(schema_url)
+    s = scheduler(schema_url, agent, LIVE3, clock=Clock(at(THU, 11)), credit_check=checker(*[no_credit()] * 200))
+    tick(s, at(THU, 12))
+    real, failed = agent_schedule.record, []
+
+    def flaky(conn, due, latest, mode, outcome, *a, **kw):
+        if outcome == "missed" and not failed:
+            failed.append(due)
+            raise psycopg.OperationalError("the database went away")
+        return real(conn, due, latest, mode, outcome, *a, **kw)
+    monkeypatch.setattr(agent_schedule, "record", flaky)
+    fresh_slots(conn, at(THU, 20))
+    tick(s, at(THU, 20))
+    assert failed and rows(conn) == []
+    tick(s, at(THU, 20, 1))
+    [(_, mode, outcome, _, detail)] = rows(conn)
+    assert (mode, outcome) == ("live", "missed") and detail.startswith("LIVE RUN MISSED") and "no model credit" in detail

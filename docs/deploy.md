@@ -533,9 +533,14 @@ changes only the `vending-anthropic-api-key` secret. It changes no code, image o
 The script stops before it changes anything in Azure if an agent run is going (the run lease is held,
 or a scheduled time says `running`), if the new key has no credit, or if the API refuses it. It checks
 the key with one free `count_tokens` call, never a paid request. Then it sets the secret from a
-temporary file (`name=@file`), restarts the latest revision, waits until the revision is running and
-`/health` answers from the restarted worker, and checks that `/health` shows `model_key: true`. It
-never prints the key.
+temporary file (`name=@file`; `az` reads the file itself), restarts the latest revision, waits until the
+revision is running and `/health` answers from a worker started after the restart, and checks that
+`/health` shows `model_key: true`. It never prints the key.
+
+The script holds the agent run lease from its first check until the end, as an agent run does, so no
+run can start and be cut off by the restart. A live scheduled time that comes due meanwhile waits for
+the lease and starts afterwards. The script gives the lease back when it ends, even when it fails. If
+the script is killed, the lease expires by itself within 10 minutes.
 
 A scheduled time that is waiting on model credit has no row yet, so the restarted worker claims it.
 The run starts late, inside its window. Don't swap while a run is going: the script refuses, so try
