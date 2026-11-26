@@ -33,8 +33,9 @@ param(
     [string]$Subscription = "6eb895dc-71d3-448b-9905-9745666c1769",
     [string]$ResourceGroup = "data_systems_resource_group",
     [string]$App = "ai-group-2-vend",
-    # The secret the container's VENDING_ANTHROPIC_API_KEY reads (deploy_container_app.ps1, $OptionalSecrets).
-    [string]$SecretName = "vending-anthropic-api-key",
+    # Default: the secret the container's VENDING_ANTHROPIC_API_KEY reads now, read from Azure. The live app
+    # reads `anthropic-api-key`; a deploy with -SetSecrets maps it to `vending-anthropic-api-key` instead.
+    [string]$SecretName,
     [string]$EnvFile,
     [int]$ReadySeconds = 600
 )
@@ -67,7 +68,7 @@ function ConvertTo-Utc($Value) {
 
 $dir = Join-Path ([IO.Path]::GetTempPath()) "agentic-vending-key-$([guid]::NewGuid())"
 New-Item -ItemType Directory -Path $dir | Out-Null
-$keyCopy = Join-Path $dir $SecretName
+$keyCopy = Join-Path $dir "model-key"
 $tokenFile = Join-Path $dir "lease-token"
 try {
     Write-Host "Taking the run lease and checking that the new key has credit (a free count_tokens call)..."
@@ -86,7 +87,16 @@ try {
     $reads = @(az containerapp show --name $App --resource-group $ResourceGroup `
             --query "properties.template.containers[0].env[?name=='$KeyEnv'].secretRef" --output tsv)
     if ($LASTEXITCODE -ne 0) { throw "az containerapp show failed" }
-    if (-not (@($reads | ForEach-Object { "$_".Trim() }) -contains $SecretName)) {
+    $reads = @($reads | ForEach-Object { "$_".Trim() } | Where-Object { $_ })
+    if (-not $SecretName) {
+        if ($reads.Count -ne 1) {
+            Write-Host "STOP: $App's $KeyEnv reads no secret, so there is nothing to swap. Put the key in .env and deploy with -SetSecrets (docs/deploy.md) instead. Nothing was changed."
+            exit 8
+        }
+        $SecretName = $reads[0]
+        Write-Host "$App's $KeyEnv reads the secret $SecretName."
+    }
+    if (-not ($reads -contains $SecretName)) {
         Write-Host "STOP: $App's $KeyEnv doesn't read the secret $SecretName, so swapping it would change nothing. Put the key in .env and deploy with -SetSecrets (docs/deploy.md) instead. Nothing was changed."
         exit 8
     }
