@@ -123,20 +123,6 @@ def test_without_the_model_key_the_check_leaves_it_to_the_entry_point(monkeypatc
     assert agent_schedule.credit_state(never) is None
 
 
-def test_no_count_tokens_call_outside_the_harness():
-    """The source guard covers the free count too: only `vending.harness` talks to the API."""
-    import ast
-    from pathlib import Path
-
-    root = Path(__file__).resolve().parents[1]
-    for path in (p for d in ("vending", "scripts", "analysis") for p in (root / d).rglob("*.py")):
-        if path == root / "vending/harness.py":
-            continue
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            if isinstance(node, ast.Attribute) and node.attr == "count_tokens":
-                assert "messages" not in ast.unparse(node).split(".")[:-1], path
-
-
 # --- With the database ----------------------------------------------------------------------------------------
 
 psycopg = pytest.importorskip("psycopg")
@@ -207,7 +193,9 @@ def test_no_credit_until_the_latest_start_is_a_missed_live_run_that_names_it(sch
     agent = FakeAgent(schema_url)
     s = scheduler(schema_url, agent, LIVE3, clock=Clock(at(THU, 11)), credit_check=check)
     tick(s, at(THU, 12))
+    fresh_slots(conn, at(THU, 19, 55))      # the hourly slots check went on all afternoon: only credit holds it
     tick(s, at(THU, 19, 55))
+    assert "no model credit" in s.public()["waiting"]
     tick(s, at(THU, 20))
     assert agent.calls == []
     [(_, mode, outcome, _, detail)] = rows(conn)

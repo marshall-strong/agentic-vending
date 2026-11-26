@@ -46,6 +46,10 @@ didn't bill: its row stays, at $0, as `refused`, and a live call's ledger
 estimate is removed. A "run" is one `Harness`: its run cap covers every call
 made through it, and its `run_id` ties their rows together.
 
+`check_credit` is the one call made here outside a `Harness`: a free
+`messages.count_tokens` the scheduler sends before it claims a time, to see
+whether the key has credit. It sends no paid request and writes no row.
+
 Caps come from `config`: `model_run_cap_cents` per run, `model_daily_cap_cents`
 for live calls and `model_test_daily_cap_cents` for test calls, each per Eastern
 day (`python -m vending.config set model_test_daily_cap_cents 2000 --by <name>`).
@@ -265,6 +269,47 @@ def _no_credit(error: Any) -> bool:
             return True
         parts.append(str(inner.get("message") or ""))
     return "credit balance" in " ".join(parts).lower()
+
+
+class KeyRefused(HarnessError):
+    """The API refused the key itself (401 or 403): not a lack of credit, and no wait fixes it. Nothing was spent."""
+
+
+class Unreachable(HarnessError):
+    """The credit check got no answer it could read: the API couldn't be reached, timed out, was busy (429) or
+    failed (5xx). The run's own first request would hit the same, so a scheduled run waits. Nothing was spent."""
+
+
+CREDIT_CHECK_TIMEOUT = 30.0     # seconds for the one count_tokens call of `check_credit`
+CREDIT_CHECK_MESSAGES = [{"role": "user", "content": "credit check"}]
+
+
+def check_credit(client: Any, model: str, *, key_env: str = DEFAULT_KEY_ENV) -> None:
+    """Whether the key can pay for `model` now, from one free `messages.count_tokens` call: never a paid request.
+
+    The scheduler runs it before it claims a time (`vending.agent_schedule`), with the run's own client and model.
+    The client is checked as the harness checks it (`check_client`), so the check asks with the key the run would
+    pay with. Returns when the API counted the request; raises `NoCredit` when it says the account has no credit
+    (the same reading as a paid call's, `_no_credit`), `KeyRefused` for a 401 or 403, `Unreachable` for no usable
+    answer (a timeout, a dropped connection, a 429 or a 5xx), and `HarnessError` for any other refusal (the run's
+    own request would record it). Count calls bill nothing, so no `model_calls` row is written. Neither the key nor
+    the API's message is in what it raises."""
+    import anthropic
+
+    check_client(client, key_env)
+    try:
+        client.with_options(max_retries=0, timeout=CREDIT_CHECK_TIMEOUT).messages.count_tokens(
+            model=model, messages=CREDIT_CHECK_MESSAGES)
+    except anthropic.APIStatusError as error:
+        if _no_credit(error):
+            raise NoCredit(f"the API says the key has no credit left ({_describe(error)})") from None
+        if error.status_code in (401, 403):
+            raise KeyRefused(f"the API refused the key ({_describe(error)})") from None
+        if error.status_code == 429 or error.status_code >= 500:
+            raise Unreachable(f"the API didn't answer the credit check ({_describe(error)})") from None
+        raise HarnessError(f"the API refused the credit check ({_describe(error)})") from None
+    except anthropic.APIError as error:     # a timeout or a dropped connection
+        raise Unreachable(f"the API couldn't be reached ({_describe(error)})") from None
 
 
 class Abandoned(HarnessError):
