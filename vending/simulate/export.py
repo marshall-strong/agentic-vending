@@ -185,8 +185,25 @@ def load_settings(conn: psycopg.Connection, export: dict, by: str) -> list[str]:
     return done
 
 
+def load_delisted(conn: psycopg.Connection, export: dict) -> int:
+    """The exported drinks the team's catalog has delisted, into the season's catalog as delisted, as the team database
+    holds them. The bridge's answer leaves them out (`catalog`), so the season's catalog sync never stores them, and
+    their sourcing rows (the 25 Nov SKU rename left some) would break `sourcing_options`' foreign key."""
+    n = 0
+    for c in export["catalog"]:
+        if not c.get("delisted_at"):
+            continue
+        n += conn.execute(
+            "insert into catalog_products (sku, name, line, flavor, size, delisted_at, last_response)"
+            " values (%s, %s, %s, %s, %s, %s, %s) on conflict (sku) do nothing",
+            (c["sku"], c["name"], c.get("line"), c.get("flavor"), c.get("size"), c["delisted_at"],
+             Jsonb({k: c.get(k) for k in ("sku", "name", "line", "flavor", "size")}))).rowcount
+    return n
+
+
 def load_prices(conn: psycopg.Connection, export: dict) -> dict:
     """The sourcing table and the price memory, as the team database holds them."""
+    load_delisted(conn, export)
     n = _insert(conn, "sourcing_options", export["sourcing"])
     m = _insert(conn, "price_lookups", export["price_lookups"])
     if m:

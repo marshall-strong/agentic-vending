@@ -120,6 +120,30 @@ def build(detail: Path, season_id: str, name: str | None = None, strategy: str |
     return summary
 
 
+BACKUP_COUNTS = (
+    ("same_drink", "substitute", r"^Backups after: (\d+) the same drink at another store, (\d+) a substitute drink\.$"),
+    ("lines", "with_backup_before", "with_backup_after",
+     r"^Lines with a backup: (\d+) of (\d+) now, (\d+) of \d+ after"),
+    ("most_we_pay_before", "most_we_pay_after", r"^Fill most-we-pay: \$([\d,.]+) now, \$([\d,.]+) after;"),
+)
+
+
+def backups(step: dict) -> dict:
+    """Saturday's backups step as numbers only: its exit and counts, read from its output. No text is copied, so no
+    drink or selection can reach the summary (Sol, #265)."""
+    out: dict = {"exit": step.get("exit")}
+    lines = (step.get("said") or "").splitlines()
+    for *names, pattern in BACKUP_COUNTS:
+        found = next((m for m in map(re.compile(pattern).match, lines) if m), None)
+        if found:
+            values = [g.replace(",", "") for g in found.groups()]
+            if names[0] == "lines":
+                values = [values[1], values[0], values[2]]      # "X of N now, Y of N after"
+            out.update({n: float(v) if "." in v else int(v) for n, v in zip(names, values)})
+    out["refused"] = any(ln.startswith("Refused;") for ln in lines)
+    return out
+
+
 def rehearsal(r: dict) -> dict:
     """A live-schedule season's own facts, cut down: the scheduled runs by kind and outcome, the day-one fill, the
     round's jobs, the dashboard's timings, and what the season couldn't simulate (`vending.simulate.live`)."""
@@ -144,7 +168,8 @@ def rehearsal(r: dict) -> dict:
                         "warnings": len((day_one.get("preview") or {}).get("warnings") or []),
                         "deviations": (day_one.get("preview") or {}).get("deviations") or [],
                         "refused_first": first.get("codes") or [],
-                        "flags": [a for a in (day_one.get("submit") or {}).get("argv") or [] if a.startswith("--a")]},
+                        "flags": [a for a in (day_one.get("submit") or {}).get("argv") or [] if a.startswith("--a")],
+                        "backups": backups(day_one.get("alternates") or {})},
             "tracking_checks": r.get("tracking_checks"), "price_checks": len(r.get("price_checks") or []),
             "refusals": r.get("refusals"), "round_failures": len(r.get("round_failures") or []),
             "dashboard": dash, "not_simulated": r.get("not_simulated") or []}

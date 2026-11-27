@@ -165,6 +165,67 @@ def test_nothing_is_written_while_the_fill_is_over_the_cap(db, fake, schema_url,
     assert "over_limit" in capsys.readouterr().err and rows(db) == before
 
 
+def test_a_dearer_alternate_of_another_pack_is_removed_while_the_fill_is_over_the_cap(
+        db, fake, schema_url, capsys, monkeypatch):  # noqa: F811
+    """Plan #9 on 27 Nov: a stored Walmart 24-pack alternate for an 8-pack line, max $26.14 against the pick's $8.28,
+    put the fill's most-we-pay at $419.60. Its max can't come down (another pack), no other store fitted, so the write
+    was refused (over_limit) and the fill's preview refused the day one (over_fill_cap). It is removed: the fill can
+    then pass the cap, and lines before it in SKU order are judged under the cap."""
+    seed(db, fake)
+    # 70 units in 24-packs: 3 x $30.00 = $90.00 for the line, against the pick's 6 x $13.00 = $78.00.
+    sourcing.set_option(db, option("COKE20", "alternate", store="Walmart", units_per_pack=24, expected_cents=2000,
+                                   max_cents=3000), NOW)
+    monkeypatch.setattr(alternates, "FILL_CAP_CENTS", 16500)        # the pick is $162.00 at the most; $174.00 now
+    assert run(schema_url, fake, "--write", "--by", "Test Runner") == 0, capsys.readouterr().err
+    out = capsys.readouterr().out
+    assert ("COKE20", "alternate") not in rows(db)
+    assert "removed" in out and "Fill most-we-pay: $174.00 now, $162.00 after" in out
+    assert db.execute("select count(*) from action_log where tool = 'sourcing.remove'").fetchone() == (1,)
+    assert db.execute("select count(*) from action_log where tool = %s", (alternates.TOOL,)).fetchone() == (1,)
+
+
+def test_a_cheaper_alternate_of_another_pack_is_kept(db, fake, schema_url, capsys, monkeypatch):  # noqa: F811
+    """Only a backup that raises the fill's most-we-pay goes, and only while the fill is over the cap."""
+    seed(db, fake)
+    sourcing.set_option(db, option("COKE20", "alternate", store="Walmart", units_per_pack=24, expected_cents=2000,
+                                   max_cents=2500), NOW)         # 3 x $25.00 = $75.00, under the pick's $78.00
+    before = rows(db)
+    assert run(schema_url, fake, "--write", "--by", "Test Runner") == 0
+    assert rows(db) == before
+
+
+def test_no_backup_is_removed_when_lowering_maxes_alone_meets_the_cap(db, fake, schema_url, capsys,
+                                                                      monkeypatch):  # noqa: F811
+    """Sol, #265 finding 4: the removal pass counts the maxes the step will lower first. Here lowering the PICKLE
+    alternate's max (4 x $3.00) brings the fill from $177.00 to $165.00, under a $166.00 cap, so the dearer COKE20
+    24-pack alternate ($81.00 against $78.00) is a backup the fill can still send, and stays."""
+    seed(db, fake)
+    sourcing.set_option(db, option("COKE20", "alternate", store="Walmart", units_per_pack=24, expected_cents=2000,
+                                   max_cents=2700), NOW)
+    sourcing.set_option(db, option("PICKLE", "alternate", store="Walmart", url=URLS["Walmart"], expected_cents=1900,
+                                   max_cents=2400), NOW)
+    monkeypatch.setattr(alternates, "FILL_CAP_CENTS", 16600)
+    assert run(schema_url, fake, "--write", "--by", "Test Runner") == 0, capsys.readouterr().err
+    out = capsys.readouterr().out
+    assert rows(db)[("COKE20", "alternate")].units_per_pack == 24 and rows(db)[("PICKLE", "alternate")].max_cents == 2100
+    assert "Fill most-we-pay: $177.00 now, $165.00 after" in out, out
+
+
+def test_a_line_with_a_stored_substitute_keeps_its_alternate(db, fake, schema_url, capsys, monkeypatch):  # noqa: F811
+    """Sol, #265 finding 1: removing the alternate would bring in the line's stored substitute, so the pass leaves
+    such a line alone."""
+    plan_id = seed(db, fake)
+    sourcing.set_option(db, option("COKE20", "alternate", store="Walmart", units_per_pack=24, expected_cents=2000,
+                                   max_cents=3000), NOW)
+    db.execute("insert into fill_substitutes (plan_id, sku, substitute_sku, max_cents, set_by, set_at)"
+               " values (%s, 'COKE20', 'PICKLE', 1200, 'Test Runner', %s)", (plan_id, NOW))
+    monkeypatch.setattr(alternates, "FILL_CAP_CENTS", 16500)
+    run(schema_url, fake, "--write", "--by", "Test Runner")
+    assert rows(db)[("COKE20", "alternate")].units_per_pack == 24
+    assert db.execute("select substitute_sku, max_cents, set_by from fill_substitutes").fetchall() == [
+        ("PICKLE", 1200, "Test Runner")]
+
+
 def test_a_plan_row_changed_after_the_trials_refuses_the_write(db, fake, schema_url):  # noqa: F811
     seed(db, fake)
     lookup(db, "COKE20", "Walmart", 12, 1150)

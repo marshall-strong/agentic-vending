@@ -23,7 +23,10 @@ A price counts when:
 
 The cheapest per unit wins (then in stock, then Amazon, Walmart, Costco, BJs). An existing alternate whose max
 alone is over the pick's, with a price under it, gets its max lowered to the pick's (C4 on 25 Nov). An alternate
-that differs from the pick in packs or units is replaced when a price fits, else left and listed.
+that differs from the pick in packs or units is replaced when a price fits, else left and listed. While the fill is
+over the cap or under the floor, a stored alternate of another pack size whose removal lowers the fill's most-we-pay is
+removed first, in SKU order, until it isn't: its max can't come down to the pick's, and it would keep every line's
+trial over the cap (plan #9 on 27 Nov: a 24-pack alternate for an 8-pack line put the fill at $419.60).
 
 A line still without one gets a substitute: another drink of the plan (Kevin, 25 Nov: "double stock two slots
 if needed"), at its own fresh primary row, stored in `fill_substitutes` for the picked plan. The fill sends it as
@@ -97,10 +100,11 @@ class Line:
     action: str                         # kept, set, replaced, lowered, substitute, removed, none
     why: str                            # what changed, or why there is none
     drop_sub: bool = False              # its stored substitute is removed (`fill_substitutes`)
+    drop_alt: bool = False              # its stored alternate is removed (`before`), as it kept the fill over the cap
 
     @property
     def changed(self) -> bool:
-        return self.action in ("set", "replaced", "lowered", "substitute", "removed") or self.drop_sub
+        return self.action in ("set", "replaced", "lowered", "substitute", "removed") or self.drop_sub or self.drop_alt
 
     @property
     def substitutes(self) -> bool:
@@ -301,6 +305,34 @@ def backups(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = Non
         if s.sku:
             in_slots[s.sku] = in_slots.get(s.sku, 0) + 1
     pooled = tuple(sorted(sku for sku, n in in_slots.items() if n > 1))
+    # While the fill is over the cap or the floor, even with every max the loop below can lower (C4) lowered: drop each
+    # stored alternate of another pack size whose removal lowers the most-we-pay. Its max can't be lowered to the
+    # pick's, and every trial below would be judged over the cap. A line with a stored substitute is left alone: the
+    # removal would bring the substitute in (Sol, #265).
+    dropped: dict[str, sourcing.Option] = {}
+    lowered = dict(rows)
+    for p in pick.round.purchases:
+        alt = rows.get((p.sku, "alternate"))
+        fit = min(p.most_cents // max(p.packs, 1), planner.MAX_PRICE_PER_PACK_CENTS)
+        if (alt is not None and alt.expected_cents is not None and alt.units_per_pack == p.units_per_pack
+                and alt.expected_cents <= fit < alt.max_cents):
+            lowered[(p.sku, "alternate")] = replace(alt, max_cents=fit)
+    best = trial(gathered, pick.round, lowered, subs) if lowered != rows else current
+    for p in sorted(pick.round.purchases, key=lambda p: p.sku):
+        if not _over(best, floor_cents):
+            break
+        alt = rows.get((p.sku, "alternate"))
+        if (alt is None or p.sku in subs or alt.units_per_pack == p.units_per_pack
+                or not _alternate_deviates(current, p.sku)):
+            continue
+        attempt = {k: v for k, v in lowered.items() if k != (p.sku, "alternate")}
+        tried = trial(gathered, pick.round, attempt, subs)
+        if tried.max_cents < best.max_cents and not tried.refusals - best.refusals:
+            lowered, best = attempt, tried
+            dropped[p.sku] = alt
+    if dropped:
+        rows = {k: v for k, v in rows.items() if not (k[1] == "alternate" and k[0] in dropped)}
+        current = trial(gathered, pick.round, rows, subs)
     lines = []
     for p in sorted(pick.round.purchases, key=lambda p: p.sku):
         primary, alt = rows.get((p.sku, "primary")), rows.get((p.sku, "alternate"))
@@ -390,7 +422,21 @@ def backups(conn: psycopg.Connection, bridge: Bridge, now: datetime | None = Non
             lines.append(Line(p.sku, primary, stored, None, "removed", reasons, drop_sub=True))
             continue
         lines.append(Line(p.sku, primary, alt, alt, "none", reasons))
+    lines = [_dropped(ln, dropped[ln.sku]) if ln.sku in dropped else ln for ln in lines]
     return Result(pick, since, visit, tuple(lines), first, current, floor_cents, read, subs_read, pooled)
+
+
+def _over(t: Trial, floor_cents: int) -> bool:
+    return t.max_cents > FILL_CAP_CENTS or START_CENTS - t.max_cents < floor_cents
+
+
+def _dropped(ln: Line, alt: sourcing.Option) -> Line:
+    """A line whose stored alternate the removal pass dropped: `before` is that alternate, and it goes on `--write`."""
+    said = (f"its {alt.store} {alt.units_per_pack}-pack alternate (max {_usd(alt.max_cents)}) is another pack than the "
+            "pick and costs more for the line, which kept the fill over the cap: removed")
+    if ln.after is None or ln.action == "none":
+        return replace(ln, before=alt, after=None, action="removed", why=f"{said}. {ln.why}", drop_alt=True)
+    return replace(ln, before=alt, why=f"{said}; then {ln.why}", drop_alt=True)
 
 
 def _stored_problem(row: sourcing.Option | None, had: fill.Substitute, since: datetime, visit: date,
@@ -481,12 +527,19 @@ def write(conn: psycopg.Connection, result: Result, by: str, now: datetime | Non
         at = now or conn.execute("select now()").fetchone()[0]
         for ln in changed:
             row = ln.after
+            if ln.drop_alt:
+                sourcing.remove(conn, ln.sku, "alternate", by.strip())
+                said.append(f"{ln.sku}: its {sourcing.describe(ln.before)} alternate removed")
             if ln.drop_sub:
                 conn.execute("delete from fill_substitutes where plan_id = %s and sku = %s",
                              (result.picked.id, ln.sku))
                 if ln.action == "removed":
                     said.append(f"{ln.sku}: its stored substitute removed")
                     continue
+            if ln.action == "removed":
+                continue
+            if ln.substitutes and ln.action != "substitute":
+                continue                            # a kept substitute stays as stored (Sol, #265)
             if ln.substitutes:
                 conn.execute(
                     "insert into fill_substitutes (plan_id, sku, substitute_sku, max_cents, set_by, set_at)"
