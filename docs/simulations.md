@@ -22,10 +22,11 @@ cash and stock-outs, the report card, and each run's decision with its reason. T
 (every run's tool calls, every request and receipt, every slot on every day) stays on the machine
 that ran the season.
 
-Seven seasons are kept, about 1,400 lines in all:
+Eight seasons are kept, about 1,800 lines in all:
 
 | Season | Why it is kept | Profit after AI cost |
 |---|---|---:|
+| `2026-11-27-final-rehearsal-scripted` | The final dress rehearsal: plan #9 with Saturday's backups, the live schedule, the simple rule (the paid Opus run didn't happen: the personal key had no credit) | $1,368.27 |
 | `2026-11-25-live-rehearsal-opus-medium` | The dress rehearsal: plan #8, the live schedule, Opus 5.5 medium on current main | $1,445.27 |
 | `2026-11-25-live-rehearsal-scripted` | The same rehearsal with the simple rule deciding | $1,292.45 |
 | `2026-11-16-opus-medium-round3` | The best: Opus 5.5 after round 3's changes, 15 drinks, a top-up rule | $963.69 |

@@ -162,9 +162,9 @@ def test_the_live_pages_do_not_link_or_show_simulations(site):
 def test_the_committed_summaries_load_and_stay_small():
     seasons = summary.load_all()
     assert {s.id for s in seasons} >= {"2026-11-16-opus-medium-round3", "2026-11-16-opus-medium"}
-    assert len(seasons) <= 8         # the five from 16 Nov and 25 Nov's two live-schedule rehearsals
+    assert len(seasons) <= 9         # the five from 16 Nov, 25 Nov's two live-schedule rehearsals, 27 Nov's final ones
     lines = sum(len(p.read_text(encoding="utf-8").splitlines()) for p in summary.SEASONS.glob("*.json"))
-    assert lines < 1500
+    assert lines < 2100
     for s in seasons:
         assert s.data["simulated"] is True
         assert all(len(d["reason"] or "") <= summary.REASON_CHARS for d in s.data["decisions"])
