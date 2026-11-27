@@ -120,6 +120,9 @@ def build(detail: Path, season_id: str, name: str | None = None, strategy: str |
     return summary
 
 
+BACKUP_LINES = ("Backups after:", "Lines with a backup:", "Fill most-we-pay:", "Refused;")
+
+
 def rehearsal(r: dict) -> dict:
     """A live-schedule season's own facts, cut down: the scheduled runs by kind and outcome, the day-one fill, the
     round's jobs, the dashboard's timings, and what the season couldn't simulate (`vending.simulate.live`)."""
@@ -144,7 +147,11 @@ def rehearsal(r: dict) -> dict:
                         "warnings": len((day_one.get("preview") or {}).get("warnings") or []),
                         "deviations": (day_one.get("preview") or {}).get("deviations") or [],
                         "refused_first": first.get("codes") or [],
-                        "flags": [a for a in (day_one.get("submit") or {}).get("argv") or [] if a.startswith("--a")]},
+                        "flags": [a for a in (day_one.get("submit") or {}).get("argv") or [] if a.startswith("--a")],
+                        # Saturday's backups step: its exit and its count lines (no drink or slot named in them).
+                        "backups": {"exit": (day_one.get("alternates") or {}).get("exit"),
+                                    "said": [ln for ln in ((day_one.get("alternates") or {}).get("said") or "")
+                                             .splitlines() if ln.startswith(BACKUP_LINES)]}},
             "tracking_checks": r.get("tracking_checks"), "price_checks": len(r.get("price_checks") or []),
             "refusals": r.get("refusals"), "round_failures": len(r.get("round_failures") or []),
             "dashboard": dash, "not_simulated": r.get("not_simulated") or []}

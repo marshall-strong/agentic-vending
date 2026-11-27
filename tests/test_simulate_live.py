@@ -88,12 +88,19 @@ def _export() -> dict:
                for p in world.PRODUCTS if p.sku in {r["sku"] for r in rows}]
     catalog.append({"sku": NEW, "name": "Olipop Vintage Cola 12 oz can", "line": "Olipop", "flavor": "Vintage Cola",
                     "size": "12 oz can", "delisted_at": None})
+    # The go-live re-price's find of Red Bull at Walmart, read by the check model: Saturday's backups step gives the
+    # Red Bull lines it as their alternate.
+    lookups = [{"id": 1, "at": CHECKED.isoformat(), "sku": "REDBULL-ORIGINAL-8_4CAN", "store": "Walmart",
+                "kind": "search", "asked_min": 24, "asked_max": 24, "units_per_pack": 24, "price_cents": 3299,
+                "url": "https://www.walmart.com/ip/red-bull-24/456", "stock": "in_stock", "outcome": "found",
+                "model": "claude-sonnet-5-5", "cost_usd": "0", "searches": 1, "no_store": False, "by": "Test Runner",
+                "detail": None}]
     return {"version": 1, "exported_at": CHECKED.isoformat(),
             "assignment": {"device_id": "vmc1", "slots": list(EXAMPLE)},
             "plan": {"id": 8, "loaded_at": CHECKED.isoformat(), "loaded_by": "Test Loader", "label": "7c",
                      "source_note": "test", "plan": plan, "projection": projection, "slots": list(EXAMPLE),
                      "picked": True},
-            "sourcing": rows, "price_lookups": [], "catalog": catalog}
+            "sourcing": rows, "price_lookups": lookups, "catalog": catalog}
 
 
 def test_the_export_reads_only_our_rows_in_a_read_only_transaction(schema_url):
@@ -148,6 +155,34 @@ def test_an_exported_drink_the_world_lacks_gets_its_lines_rate_or_the_default():
     assert not {NEW, "REDBULL-ORIGINAL-8_4CAN"} & {c["sku"] for c in export.catalog(data)}
 
 
+def test_a_delisted_drinks_rows_load_as_the_team_database_holds_them(schema_url):
+    """27 Nov: the 25 Nov SKU rename delisted drinks that keep sourcing rows in the team database. The bridge's answer
+    leaves a delisted drink out, so the season's catalog lacked them, and their rows broke the load (the foreign key
+    on `sourcing_options`). They load as the team database holds them: in the catalog, delisted."""
+    from psycopg.types.json import Jsonb
+
+    from tests.conftest import open_in
+    from vending.simulate import export
+
+    url, schema = schema_url
+    data = _export()
+    old = "REDBULL-SUGARFRE-8_4CAN"
+    data["sourcing"].append(dict(data["sourcing"][0], sku=old))
+    data["catalog"].append({"sku": old, "name": "Red Bull Sugarfree 8.4 oz can", "line": "Red Bull",
+                            "flavor": "Sugarfree", "size": "8.4 oz can", "delisted_at": CHECKED.isoformat()})
+    assert old not in {c["sku"] for c in export.catalog(data)}
+    with open_in(url, schema) as conn:
+        for c in export.catalog(data):          # what the season's catalog sync stores from the bridge's answer
+            conn.execute("insert into catalog_products (sku, name, line, flavor, size, last_response)"
+                         " values (%s, %s, %s, %s, %s, %s) on conflict do nothing",
+                         (c["sku"], c["name"], c.get("line"), c.get("flavor"), c.get("size"), Jsonb(c)))
+        loaded = export.load_prices(conn, data)
+        assert loaded["sourcing_rows"] == len(data["sourcing"])
+        assert conn.execute("select delisted_at is not null from catalog_products where sku = %s",
+                            (old,)).fetchone() == (True,)
+        assert conn.execute("select count(*) from sourcing_options where sku = %s", (old,)).fetchone() == (1,)
+
+
 # --- a first week on the live schedule ------------------------------------------------------------------------
 
 def test_the_first_week_runs_from_the_picked_plan_and_the_workers_scheduler(schema_url, monkeypatch, tmp_path):
@@ -178,8 +213,18 @@ def test_the_first_week_runs_from_the_picked_plan_and_the_workers_scheduler(sche
                 live.configure(conn)
                 steps = live.day_one(conn, st, data, say=lambda *_: None)
             assert steps["ledger_open"]["exit"] == 0 and steps["submit"]["exit"] == 0, steps
-            assert steps["refused_first"]["codes"] == ["pick_deviation"] and "--accept-deviations" in steps["submit"]["argv"]
+            # Saturday's backups step runs before the preview (docs/sourcing.md): it lowers the Walmart Coca-Cola
+            # alternate's max to the pick's (C4), so the first submit isn't refused, and gives Red Bull a backup.
+            assert steps["alternates"]["exit"] == 0, steps["alternates"]
+            assert "refused_first" not in steps and "--accept-deviations" not in steps["submit"]["argv"], steps
             [filed] = st.bridge.requests.values()
+            backups = {(ln.get("primary") or {}).get("sku"): (ln.get("alternate") or {}).get("store")
+                       for ln in filed.body["lines"]}
+            assert backups["REDBULL-ORIGINAL-8_4CAN"] == "Walmart" and backups["COCA-ORIGINAL-20BOT"] == "Walmart"
+            from vending.simulate import summary as summary_mod
+            kept = summary_mod.rehearsal({"day_one": steps})["day_one"]["backups"]
+            assert kept["exit"] == 0 and any(ln.startswith("Lines with a backup: ") for ln in kept["said"]), kept
+            assert not any("REDBULL" in ln or "COCA" in ln for ln in kept["said"]), kept
             assert filed.submitted_at == live.FILL_AT
             assert conn.execute("select purpose from purchase_submissions").fetchall() == [("fill",)]
             opts["driver"] = live.Driver(conn, st, opts, say=lambda *_: None,

@@ -45,6 +45,10 @@ ENV = {"AGENT_SCHEDULE_MODE": "live", "AGENT_SCHEDULE": agent_schedule.DEFAULT_T
 # And in the database. The per-run cap is the season's `--run-cap`; the daily cap is live's $4 (Kevin, 24 Nov).
 DB_SETTINGS = {"agent_schedule_mode": "live", "price_check_mode": "dry-run"}
 DAILY_CAP_CENTS = 400
+# Saturday's backups step (`python -m vending.alternates --write`) reads prices looked up in the last 24 hours, after
+# the go-live re-price. A season makes no web search, so the exported lookups stand in for that re-price: the newest
+# usable one at each store, within the most the step allows.
+ALTERNATES_MAX_AGE_HOURS = 144
 # The mid-season dashboard check, after the round at this time.
 MID_SEASON = datetime(2027, 1, 6, 12, 0, tzinfo=EASTERN)
 # The world re-prices after the weekly price check's time (Tue 12:00), so the dry-run check sees the week-old
@@ -119,7 +123,7 @@ def _quiet(call, *args, **kwargs) -> tuple[object, str]:
 def day_one(conn: psycopg.Connection, st, data: dict, say=print) -> dict:
     """Saturday's go-live steps on the scratch database, at `FILL_AT`, through the real commands. Returns what happened;
     raises SystemExit when the fill is refused, since a season without its day one isn't a rehearsal."""
-    from vending import fill, ledger
+    from vending import alternates, fill, ledger
     from vending.simulate import export, season
 
     steps: dict = {}
@@ -130,6 +134,11 @@ def day_one(conn: psycopg.Connection, st, data: dict, say=print) -> dict:
     if rc != 0:
         raise SystemExit(f"ledger open failed: {text.strip()}")
     steps["plan_id"] = export.load_plan(conn, data, BY)
+    # A backup for every line, after the re-price and before the preview (docs/sourcing.md, "A backup for every fill
+    # line"). A refused write leaves the lines as they were, and the fill goes on, as it would on Saturday.
+    rc, text = _quiet(alternates.main, ["--write", "--by", BY, "--max-age", str(ALTERNATES_MAX_AGE_HOURS)],
+                      bridge=lambda: st.bridge, connect=db.connect)
+    steps["alternates"] = {"exit": rc, "said": text.strip()[-3000:]}
     preview = fill.preview(conn, st.bridge, None)
     steps["preview"] = {"ok": preview.ok, "refusals": [f"{r.code}: {r.message}" for r in preview.refusals],
                         "warnings": list(preview.warnings), "deviations": list(preview.deviations),

@@ -165,6 +165,35 @@ def test_nothing_is_written_while_the_fill_is_over_the_cap(db, fake, schema_url,
     assert "over_limit" in capsys.readouterr().err and rows(db) == before
 
 
+def test_a_dearer_alternate_of_another_pack_is_removed_while_the_fill_is_over_the_cap(
+        db, fake, schema_url, capsys, monkeypatch):  # noqa: F811
+    """Plan #9 on 27 Nov: a stored Walmart 24-pack alternate for an 8-pack line, max $26.14 against the pick's $8.28,
+    put the fill's most-we-pay at $419.60. Its max can't come down (another pack), no other store fitted, so the write
+    was refused (over_limit) and the fill's preview refused the day one (over_fill_cap). It is removed: the fill can
+    then pass the cap, and lines before it in SKU order are judged under the cap."""
+    seed(db, fake)
+    # 70 units in 24-packs: 3 x $30.00 = $90.00 for the line, against the pick's 6 x $13.00 = $78.00.
+    sourcing.set_option(db, option("COKE20", "alternate", store="Walmart", units_per_pack=24, expected_cents=2000,
+                                   max_cents=3000), NOW)
+    monkeypatch.setattr(alternates, "FILL_CAP_CENTS", 16500)        # the pick is $162.00 at the most; $174.00 now
+    assert run(schema_url, fake, "--write", "--by", "Test Runner") == 0, capsys.readouterr().err
+    out = capsys.readouterr().out
+    assert ("COKE20", "alternate") not in rows(db)
+    assert "removed" in out and "Fill most-we-pay: $174.00 now, $162.00 after" in out
+    assert db.execute("select count(*) from action_log where tool = 'sourcing.remove'").fetchone() == (1,)
+    assert db.execute("select count(*) from action_log where tool = %s", (alternates.TOOL,)).fetchone() == (1,)
+
+
+def test_a_cheaper_alternate_of_another_pack_is_kept(db, fake, schema_url, capsys, monkeypatch):  # noqa: F811
+    """Only a backup that raises the fill's most-we-pay goes, and only while the fill is over the cap."""
+    seed(db, fake)
+    sourcing.set_option(db, option("COKE20", "alternate", store="Walmart", units_per_pack=24, expected_cents=2000,
+                                   max_cents=2500), NOW)         # 3 x $25.00 = $75.00, under the pick's $78.00
+    before = rows(db)
+    assert run(schema_url, fake, "--write", "--by", "Test Runner") == 0
+    assert rows(db) == before
+
+
 def test_a_plan_row_changed_after_the_trials_refuses_the_write(db, fake, schema_url):  # noqa: F811
     seed(db, fake)
     lookup(db, "COKE20", "Walmart", 12, 1150)

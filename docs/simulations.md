@@ -87,7 +87,8 @@ have. They show that agent, not main's.
 | Midweek wake-ups (`MIDWEEK_WAKE=on`), the run lease, `model_run_cap_cents` | The same code |
 | The daily tracking check (`TRACKING_DAILY=on`) | `tracking_daily.run` against the simulated bridge's books |
 | The weekly price check (`PRICE_CHECK_MODE`) | `price_schedule.PriceChecks` as a dry run; the world re-prices on Tuesday at 12:30 |
-| Sourcing and prices: the team database's four-store rows | `--from-export`: the same rows, exported read-only |
+| Sourcing and prices: the team database's four-store rows | `--from-export`: the same rows, exported read-only; a drink the catalog delisted keeps its rows, as in the team database |
+| Sat 28 Nov, after the re-price: `python -m vending.alternates --write`, before the fill preview | The same command at 18:00 ET, on the exported lookups (`--max-age 144`: a season makes no web search) |
 
 The real scheduler, the run lease and the submit's checks read the database's clock, so the scratch database gets
 the season's clock (`vending/simulate/dbclock.py`: `now()` and `clock_timestamp()` in the schema, before

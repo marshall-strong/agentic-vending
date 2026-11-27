@@ -315,6 +315,9 @@ python -m vending.alternates --write --by NAME     # store them
   per unit wins.
 - **Its max.** The price plus 25%, held to the pick's most-we-pay per pack. A price above that is left out.
 - **An existing alternate** whose max alone is over the pick's gets its max lowered to the pick's (C4 on 25 Nov).
+  While the fill is over the cap or the floor, a stored alternate of another pack size whose removal lowers the
+  fill's most-we-pay is removed first (logged as `sourcing.remove`), then every line is judged. On 27 Nov plan #9's
+  stored 24-pack alternate for an 8-pack line put the fill at $419.60, so the fill and this step were both refused.
 - **A substitute** when no other store fits: another drink of the plan (Kevin, 25 Nov: "double stock two slots if
   needed"), at its own primary row checked within `--max-age`, at a store whose cutoff hasn't passed. Cheapest per
   unit first. Its max per pack keeps its packs within the pick's most-we-pay for the line. Stored in
