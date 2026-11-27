@@ -223,8 +223,9 @@ def test_the_first_week_runs_from_the_picked_plan_and_the_workers_scheduler(sche
             assert backups["REDBULL-ORIGINAL-8_4CAN"] == "Walmart" and backups["COCA-ORIGINAL-20BOT"] == "Walmart"
             from vending.simulate import summary as summary_mod
             kept = summary_mod.rehearsal({"day_one": steps})["day_one"]["backups"]
-            assert kept["exit"] == 0 and any(ln.startswith("Lines with a backup: ") for ln in kept["said"]), kept
-            assert not any("REDBULL" in ln or "COCA" in ln for ln in kept["said"]), kept
+            assert kept["exit"] == 0 and kept["lines"] == 3 and kept["with_backup_after"] == 2, kept
+            assert kept["same_drink"] == 2 and kept["substitute"] == 0 and not kept["refused"], kept
+            assert all(isinstance(v, (int, float, bool)) for v in kept.values()), kept
             assert filed.submitted_at == live.FILL_AT
             assert conn.execute("select purpose from purchase_submissions").fetchall() == [("fill",)]
             opts["driver"] = live.Driver(conn, st, opts, say=lambda *_: None,
