@@ -192,6 +192,20 @@ To number in `docs/assumptions.md` (open PRs already take A16 to A19).
 | R8 | 5 class days of in-stock sales are enough for a slot's own rate to replace the segment prior. | Rates that keep moving a lot after 5 days. |
 | R9 | No substitution between our slots: a buyer who finds a slot empty buys nothing from us (unmeasured; `docs/inventory-demand.md`). If some switch, rule 2's saved margin is too high. | Sales in our other slots rising while one is empty. |
 
+## Decided on #110 (Kevin, 27 Nov)
+
+The seven team choices from #110. Teammates were asked to object by Fri 27 Nov 6 PM ET; none did.
+
+| # | Choice | Decision | Code |
+|---|---|---|---|
+| 1 | Wildcard money | One wildcard slot, 19 regular; $82 per purchase for it (team, 16 Nov) | `docs/agent/wildcard.md`, `vending/wildcard_trial.py` |
+| 2 | When to buy stock | Every restock fills each slot to its column, closet first, subject to the $53 floor (rule 1) | `vending/planner.py` |
+| 3 | When a $25 midweek visit pays | Mon or Tue wake-up when the margin a visit saves beats the fee; at most one a week. **On from the go-live** (`MIDWEEK_WAKE=on`) | `vending/midweek_wake.py`, `vending/agent_schedule.py` |
+| 4 | Slow seller | Swap at the next restock after 5 class days in a row in stock with both counters flat; unclear evidence never adds a day; no person confirms (#256) | `vending/stock.py`, `docs/agent/restocking.md` |
+| 5 | Product-switch reserve | None apart from the $53 spendable floor every request keeps | `vending/planner.py` |
+| 6 | Demand estimate | Units per in-stock class day; the fall rate for the price band until 5 such days | `vending/demand.py` |
+| 7 | Sales at a swap the counters can't split | Split by receipt door times, then Friday per-minute reads, then price; the rest comes off the new product, its cost reported apart with a warning | `vending/stock.py` |
+
 ## Open decisions
 
 - **Safety factor 2 and the 95% target.** Proposed here; now used only to judge whether a column lasts a gap (rule 1).
